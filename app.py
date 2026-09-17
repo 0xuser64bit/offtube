@@ -290,7 +290,8 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
     return opts
 
 
-def base_ydl_opts(payload: dict | None = None, job_id: str | None = None) -> dict:
+def base_ydl_opts(payload: dict | None = None, job_id: str | None = None,
+                 persist: bool = True) -> dict:
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
@@ -307,7 +308,7 @@ def base_ydl_opts(payload: dict | None = None, job_id: str | None = None) -> dic
             pass
     if payload:
         try:
-            opts.update(resolve_cookies(payload, job_id))
+            opts.update(resolve_cookies(payload, job_id, persist=persist))
         except ValueError:
             raise
         except Exception as exc:  # pragma: no cover
@@ -356,10 +357,17 @@ def fetch_info(url: str, payload: dict) -> dict:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
     url = validate_url(url)
-    opts = base_ydl_opts(payload)
+    # Inspect must be side-effect-free: pasted cookies go to an ephemeral
+    # per-request file, never to the shared session file or a predictable
+    # "validate" path. Cleaned up even if extract_info raises.
+    info_cookie_id = f"info-{uuid.uuid4().hex[:12]}"
+    opts = base_ydl_opts(payload, info_cookie_id)
     opts.update({"skip_download": True})
-    with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+    finally:
+        cleanup_job_cookies(info_cookie_id)
     if info is None:
         raise RuntimeError("Could not extract info for that URL.")
     if info.get("_type") == "playlist":
@@ -402,12 +410,12 @@ def fetch_info(url: str, payload: dict) -> dict:
     }
 
 
-def build_download_opts(job: dict, payload: dict) -> dict:
+def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
     quality = payload.get("quality") or "best"
     fmt = quality_to_format(quality)
     outtmpl = str(DOWNLOAD_DIR / "%(title)s [%(id)s].%(ext)s")
 
-    opts = base_ydl_opts(payload, job.get("id"))
+    opts = base_ydl_opts(payload, job.get("id"), persist=persist)
     opts.update(
         {
             "format": fmt,
@@ -827,7 +835,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": "Invalid 'to' time. Use MM:SS or HH:MM:SS."}, 400)
             try:
                 resolve_cookies(body, persist=False)  # validate early for a clear error
-                build_download_opts({"id": "validate"}, body)  # validate playlist/quality
+                # Validation must not write cookie files (no "validate" orphan).
+                build_download_opts({"id": "validate"}, body, persist=False)  # validate playlist/quality
             except ValueError as exc:
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
             jid = uuid.uuid4().hex[:12]
