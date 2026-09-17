@@ -29,6 +29,7 @@ Notes on members-only / private videos (from the gist workflow):
 from __future__ import annotations
 
 import datetime as _dt
+import concurrent.futures
 import http.server
 import json
 import mimetypes
@@ -63,7 +64,37 @@ except ImportError:  # pragma: no cover
     DownloadError = Exception
 
 jobs: dict[str, dict] = {}
+futures: dict[str, concurrent.futures.Future] = {}
 jobs_lock = threading.Lock()
+# Bounded concurrency: at most 2 simultaneous yt-dlp runs; the rest queue in
+# the executor instead of spawning unbounded threads.
+executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dl")
+MAX_JOBS = 50  # stored job records; oldest terminal jobs are evicted past this
+MAX_ACTIVE_JOBS = 5  # queued + running; beyond this /api/download returns 429
+
+TERMINAL_STATUSES = frozenset({"done", "error", "cancelled"})
+
+
+def is_terminal(job: dict) -> bool:
+    return job.get("status") in TERMINAL_STATUSES
+
+
+def active_job_count_locked() -> int:
+    return sum(1 for j in jobs.values() if not is_terminal(j))
+
+
+def evict_jobs_locked() -> None:
+    """Drop oldest terminal jobs while over MAX_JOBS. Call with jobs_lock held."""
+    while len(jobs) > MAX_JOBS:
+        oldest = min(
+            (j for j in jobs.values() if is_terminal(j)),
+            key=lambda j: j.get("finished_at") or j.get("created_at") or "",
+            default=None,
+        )
+        if oldest is None:
+            break
+        futures.pop(oldest["id"], None)
+        jobs.pop(oldest["id"], None)
 
 QUALITY_FORMATS = {
     "best": "bv*+ba/b",
@@ -215,8 +246,31 @@ def section_range_str(from_val: str | None, to_val: str | None) -> str | None:
     return f"*{fmt(f, '00:00')}-{fmt(t, 'inf')}"
 
 
-def resolve_cookies(payload: dict) -> dict:
-    """Return yt-dlp cookie opts from UI payload. Raises ValueError on bad input."""
+def cookie_file_for(job_id: str | None) -> Path:
+    """Per-job cookie file (avoids concurrent jobs clobbering each other).
+
+    Falls back to the shared session file when no job id is given (e.g. the
+    pre-download validation pass, which never launches yt-dlp).
+    """
+    if job_id:
+        safe = re.sub(r"[^A-Za-z0-9_-]", "", job_id)[:32] or "job"
+        return COOKIES_DIR / f"job-{safe}.cookies.txt"
+    return SESSION_COOKIE_FILE
+
+
+def cleanup_job_cookies(job_id: str) -> None:
+    try:
+        cookie_file_for(job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = True) -> dict:
+    """Return yt-dlp cookie opts from UI payload. Raises ValueError on bad input.
+
+    persist=False only validates (used before a job exists, so one-off pastes
+    don't pollute the shared session cookie file).
+    """
     mode = (payload.get("cookies_mode") or "none").lower()
     opts: dict = {}
     if mode == "browser":
@@ -233,10 +287,12 @@ def resolve_cookies(payload: dict) -> dict:
         if len(text) > MAX_COOKIES_TEXT:
             raise ValueError("Cookies text is too large (max ~200 KB).")
         if text:
-            SESSION_COOKIE_FILE.write_text(text, encoding="utf-8")
-            opts["cookiefile"] = str(SESSION_COOKIE_FILE)
+            target = cookie_file_for(job_id)
+            if persist:
+                target.write_text(text, encoding="utf-8")
+            opts["cookiefile"] = str(target)
             return opts
-        # file saved earlier via /api/cookies/upload
+        # file saved earlier via /api/cookies/upload (read-only shared use is safe)
         if SESSION_COOKIE_FILE.exists() and SESSION_COOKIE_FILE.stat().st_size > 0:
             opts["cookiefile"] = str(SESSION_COOKIE_FILE)
             return opts
@@ -244,7 +300,7 @@ def resolve_cookies(payload: dict) -> dict:
     return opts
 
 
-def base_ydl_opts(payload: dict | None = None) -> dict:
+def base_ydl_opts(payload: dict | None = None, job_id: str | None = None) -> dict:
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
@@ -261,7 +317,7 @@ def base_ydl_opts(payload: dict | None = None) -> dict:
             pass
     if payload:
         try:
-            opts.update(resolve_cookies(payload))
+            opts.update(resolve_cookies(payload, job_id))
         except ValueError:
             raise
         except Exception as exc:  # pragma: no cover
@@ -362,7 +418,7 @@ def build_download_opts(job: dict, payload: dict) -> dict:
     fmt = quality_to_format(quality)
     outtmpl = str(DOWNLOAD_DIR / "%(title)s [%(id)s].%(ext)s")
 
-    opts = base_ydl_opts(payload)
+    opts = base_ydl_opts(payload, job.get("id"))
     opts.update(
         {
             "format": fmt,
@@ -469,6 +525,16 @@ def progress_hook(job_id: str, d: dict):
         job = jobs.get(job_id)
         if not job:
             return
+        fn = d.get("filename")
+        if fn:
+            # Remember files this job actually touched so concurrent jobs can't
+            # claim each other's outputs in the before/after diff. yt-dlp
+            # reports temp names (e.g. "...mp4.part"); store stripped variants.
+            base = Path(fn).name
+            seen = job.setdefault("seen_files", [])
+            for variant in {base, base.removesuffix(".part")}:
+                if variant and variant not in seen:
+                    seen.append(variant)
         if status == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             downloaded = d.get("downloaded_bytes") or 0
@@ -503,30 +569,46 @@ def postprocessor_hook(job_id: str, d: dict):
             job["detail"] = "Post-processing done."
 
 
+def attribute_new_files(job: dict, before: set[Path]) -> list[str]:
+    """Files created by this job. Filters the dir diff through hook-observed
+    names so concurrent jobs don't claim each other's outputs; falls back to
+    the raw diff when the hooks saw nothing (e.g. hook-less postprocessors)."""
+    after = set(DOWNLOAD_DIR.iterdir())
+    diff = sorted(
+        p.name for p in (after - before) if p.is_file() and p.name != ".gitkeep"
+    )
+    seen = set(job.get("seen_files") or [])
+    if seen:
+        matched = [f for f in diff if f in seen]
+        if matched:
+            return matched
+    return diff
+
+
 def run_download(job_id: str, payload: dict):
     with jobs_lock:
-        job = jobs[job_id]
+        job = jobs.get(job_id)
+        if job is None or job.get("status") == "cancelled":
+            return
         job["status"] = "starting"
         job["detail"] = "Resolving formats…"
     try:
         assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
         opts = build_download_opts(jobs[job_id], payload)
-        url = payload.get("url", "").strip()
-        if not url:
-            raise ValueError("Missing URL.")
+        url = validate_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
-        after = set(DOWNLOAD_DIR.iterdir())
-        new_files = sorted(
-            [p.name for p in (after - before) if p.is_file() and p.name != ".gitkeep"],
-        )
         with jobs_lock:
-            job = jobs[job_id]
+            job = jobs.get(job_id)
+            if job is None:
+                return
+            if job.get("status") == "cancelled":
+                return
             job["status"] = "done"
             job["progress"] = 100
             job["detail"] = "Done."
-            job["files"] = new_files
+            job["files"] = attribute_new_files(job, before)
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except DownloadError as exc:
         msg = str(exc)
@@ -540,16 +622,27 @@ def run_download(job_id: str, payload: dict):
         elif "ffmpeg" in msg.lower():
             hint = " ffmpeg is required for merging/trimming — install it and restart."
         with jobs_lock:
-            job = jobs[job_id]
+            job = jobs.get(job_id)
+            if job is None:
+                return
             job["status"] = "error"
             job["detail"] = clean_text(f"Download failed: {msg}{hint}", 1000)
             job["log"].append(clean_text(f"ERROR: {msg}"))
+            job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except Exception as exc:  # pragma: no cover - surfaced to UI
         with jobs_lock:
-            job = jobs[job_id]
+            job = jobs.get(job_id)
+            if job is None:
+                return
             job["status"] = "error"
             job["detail"] = clean_text(f"Error: {exc}", 1000)
             job["log"].append(clean_text(f"ERROR: {exc}\n{traceback.format_exc()[-2000:]}"))
+            job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+    finally:
+        cleanup_job_cookies(job_id)
+        with jobs_lock:
+            futures.pop(job_id, None)
+            evict_jobs_locked()
 
 
 # ------------------------------- HTTP layer -------------------------------
@@ -720,7 +813,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if parse_time_to_seconds(body.get("clip_to")) is None and (body.get("clip_to") or "").strip():
                 return self.send_json({"ok": False, "error": "Invalid 'to' time. Use MM:SS or HH:MM:SS."}, 400)
             try:
-                resolve_cookies(body)  # validate early for a clear error
+                resolve_cookies(body, persist=False)  # validate early for a clear error
                 build_download_opts({"id": "validate"}, body)  # validate playlist/quality
             except ValueError as exc:
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
@@ -738,10 +831,34 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "payload": {k: v for k, v in body.items() if k != "cookies_text"},
             }
             with jobs_lock:
+                if active_job_count_locked() >= MAX_ACTIVE_JOBS:
+                    return self.send_json(
+                        {"ok": False, "error": "Too many active downloads. Wait for one to finish."}, 429
+                    )
                 jobs[jid] = job
-            t = threading.Thread(target=run_download, args=(jid, body), daemon=True)
-            t.start()
+                evict_jobs_locked()
+                futures[jid] = executor.submit(run_download, jid, body)
             return self.send_json({"ok": True, "job_id": jid})
+
+        if route == "/api/cancel":
+            jid = str(body.get("job_id") or "").strip()
+            with jobs_lock:
+                job = jobs.get(jid)
+                if job is None:
+                    return self.send_json({"ok": False, "error": "Unknown job id."}, 404)
+                if is_terminal(job):
+                    return self.send_json({"ok": False, "error": "That job already finished."}, 400)
+                fut = futures.get(jid)
+                if fut is not None and fut.cancel():
+                    job["status"] = "cancelled"
+                    job["detail"] = "Cancelled before it started."
+                    job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+                    futures.pop(jid, None)
+                    cleanup_job_cookies(jid)
+                    return self.send_json({"ok": True, "cancelled": True})
+                return self.send_json(
+                    {"ok": False, "error": "That download already started and can't be stopped."}, 409
+                )
 
         if route == "/api/cookies/upload":
             # JSON: {"cookies_text": "..."} — stores for this session
