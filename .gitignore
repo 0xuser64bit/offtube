@@ -3,8 +3,9 @@
 # downloads go here (keep the dir, ignore its contents)
 downloads/*
 !downloads/.gitkeep
-# user cookies (never commit)
+# user cookies (never commit — session + per-job isolates)
 cookies/*.txt
+!cookies/.gitkeep
 __pycache__/
 *.pyc
 .pytest_cache/
