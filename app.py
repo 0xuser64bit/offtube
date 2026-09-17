@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-yt-downloader — paste-a-link YouTube downloader (local web UI + yt-dlp engine).
+offtube — paste-a-link YouTube keeper (local web UI + yt-dlp engine).
 
 Features:
   - Paste any YouTube URL (single video, playlist, members-only/private with cookies)
@@ -670,7 +670,7 @@ def environment_checks() -> dict:
     return checks
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    server_version = "yt-downloader/1.0"
+    server_version = "offtube/1.0"
 
     def log_message(self, fmt, *args):  # quieter logs
         pass
@@ -906,7 +906,7 @@ def main():
     with socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler) as httpd:
         httpd.allow_reuse_address = True
         httpd.daemon_threads = True
-        print(f"\nyt-downloader running → http://127.0.0.1:{port}")
+        print(f"\nofftube running → http://127.0.0.1:{port}")
         print(f"Downloads folder   → {DOWNLOAD_DIR}")
         print("Paste a YouTube link in the page, pick quality / from-to, hit Download.\n")
         try:

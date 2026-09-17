@@ -1,6 +1,6 @@
-# yt-downloader
+# offtube
 
-Paste-a-link YouTube downloader — local web UI powered by `yt-dlp` + `ffmpeg`.
+Paste-a-link YouTube keeper — local web UI powered by `yt-dlp` + `ffmpeg`.
 
 - Paste **any** YouTube URL (video, playlist, unlisted)
 - **Members-only / private** videos you can already watch → via cookies (upload `cookies.txt` or read from browser)
@@ -19,7 +19,7 @@ Only dependency: `yt-dlp`. No Flask/FastAPI — backend is Python stdlib.
 
 **macOS / Linux**
 ```bash
-cd yt-downloader
+cd offtube
 ./run.sh                    # creates .venv/, installs deps, serves
 # manual equivalent:
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
@@ -56,7 +56,7 @@ Prerequisites: Python 3.10+, `ffmpeg` on PATH, Node.js (optional, helps with You
 ## Project layout
 
 ```
-yt-downloader/
+offtube/
   app.py            # backend: stdlib HTTP server + yt-dlp engine
   web/
     index.html      # UI

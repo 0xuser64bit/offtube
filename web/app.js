@@ -1,4 +1,4 @@
-/* yt-downloader frontend — no build step, plain JS. */
+/* offtube frontend — no build step, plain JS. */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
