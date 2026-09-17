@@ -9,6 +9,13 @@ if errorlevel 1 (
 if not exist .venv\Scripts\python.exe (
   python -m venv .venv
 )
-.venv\Scripts\python -m pip install -r requirements.txt
+REM Install deps only when missing (fast restarts); pass --upgrade to refresh.
+.venv\Scripts\python -c "import yt_dlp" >nul 2>&1
+if errorlevel 1 (
+  .venv\Scripts\python -m pip install -r requirements.txt
+)
+if "%1"=="--upgrade" (
+  .venv\Scripts\python -m pip install -U -r requirements.txt
+)
 .venv\Scripts\python app.py
 pause

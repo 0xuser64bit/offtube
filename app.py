@@ -1059,17 +1059,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": f"Could not delete: {exc}"}, 500)
             return self.send_json({"ok": True, "deleted": safe})
 
-        if route == "/api/cookies/upload":
-            # JSON: {"cookies_text": "..."} — stores for this session
-            text = body.get("cookies_text") or ""
-            if len(text) > MAX_COOKIES_TEXT:
-                return self.send_json({"ok": False, "error": "Cookies text is too large (max ~200 KB)."}, 400)
-            if not text.strip():
-                return self.send_json({"ok": False, "error": "Empty cookies."}, 400)
-            SESSION_COOKIE_FILE.write_text(text, encoding="utf-8")
-            lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
-            return self.send_json({"ok": True, "cookies": len(lines)})
-
         if route.startswith("/api/"):
             return self.send_json({"ok": False, "error": "Not found."}, 404)
         return self.send_error(404)

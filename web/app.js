@@ -57,6 +57,15 @@ function payload() {
     cookies_browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
   };
 }
+function infoPayload() {
+  // Inspect needs only URL + access method; don't send clip/playlist/quality.
+  return {
+    url: $("url").value.trim(),
+    cookies_mode: cookiesMode(),
+    cookies_text: $("cookieText") ? $("cookieText").value : "",
+    cookies_browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
+  };
+}
 
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
@@ -219,7 +228,7 @@ async function fetchInfo() {
   btn.textContent = "Inspecting…";
   previewLoading();
   try {
-    const { info } = await api("/api/info", { method: "POST", body: JSON.stringify(payload()) });
+    const { info } = await api("/api/info", { method: "POST", body: JSON.stringify(infoPayload()) });
     if (my !== fetchToken) return; // superseded by a newer paste
     renderPreview(info);
   } catch (e) {
@@ -423,7 +432,8 @@ async function refreshQueue(silent) {
       .map((j) => {
         const pct = Math.round(j.progress || 0);
         const short = (j.url || "").replace(/^https?:\/\//, "").slice(0, 42);
-        const cancel = j.status === "queued"
+        const cancellable = ["queued", "starting", "downloading", "processing"].includes(j.status);
+        const cancel = cancellable
           ? `<button class="job-cancel" data-cancel="${escapeHtml(j.id)}" type="button">Cancel</button>`
           : "";
         return `<div class="job" data-state="${escapeHtml(j.status)}">
@@ -524,8 +534,53 @@ async function checkHealth() {
   }
 }
 
+/* ---------------- prefs (local only, never cookies) ---------------- */
+function savePrefs() {
+  try {
+    localStorage.setItem("offtube.prefs", JSON.stringify({
+      otype: outputType(),
+      quality: selectedQuality(),
+      cmode: cookiesMode(),
+      browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
+      subLang: $("subLang") ? $("subLang").value : "en",
+    }));
+  } catch { /* private mode etc. */ }
+}
+function restorePrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem("offtube.prefs") || "{}"); } catch { p = {}; }
+  if (p.otype) {
+    const r = document.querySelector(`input[name="otype"][value="${p.otype}"]`);
+    if (r) r.checked = true;
+  }
+  if (p.cmode) {
+    const r = document.querySelector(`input[name="cmode"][value="${p.cmode}"]`);
+    if (r) r.checked = true;
+  }
+  if (p.browser && $("cookieBrowserName")) $("cookieBrowserName").value = p.browser;
+  if (p.subLang && $("subLang")) $("subLang").value = p.subLang;
+  // Quality depends on ladder; stash and apply after first render.
+  if (p.quality) {
+    const r = document.querySelector(`input[name="q"][value="${p.quality}"]`);
+    if (r) r.checked = true;
+  }
+}
+document.addEventListener("change", (e) => {
+  if (e.target.matches('input[name="otype"], input[name="q"], input[name="cmode"], #cookieBrowserName, #subs')) savePrefs();
+});
+$("subLang").addEventListener("input", savePrefs);
+
 /* ---------------- init ---------------- */
+restorePrefs();
 renderQualities();
+// Re-apply saved quality after ladder render (ids may differ pre-inspect).
+try {
+  const p = JSON.parse(localStorage.getItem("offtube.prefs") || "{}");
+  if (p.quality) {
+    const r = document.querySelector(`input[name="q"][value="${p.quality}"]`);
+    if (r) r.checked = true;
+  }
+} catch { /* ignore */ }
 syncStates();
 checkHealth();
 loadFiles();

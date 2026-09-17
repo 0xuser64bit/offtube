@@ -8,5 +8,8 @@ if [ ! -x .venv/bin/python ] || [ "$(./.venv/bin/python -c 'import sys; print(sy
   rm -rf .venv
   python3 -m venv .venv
 fi
-./.venv/bin/pip install -q -r requirements.txt
+# Install deps only when missing (fast restarts); --upgrade forces refresh.
+if [ "$1" = "--upgrade" ] || ! ./.venv/bin/python -c "import yt_dlp" 2>/dev/null; then
+  ./.venv/bin/pip install -q -r requirements.txt
+fi
 exec ./.venv/bin/python app.py
