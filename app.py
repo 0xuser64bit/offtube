@@ -777,13 +777,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not length:
             return {}
         if length > MAX_JSON_BODY:
+            # Drain so the client doesn't get RST mid-send (flaky 413s).
+            try:
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except Exception:
+                pass
             raise HttpError(413, "Request body too large.")
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))
         except Exception:
-            return {}
-        return data if isinstance(data, dict) else {}
+            raise HttpError(400, "Invalid JSON.")
+        if not isinstance(data, dict):
+            raise HttpError(400, "Invalid JSON.")
+        return data
+
+    def check_origin(self) -> bool:
+        """Localhost CSRF/DNS-rebinding guard. Same-origin + curl (no header)
+        pass; a page on evil.com posting here is rejected."""
+        for hdr in ("Origin", "Referer"):
+            val = self.headers.get(hdr)
+            if not val:
+                continue
+            try:
+                host = (urllib.parse.urlsplit(val).hostname or "").lower().rstrip(".")
+            except Exception:
+                return False
+            if host in ("127.0.0.1", "localhost", "::1"):
+                continue
+            return False
+        return True
 
     def serve_static(self, rel: str):
         path = safe_child(WEB_DIR, rel)
@@ -817,10 +845,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_error(404)
             return
         ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
+        fallback = re.sub(r'["\r\n]', "_", safe)
+        fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
+        encoded = urllib.parse.quote(safe, safe="")
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(path.stat().st_size))
-        self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+        self.send_header(
+            "Content-Disposition",
+            f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
+        )
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -840,8 +875,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route == "/api/health":
             return self.send_json({"ok": True, "checks": environment_checks()})
         if route == "/api/jobs":
+            try:
+                limit = int((qs.get("limit") or ["50"])[0])
+            except (TypeError, ValueError):
+                limit = 50
+            limit = max(1, min(50, limit))
             with jobs_lock:
-                return self.send_json({"jobs": list(jobs.values())})
+                items = list(jobs.values())[-limit:]
+                # Trim logs in list view; full log via /api/job.
+                trimmed = [
+                    {**j, "log": (j.get("log") or [])[-20:]}
+                    for j in items
+                ]
+                return self.send_json({"jobs": trimmed})
         if route == "/api/job":
             jid = (qs.get("id") or [""])[0]
             with jobs_lock:
@@ -874,11 +920,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             })
         if route.startswith("/files/"):
             return self.serve_download_file(route[len("/files/"):])
+        if route.startswith("/api/"):
+            return self.send_json({"ok": False, "error": "Not found."}, 404)
         return self.send_error(404)
 
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
+        if route.startswith("/api/") and not self.check_origin():
+            return self.send_json({"ok": False, "error": "Cross-site requests blocked."}, 403)
         try:
             body = self.read_json()
         except HttpError as exc:
@@ -982,6 +1032,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             lines = [l for l in text.splitlines() if l.strip() and not l.startswith("#")]
             return self.send_json({"ok": True, "cookies": len(lines)})
 
+        if route.startswith("/api/"):
+            return self.send_json({"ok": False, "error": "Not found."}, 404)
         return self.send_error(404)
 
 
