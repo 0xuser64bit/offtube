@@ -382,8 +382,10 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   cursor: pointer;
 }
 .row-check input { width: 15px; height: 15px; margin-top: 2px; accent-color: var(--ink); flex: none; }
+.row-check-main { flex: 1; min-width: 0; cursor: pointer; }
 .row-check strong { display: block; font-size: 13.5px; }
 .row-check em { display: block; font-style: normal; color: var(--muted); font-size: 12.5px; }
+.sub-lang { width: 92px; flex: none; padding: 7px 9px; font-size: 12.5px; }
 
 /* ---------- disclosures ---------- */
 .disclosure { border: 1px solid var(--line); border-radius: var(--r-s); }
@@ -477,6 +479,7 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 .job-bar i { display: block; height: 100%; background: var(--ink); border-radius: 99px; }
 .job[data-state="done"] .job-bar i { background: var(--ok); }
 .job[data-state="error"] .job-bar i { background: var(--bad); }
+.job[data-state="cancelled"] .job-bar i { background: var(--line-strong); }
 .badge {
   font-family: var(--mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em;
   padding: 1px 7px; border-radius: 3px; border: 1px solid var(--line-strong); color: var(--ink-2); flex: none;
@@ -484,6 +487,21 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 .badge[data-s="downloading"], .badge[data-s="starting"], .badge[data-s="processing"], .badge[data-s="queued"] { background: var(--ink); border-color: var(--ink); color: #f6f3ea; }
 .badge[data-s="done"] { color: var(--ok); border-color: var(--ok); }
 .badge[data-s="error"] { color: var(--bad); border-color: var(--bad); }
+.badge[data-s="cancelled"] { color: var(--muted); border-color: var(--line-strong); }
+.job-cancel {
+  margin-top: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.job-cancel:hover { border-color: var(--ink); color: var(--ink); }
+.job-cancel:disabled { opacity: 0.55; cursor: wait; }
 
 .files { display: flex; flex-direction: column; gap: 8px; }
 .file {
@@ -508,6 +526,18 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
   background: var(--card);
 }
 .file-link:hover { border-color: var(--ink); }
+.file-del {
+  flex: none;
+  font-size: 12px; font-weight: 600;
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.file-del:hover { color: var(--bad); border-color: var(--bad); }
+.file-del:disabled { opacity: 0.55; cursor: wait; }
 
 .panel-note { background: var(--paper); }
 .note-title { margin: 0 0 6px; font-size: 13px; }

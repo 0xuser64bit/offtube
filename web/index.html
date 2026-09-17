@@ -76,10 +76,12 @@
         <p class="hint" id="qualityNote">“Best” keeps the highest available stream and merges to MP4.</p>
       </fieldset>
 
-      <label class="row-check">
+      <div class="row-check">
         <input type="checkbox" id="subs" />
-        <span><strong>Keep subtitles</strong><em>English first, SRT sidecar next to the file.</em></span>
-      </label>
+        <label for="subs" class="row-check-main"><strong>Keep subtitles</strong><em>SRT sidecar next to the file.</em></label>
+        <input id="subLang" class="mono sub-lang" value="en" maxlength="20" autocomplete="off" spellcheck="false"
+               aria-label="Subtitle languages" title="Subtitle languages, e.g. en or en,de" />
+      </div>
     </section>
 
     <!-- 03 OPTIONS -->

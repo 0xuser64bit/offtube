@@ -40,12 +40,12 @@ function cookiesMode() {
 }
 function payload() {
   const pl = document.querySelector('input[name="plmode"]:checked');
-  return {
-    url: $("url").value.trim(),
-    quality: selectedQuality(),
-    subtitles: $("subs").checked,
-    auto_subs: true,
-    sub_lang: "en",
+    return {
+      url: $("url").value.trim(),
+      quality: selectedQuality(),
+      subtitles: $("subs").checked,
+      auto_subs: true,
+      sub_lang: ($("subLang").value.trim() || "en").slice(0, 20),
     clip_from: $("clipFrom").value.trim(),
     clip_to: $("clipTo").value.trim(),
     playlist_mode: pl ? pl.value : "single",
@@ -73,7 +73,12 @@ function videoOptions() {
       .map((q) => ({
         id: q.id,
         label: q.id === "best" ? "Best available" : `${q.id}p`,
-        sub: q.label && q.id !== "best" ? q.label.replace(/^\d+p\s*/, "") || "ceiling" : q.id === "best" ? "highest detected stream" : "ceiling",
+        sub:
+          q.id === "best"
+            ? "highest detected stream"
+            : q.filesize_str
+              ? `~${q.filesize_str}`
+              : "ceiling",
         tag: q.id === "best" ? "auto" : undefined,
       }));
   }
@@ -235,16 +240,19 @@ function renderPreview(info) {
   const box = $("infoBox");
   box.classList.remove("is-empty");
   if (info.type === "playlist") {
+    const total = info.count || (info.entries || []).length;
     const entries = (info.entries || []).slice(0, 8);
+    const more = total > entries.length ? `<div class="preview-meta">Showing first ${entries.length} of ${escapeHtml(String(total))} — use Playlist / range to narrow it.</div>` : "";
     box.innerHTML = `<div class="preview-full">
       ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
       <div style="min-width:0;flex:1">
-        <span class="preview-kind">Playlist · ${escapeHtml(String(info.count || entries.length))} videos</span>
+        <span class="preview-kind">Playlist · ${escapeHtml(String(total))} videos</span>
         <h3>${escapeHtml(info.title || "Playlist")}</h3>
         <div class="preview-meta">${escapeHtml(info.uploader || "")}</div>
         <ul class="preview-entries">
           ${entries.map((e, i) => `<li><span class="n">${String(i + 1).padStart(2, "0")}</span><span class="t">${escapeHtml(e.title || "Untitled")}</span><span class="d">${escapeHtml(e.duration_str || "")}</span></li>`).join("")}
         </ul>
+        ${more}
       </div>
     </div>`;
     document.querySelector('input[name="plmode"][value="playlist"]').checked = true;
@@ -253,6 +261,9 @@ function renderPreview(info) {
   } else {
     fetchedQualities = info.qualities || null;
     const quals = (info.qualities || []).map((q) => escapeHtml(q.label)).join(" · ");
+    const liveNote = info.is_live
+      ? `<div class="preview-meta">Live stream — download records from now on; trim ranges don't apply.</div>`
+      : "";
     box.innerHTML = `<div class="preview-full">
       ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
       <div style="min-width:0;flex:1">
@@ -260,6 +271,7 @@ function renderPreview(info) {
         <h3>${escapeHtml(info.title || "Video")}</h3>
         <div class="preview-meta">${escapeHtml(info.uploader || "")}${info.duration_str ? ` · <span class="mono">${escapeHtml(info.duration_str)}</span>` : ""}</div>
         <div class="preview-meta"><span class="mono">${quals}</span></div>
+        ${liveNote}
       </div>
     </div>`;
   }
@@ -331,6 +343,7 @@ function setDeck(text, state) {
   if (state === "done") $("dlLede").textContent = "Saved. Grab it from the library.";
   else if (state === "error") $("dlLede").textContent = "That failed — details below.";
   else if (state === "busy") $("dlLede").textContent = "Working — don’t close this tab.";
+  else if (state === "cancelled") $("dlLede").textContent = "Ready when you are.";
 }
 
 function setProgress(pct, job) {
@@ -344,9 +357,12 @@ async function pollJob(job_id) {
   const btn = $("dlBtn");
   const original = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Download`;
   btn.innerHTML = "Working…";
+  let inFlight = false;
   pollTimer = setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
     try {
-      const job = await api(`/api/job?id=${job_id}`);
+      const job = await api(`/api/job?id=${encodeURIComponent(job_id)}`);
       const pct = job.progress || 0;
       setProgress(pct, job);
       let extra = "";
@@ -371,6 +387,15 @@ async function pollJob(job_id) {
         $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
         activeJobId = null;
         refreshQueue();
+      } else if (job.status === "cancelled") {
+        clearInterval(pollTimer);
+        btn.disabled = false;
+        btn.classList.remove("is-busy");
+        btn.innerHTML = original;
+        setDeck("Cancelled.", "cancelled");
+        setProgress(0, null);
+        activeJobId = null;
+        refreshQueue();
       } else {
         setDeck((job.detail || job.status) + extra, "busy");
         $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
@@ -378,6 +403,8 @@ async function pollJob(job_id) {
       }
     } catch {
       setDeck("Lost connection to the server — retrying…", "busy");
+    } finally {
+      inFlight = false;
     }
   }, 800);
 }
@@ -396,22 +423,41 @@ async function refreshQueue(silent) {
       .map((j) => {
         const pct = Math.round(j.progress || 0);
         const short = (j.url || "").replace(/^https?:\/\//, "").slice(0, 42);
+        const cancel = j.status === "queued"
+          ? `<button class="job-cancel" data-cancel="${escapeHtml(j.id)}" type="button">Cancel</button>`
+          : "";
         return `<div class="job" data-state="${escapeHtml(j.status)}">
           <div class="job-top"><span class="badge" data-s="${escapeHtml(j.status)}">${escapeHtml(j.status)}</span><span class="job-pct">${pct}%</span></div>
           <div class="job-detail" title="${escapeHtml(j.url || "")}">${escapeHtml(short)}</div>
           <div class="job-bar"><i style="width:${pct}%"></i></div>
+          ${cancel}
         </div>`;
       })
       .join("");
   } catch { /* ignore */ }
 }
 
+$("queue").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-cancel]");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    await api("/api/cancel", { method: "POST", body: JSON.stringify({ job_id: btn.dataset.cancel }) });
+  } catch (err) {
+    setDeck("Cancel failed: " + err.message, "error");
+  }
+  refreshQueue();
+});
+
 /* ---------------- files ---------------- */
+let diskFreeStr = "";
 function renderFiles() {
   const q = $("fileSearch").value.trim().toLowerCase();
   const box = $("files");
   const list = allFiles.filter((f) => !q || f.name.toLowerCase().includes(q));
-  $("footFiles").textContent = allFiles.length ? `${allFiles.length} file${allFiles.length === 1 ? "" : "s"} · downloads/` : "";
+  $("footFiles").textContent = allFiles.length
+    ? `${allFiles.length} file${allFiles.length === 1 ? "" : "s"} · downloads/${diskFreeStr ? ` · ${diskFreeStr} free` : ""}`
+    : "";
   if (!list.length) {
     box.innerHTML = allFiles.length
       ? `<p class="empty">No files match “${escapeHtml(q)}”.</p>`
@@ -424,20 +470,37 @@ function renderFiles() {
         <span class="file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
         <span class="file-sub">${escapeHtml(f.size_str)} · ${escapeHtml((f.modified || "").replace("T", " "))}</span>
       </div>
-      <a class="file-link" href="${f.url}" download>Save</a>
+      <a class="file-link" href="${escapeHtml(f.url)}" download>Save</a>
+      <button class="file-del" data-del="${escapeHtml(f.name)}" type="button" aria-label="Delete ${escapeHtml(f.name)}">Delete</button>
     </div>`)
     .join("");
 }
 
 async function loadFiles() {
   try {
-    const { files } = await api("/api/files");
+    const { files, disk_free_str } = await api("/api/files");
     allFiles = files || [];
+    diskFreeStr = disk_free_str || "";
     renderFiles();
   } catch { /* ignore */ }
 }
 $("refreshFiles").addEventListener("click", loadFiles);
 $("fileSearch").addEventListener("input", renderFiles);
+
+$("files").addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-del]");
+  if (!btn) return;
+  const name = btn.dataset.del;
+  if (!window.confirm(`Delete “${name}” from downloads/?`)) return;
+  btn.disabled = true;
+  try {
+    await api("/api/files/delete", { method: "POST", body: JSON.stringify({ name }) });
+    loadFiles();
+  } catch (err) {
+    setDeck("Delete failed: " + err.message, "error");
+    btn.disabled = false;
+  }
+});
 
 /* ---------------- health ---------------- */
 async function checkHealth() {
