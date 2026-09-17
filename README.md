@@ -20,7 +20,8 @@ Only dependency: `yt-dlp`. No Flask/FastAPI — backend is Python stdlib.
 **macOS / Linux**
 ```bash
 cd offtube
-./run.sh                    # creates .venv/, installs deps, serves
+./run.sh                    # creates .venv/, installs deps if missing, serves
+./run.sh --upgrade          # force refresh yt-dlp
 # manual equivalent:
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
 ./.venv/bin/python app.py
@@ -64,44 +65,49 @@ offtube/
     app.js
   tests/            # pytest: helper units + live-HTTP API tests (stubbed yt-dlp)
   downloads/        # finished files (contents git-ignored, dir kept)
-  cookies/          # session cookies.txt (never committed)
-  requirements.txt  # runtime: yt-dlp
+  cookies/          # per-job isolates (never committed; cleaned on boot + job end)
+  requirements.txt  # runtime: pinned yt-dlp
   requirements-dev.txt  # test: pytest
-  run.sh / run.bat  # venv launchers
+  run.sh / run.bat  # venv launchers (install-on-missing, --upgrade to refresh)
 ```
 
 ## Testing
 
 ```bash
 ./.venv/bin/pip install -q -r requirements-dev.txt
-./.venv/bin/python -m pytest tests -q   # 53 tests, ~5s, no network
+./.venv/bin/python -m pytest tests -q   # 65 tests, ~9s, no network
 ```
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
 stubbed `YoutubeDL`, covering health/headers, traversal blocks, info
-validation, download → files → delete, bad input, oversized bodies, and
-queued-cancel vs running-409.
+validation, download → files → delete, bad input, oversized bodies,
+queued + running cancel, origin blocks, temp-file hiding, disposition,
+jobs limit, and disk guard.
 
 ## API (for scripting)
 
 - `GET /api/health` → `{checks: {yt_dlp, ffmpeg, node, deno}}` (cached 60s)
-- `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → video/playlist metadata
+- `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → video/playlist metadata (side-effect-free; pasted cookies use an ephemeral file)
 - `POST /api/download` `{url, quality, clip_from, clip_to, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
-- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (only while queued; 409 once running)
-- `GET /api/jobs` → recent job records (terminal jobs evicted past 50)
-- `GET /api/files` → `{files, disk_free, disk_free_str}`; `GET /files/<name>` downloads one
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running jobs stop cooperatively at the next progress callback)
+- `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
+- `GET /api/files` → `{files, disk_free, disk_free_str}` (in-progress `.part`/`.temp` hidden); `GET /files/<name>` downloads one (RFC 5987 filename)
 - `POST /api/files/delete` `{name}` → `{deleted}`
 
 Only `youtube.com` / `youtu.be` URLs are accepted (400 otherwise). Bodies are
 capped at 256 KB (413). Past 5 active downloads `/api/download` returns 429.
+Under 200 MB free disk `/api/download` returns 507. Cross-site POSTs with a
+foreign `Origin`/`Referer` return 403 (localhost CSRF guard). Unknown `/api/*`
+routes return JSON 404. Jobs and UI prefs are in-memory/local only — a restart
+clears history; in-progress temp files and orphaned job cookies are cleaned on boot.
 
 Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`.
 
 ## Troubleshooting
 
 - **“Join this channel to get access”** → not a tool bug: wrong/expired cookies, wrong account, or tier too low. Re-export cookies, verify you can watch in the browser first.
-- **Only image formats / no video streams** → same cause, or missing `ejs` component: install Node.js and update yt-dlp (`pip install -U yt-dlp`).
+- **Only image formats / no video streams** → same cause, or missing `ejs` component: install Node.js and refresh deps (`./run.sh --upgrade`).
 - **ffmpeg not recognized** → reopen the terminal after install (PATH refresh), then `ffmpeg -version`.
 - **`npm` execution-policy error (Windows)** → use `npm.cmd --version`.
 - **Cookies stopped working after weeks** → normal, re-export.

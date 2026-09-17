@@ -9,6 +9,7 @@ import socketserver
 import sys
 import threading
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -88,11 +89,13 @@ def server(tmp_path, monkeypatch):
     BLOCK.set()
 
 
-def api(base, method, path, body=None, raw_body=None):
+def api(base, method, path, body=None, raw_body=None, headers=None):
     data = raw_body if raw_body is not None else (
         json.dumps(body).encode() if body is not None else None)
-    req = urllib.request.Request(base + path, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
+    h = {"Content-Type": "application/json"}
+    if headers:
+        h.update(headers)
+    req = urllib.request.Request(base + path, data=data, method=method, headers=h)
     try:
         with urllib.request.urlopen(req, timeout=10) as res:
             return res.status, json.loads(res.read().decode() or "{}"), dict(res.headers)
@@ -194,6 +197,87 @@ def test_body_too_large_rejected(server):
     status, body, _ = api(server, "POST", "/api/info",
                            raw_body=b'{"url":"x", "pad":"' + b"y" * 300_000 + b'"}')
     assert status == 413
+
+
+def test_invalid_json_rejected(server):
+    status, body, _ = api(server, "POST", "/api/info", raw_body=b"not json{{{")
+    assert status == 400
+    assert "Invalid JSON" in body.get("error", "")
+
+
+def test_cross_site_post_blocked(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123"},
+                           headers={"Origin": "https://evil.com"})
+    assert status == 403
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123"},
+                           headers={"Origin": "http://127.0.0.1:8000"})
+    assert status in (200, 429)
+    if status == 200:
+        wait_for(server, body["job_id"])
+
+
+def test_unknown_api_returns_json_404(server):
+    status, body, _ = api(server, "GET", "/api/nope")
+    assert status == 404
+    assert body.get("ok") is False
+    status, body, _ = api(server, "POST", "/api/nope", {"x": 1})
+    assert status == 404
+    assert body.get("ok") is False
+
+
+def test_temp_files_hidden_from_library(server):
+    import app as _app
+    (_app.DOWNLOAD_DIR / "half.mp4.part").write_bytes(b"partial")
+    (_app.DOWNLOAD_DIR / "real [abc123].mp4").write_bytes(b"ok")
+    try:
+        status, listing, _ = api(server, "GET", "/api/files")
+        assert status == 200
+        names = [f["name"] for f in listing["files"]]
+        assert "real [abc123].mp4" in names
+        assert "half.mp4.part" not in names
+    finally:
+        for n in ("half.mp4.part", "real [abc123].mp4"):
+            try:
+                (_app.DOWNLOAD_DIR / n).unlink()
+            except OSError:
+                pass
+
+
+def test_download_disposition_uses_rfc5987(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123", "quality": "720"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["status"] == "done"
+    fname = job["files"][0]
+    with urllib.request.urlopen(
+        server + f"/files/{urllib.parse.quote(fname)}", timeout=10
+    ) as res:
+        disp = res.headers.get("Content-Disposition", "")
+        assert "filename*=" in disp
+
+
+def test_jobs_limit_trims_logs(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123"})
+    assert status == 200
+    wait_for(server, body["job_id"])
+    status, data, _ = api(server, "GET", "/api/jobs?limit=1")
+    assert status == 200
+    assert len(data["jobs"]) == 1
+    assert len(data["jobs"][0].get("log", [])) <= 20
+
+
+def test_disk_guard_refuses_when_full(server, monkeypatch):
+    import collections
+    fake = collections.namedtuple("usage", "total used free")(100, 99, 1)
+    monkeypatch.setattr(app.shutil, "disk_usage", lambda *a, **k: fake)
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123"})
+    assert status == 507
+    assert "Disk" in body.get("error", "")
 
 
 def test_cancel_queued_job(server):

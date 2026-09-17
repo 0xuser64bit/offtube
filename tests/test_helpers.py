@@ -163,3 +163,61 @@ def test_build_download_opts_audio_and_subs():
     assert opts["postprocessors"][0]["preferredcodec"] == "mp3"
     opts = app.build_download_opts(job, {"subtitles": True, "sub_lang": "en,de"})
     assert opts["subtitleslangs"] == ["en", "de"]
+
+
+# --- regression: cookie isolation -------------------------------------------
+def test_validate_path_writes_no_cookie_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
+    body = {"cookies_mode": "text", "cookies_text": "SECRET"}
+    app.resolve_cookies(body, persist=False)
+    app.build_download_opts({"id": "validate"}, body, persist=False)
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_is_temp_file():
+    assert app.is_temp_file("a.mp4.part")
+    assert app.is_temp_file("a.temp")
+    assert app.is_temp_file("a.ytdl")
+    assert app.is_temp_file(".gitkeep")
+    assert not app.is_temp_file("Video [abc123].mp4")
+    assert not app.is_temp_file("Audio [x].mp3")
+
+
+def test_attribute_prefers_stem_and_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = {
+        "seen_files": ["Test Video [abc123].mp4.part", "Test Video [abc123].mp4", "Test Video [abc123]"],
+        "seen_ids": ["abc123"],
+    }
+    before = set(tmp_path.iterdir())
+    (tmp_path / "Test Video [abc123].mp3").write_bytes(b"x")  # mp4->mp3 rename
+    (tmp_path / "Other [zzz].mp4").write_bytes(b"y")
+    (tmp_path / "half.mp4.part").write_bytes(b"z")
+    assert app.attribute_new_files(job, before) == ["Test Video [abc123].mp3"]
+
+
+def test_playlist_progress_blends():
+    app.jobs.clear()
+    app.jobs["j"] = {"id": "j", "status": "queued", "progress": 0, "log": [], "files": []}
+    try:
+        app.progress_hook("j", {
+            "status": "downloading", "downloaded_bytes": 50, "total_bytes": 100,
+            "filename": "/tmp/V [a].mp4",
+            "info_dict": {"playlist_index": 2, "playlist_count": 4, "id": "a"},
+        })
+        assert app.jobs["j"]["progress"] == 37.5
+        assert "[2/4]" in app.jobs["j"]["detail"]
+    finally:
+        app.jobs.clear()
+
+
+def test_progress_hook_cancel_raises():
+    app.jobs.clear()
+    app.jobs["j"] = {"id": "j", "status": "downloading", "progress": 0,
+                     "log": [], "files": [], "cancel_requested": True}
+    try:
+        with pytest.raises(Exception, match="Cancelled"):
+            app.progress_hook("j", {"status": "downloading", "filename": "x.mp4"})
+    finally:
+        app.jobs.clear()
