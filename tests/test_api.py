@@ -215,12 +215,15 @@ def test_cancel_queued_job(server):
         assert s == 200 and b["cancelled"] is True
         s, job, _ = api(server, "GET", f"/api/job?id={queued}")
         assert job["status"] == "cancelled"
-        # Cancelling a running job is refused honestly.
+        # Cancelling a running job requests cooperative stop (hooks abort).
         s, b, _ = api(server, "POST", "/api/cancel", {"job_id": first[0]})
-        assert s == 409
+        assert s == 200 and b["cancelled"] is True
     finally:
         BLOCK.set()
         for jid in list(app.jobs):
             job = app.jobs.get(jid)
             if job and job.get("status") not in ("done", "error", "cancelled"):
                 wait_for(server, jid, timeout=15)
+    # The running job we cancelled must end as cancelled, not done/error.
+    s, job, _ = api(server, "GET", f"/api/job?id={first[0]}")
+    assert job["status"] == "cancelled"

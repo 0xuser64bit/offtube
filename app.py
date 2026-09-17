@@ -40,7 +40,6 @@ import shutil
 import socketserver
 import threading
 import time
-import traceback
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -126,6 +125,15 @@ YOUTUBE_HOSTS = frozenset({
     "youtu.be",
     "youtube-nocookie.com",
 })
+
+# In-progress / fragment files yt-dlp leaves behind mid-download. These must
+# never appear in the library or in a job's claimed outputs.
+TEMP_SUFFIXES = (".part", ".temp", ".tmp", ".ytdl", ".ydl", ".frag")
+
+
+def is_temp_file(name: str) -> bool:
+    low = name.lower()
+    return low == ".gitkeep" or any(low.endswith(s) for s in TEMP_SUFFIXES)
 
 
 class HttpError(Exception):
@@ -522,16 +530,41 @@ def progress_hook(job_id: str, d: dict):
         job = jobs.get(job_id)
         if not job:
             return
+        # Cooperative cancel: run_download's hooks raise to abort yt-dlp.
+        if job.get("cancel_requested"):
+            raise DownloadError("Cancelled by user.")
         fn = d.get("filename")
+        info_dict = d.get("info_dict") or {}
         if fn:
             # Remember files this job actually touched so concurrent jobs can't
             # claim each other's outputs in the before/after diff. yt-dlp
-            # reports temp names (e.g. "...mp4.part"); store stripped variants.
+            # reports temp names (e.g. "...mp4.part"); store full names,
+            # .part-stripped names, AND stems so a postprocessor rename
+            # (...mp4 -> ...mp3) still matches.
             base = Path(fn).name
+            stripped = base
+            while any(stripped.lower().endswith(s) for s in TEMP_SUFFIXES):
+                for s in TEMP_SUFFIXES:
+                    if stripped.lower().endswith(s):
+                        stripped = stripped[: -len(s)]
+                        break
+            stem = Path(stripped).stem
             seen = job.setdefault("seen_files", [])
-            for variant in {base, base.removesuffix(".part")}:
+            for variant in {base, stripped, stem}:
                 if variant and variant not in seen:
                     seen.append(variant)
+        vid = info_dict.get("id")
+        if vid:
+            seen_ids = job.setdefault("seen_ids", [])
+            if vid not in seen_ids:
+                seen_ids.append(vid)
+        # Playlist-aware progress: yt-dlp fires per-file hooks; blend the
+        # per-file fraction into an overall fraction when playlist info exists.
+        pl_index = info_dict.get("playlist_index")
+        pl_count = info_dict.get("playlist_count")
+        if isinstance(pl_index, int) and isinstance(pl_count, int) and pl_count > 1:
+            job["playlist_index"] = pl_index
+            job["playlist_count"] = pl_count
         if status == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             downloaded = d.get("downloaded_bytes") or 0
@@ -541,10 +574,19 @@ def progress_hook(job_id: str, d: dict):
             job["speed"] = d.get("speed")
             job["eta"] = d.get("eta")
             job["filename"] = clean_text(d.get("filename") or job.get("filename"), 500)
-            if total:
-                job["progress"] = round(downloaded / total * 100, 1)
+            file_pct = round(downloaded / total * 100, 1) if total else 0
+            pl_count_v = job.get("playlist_count")
+            pl_index_v = job.get("playlist_index")
+            if isinstance(pl_count_v, int) and pl_count_v > 1 and isinstance(pl_index_v, int):
+                job["progress"] = round(((pl_index_v - 1) + file_pct / 100) / pl_count_v * 100, 1)
+            elif total:
+                job["progress"] = file_pct
+            fname = (d.get("filename", "") or "").split("/")[-1]
+            prefix = ""
+            if job.get("playlist_count") and job.get("playlist_index"):
+                prefix = f"[{job['playlist_index']}/{job['playlist_count']}] "
             job["detail"] = clean_text(
-                f"Downloading {(d.get('filename', '') or '').split('/')[-1]} — "
+                f"Downloading {prefix}{fname} — "
                 f"{job['progress'] if total else '?'}%",
                 500,
             )
@@ -559,6 +601,8 @@ def postprocessor_hook(job_id: str, d: dict):
         job = jobs.get(job_id)
         if not job:
             return
+        if job.get("cancel_requested"):
+            raise DownloadError("Cancelled by user.")
         if d.get("status") == "started":
             job["status"] = "processing"
             job["detail"] = f"Post-processing ({d.get('postprocessor_name', 'ffmpeg')})…"
@@ -568,15 +612,25 @@ def postprocessor_hook(job_id: str, d: dict):
 
 def attribute_new_files(job: dict, before: set[Path]) -> list[str]:
     """Files created by this job. Filters the dir diff through hook-observed
-    names so concurrent jobs don't claim each other's outputs; falls back to
-    the raw diff when the hooks saw nothing (e.g. hook-less postprocessors)."""
+    names (full, stripped, stem) and video ids so concurrent jobs don't claim
+    each other's outputs; falls back to the raw diff when the hooks saw
+    nothing (e.g. hook-less postprocessors). Temp files are never claimed."""
     after = set(DOWNLOAD_DIR.iterdir())
     diff = sorted(
-        p.name for p in (after - before) if p.is_file() and p.name != ".gitkeep"
+        p.name for p in (after - before)
+        if p.is_file() and not is_temp_file(p.name)
     )
     seen = set(job.get("seen_files") or [])
-    if seen:
-        matched = [f for f in diff if f in seen]
+    seen_ids = set(job.get("seen_ids") or [])
+    if seen or seen_ids:
+        matched = []
+        for f in diff:
+            stem = Path(f).stem
+            if f in seen or stem in seen:
+                matched.append(f)
+                continue
+            if seen_ids and any(f"[{vid}]" in f for vid in seen_ids):
+                matched.append(f)
         if matched:
             return matched
     return diff
@@ -603,7 +657,10 @@ def run_download(job_id: str, payload: dict):
             job = jobs.get(job_id)
             if job is None:
                 return
-            if job.get("status") == "cancelled":
+            if job.get("status") == "cancelled" or job.get("cancel_requested"):
+                job["status"] = "cancelled"
+                job["detail"] = "Cancelled."
+                job["finished_at"] = job.get("finished_at") or _dt.datetime.now().isoformat(timespec="seconds")
                 return
             job["status"] = "done"
             job["progress"] = 100
@@ -612,6 +669,16 @@ def run_download(job_id: str, payload: dict):
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except DownloadError as exc:
         msg = str(exc)
+        with jobs_lock:
+            job = jobs.get(job_id)
+            if job is None:
+                return
+            # Cooperative cancel lands here (hooks raise DownloadError).
+            if "Cancelled by user" in msg or (job and job.get("cancel_requested")):
+                job["status"] = "cancelled"
+                job["detail"] = "Cancelled."
+                job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+                return
         hint = ""
         if "Join this channel" in msg or "members-only" in msg.lower():
             hint = (" This looks like a members-only/private video. Make sure your cookies "
@@ -634,9 +701,15 @@ def run_download(job_id: str, payload: dict):
             job = jobs.get(job_id)
             if job is None:
                 return
+            if job.get("cancel_requested"):
+                job["status"] = "cancelled"
+                job["detail"] = "Cancelled."
+                job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
+                return
             job["status"] = "error"
             job["detail"] = clean_text(f"Error: {exc}", 1000)
-            job["log"].append(clean_text(f"ERROR: {exc}\n{traceback.format_exc()[-2000:]}"))
+            # No traceback: paths + internals would leak to any localhost client.
+            job["log"].append(clean_text(f"ERROR: {exc}"))
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     finally:
         cleanup_job_cookies(job_id)
@@ -779,7 +852,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route == "/api/files":
             files = []
             for p in sorted(DOWNLOAD_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-                if p.is_file() and p.name != ".gitkeep":
+                if p.is_file() and not is_temp_file(p.name):
                     st = p.stat()
                     files.append(
                         {
@@ -878,9 +951,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     futures.pop(jid, None)
                     cleanup_job_cookies(jid)
                     return self.send_json({"ok": True, "cancelled": True})
-                return self.send_json(
-                    {"ok": False, "error": "That download already started and can't be stopped."}, 409
-                )
+                # Already running: cooperative cancel via hooks. The worker
+                # notices on its next progress/postprocessor callback.
+                job["cancel_requested"] = True
+                job["detail"] = "Cancelling…"
+                return self.send_json({"ok": True, "cancelled": True, "stopping": True})
 
         if route == "/api/files/delete":
             name = str(body.get("name") or "")
