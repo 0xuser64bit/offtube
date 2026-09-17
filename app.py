@@ -14,9 +14,10 @@ Features:
 Only stdlib + yt-dlp. No Flask/FastAPI needed.
 
 Usage:
-    pip install -r requirements.txt
-    python app.py            # opens http://127.0.0.1:8000
-    PORT=8080 python app.py
+    ./run.sh                     # venv + deps + serve
+    PORT=8080 ./run.sh
+    # manual: python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+    #         ./.venv/bin/python app.py
 
 Notes on members-only / private videos (from the gist workflow):
   They ONLY work if YOUR account has access. Export cookies from a browser
@@ -37,7 +38,6 @@ import os
 import re
 import shutil
 import socketserver
-import tempfile
 import threading
 import time
 import traceback
@@ -583,7 +583,10 @@ def run_download(job_id: str, payload: dict):
         job["detail"] = "Resolving formats…"
     try:
         assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
-        opts = build_download_opts(jobs[job_id], payload)
+        job = jobs.get(job_id)
+        if job is None:
+            return
+        opts = build_download_opts(job, payload)
         url = validate_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -902,6 +905,7 @@ def main():
     port = int(os.environ.get("PORT", "8000"))
     with socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler) as httpd:
         httpd.allow_reuse_address = True
+        httpd.daemon_threads = True
         print(f"\nyt-downloader running → http://127.0.0.1:{port}")
         print(f"Downloads folder   → {DOWNLOAD_DIR}")
         print("Paste a YouTube link in the page, pick quality / from-to, hit Download.\n")
@@ -909,6 +913,8 @@ def main():
             httpd.serve_forever()
         except KeyboardInterrupt:
             print("\nbye!")
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
 
 if __name__ == "__main__":

@@ -20,14 +20,15 @@ Only dependency: `yt-dlp`. No Flask/FastAPI — backend is Python stdlib.
 **macOS / Linux**
 ```bash
 cd yt-downloader
-./run.sh
-# or: pip install -r requirements.txt && python app.py
+./run.sh                    # creates .venv/, installs deps, serves
+# manual equivalent:
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python app.py
 ```
 
 **Windows**
 ```bat
-run.bat
-:: or: python -m pip install -r requirements.txt & python app.py
+run.bat                     @rem same, via .venv\Scripts\python
 ```
 
 Then open **http://127.0.0.1:8000**.
@@ -61,19 +62,39 @@ yt-downloader/
     index.html      # UI
     styles.css
     app.js
-  downloads/        # finished files (git-ignored except .gitkeep)
+  tests/            # pytest: helper units + live-HTTP API tests (stubbed yt-dlp)
+  downloads/        # finished files (contents git-ignored, dir kept)
   cookies/          # session cookies.txt (never committed)
-  requirements.txt  # yt-dlp
-  run.sh / run.bat  # launchers
+  requirements.txt  # runtime: yt-dlp
+  requirements-dev.txt  # test: pytest
+  run.sh / run.bat  # venv launchers
 ```
+
+## Testing
+
+```bash
+./.venv/bin/pip install -q -r requirements-dev.txt
+./.venv/bin/python -m pytest tests -q   # 53 tests, ~5s, no network
+```
+
+`tests/test_api.py` boots the real `Handler` on an ephemeral port with a
+stubbed `YoutubeDL`, covering health/headers, traversal blocks, info
+validation, download → files → delete, bad input, oversized bodies, and
+queued-cancel vs running-409.
 
 ## API (for scripting)
 
-- `GET /api/health` → `{checks: {yt_dlp, ffmpeg, node, deno}}`
+- `GET /api/health` → `{checks: {yt_dlp, ffmpeg, node, deno}}` (cached 60s)
 - `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → video/playlist metadata
 - `POST /api/download` `{url, quality, clip_from, clip_to, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
-- `GET /api/job?id=…` → `{status, progress, detail, log, files}`
-- `GET /api/files` → downloaded files; `GET /files/<name>` downloads one
+- `GET /api/job?id=…` → `{status, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (only while queued; 409 once running)
+- `GET /api/jobs` → recent job records (terminal jobs evicted past 50)
+- `GET /api/files` → `{files, disk_free, disk_free_str}`; `GET /files/<name>` downloads one
+- `POST /api/files/delete` `{name}` → `{deleted}`
+
+Only `youtube.com` / `youtu.be` URLs are accepted (400 otherwise). Bodies are
+capped at 256 KB (413). Past 5 active downloads `/api/download` returns 429.
 
 Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`.
 
