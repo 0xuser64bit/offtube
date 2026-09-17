@@ -277,6 +277,8 @@ def cleanup_stale_files() -> None:
         pass
     try:
         for p in DOWNLOAD_DIR.iterdir():
+            if p.name == ".gitkeep":
+                continue
             if p.is_file() and is_temp_file(p.name):
                 try:
                     p.unlink()
@@ -313,7 +315,8 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
                 target.write_text(text, encoding="utf-8")
             opts["cookiefile"] = str(target)
             return opts
-        # file saved earlier via /api/cookies/upload (read-only shared use is safe)
+        # Manually placed session file (read-only shared use is safe).
+        # Copy your cookies.txt to cookies/session_cookies.txt to reuse it.
         if SESSION_COOKIE_FILE.exists() and SESSION_COOKIE_FILE.stat().st_size > 0:
             opts["cookiefile"] = str(SESSION_COOKIE_FILE)
             return opts
