@@ -81,6 +81,64 @@ TIME_RE = re.compile(r"^\s*(\d+:)?(\d{1,3}:)?(\d{1,3})(\.\d+)?\s*$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 
+# ------------------------------- security limits -------------------------------
+# Local-only server, but still: bound request sizes, restrict outbound fetch
+# targets to YouTube, and never serve files outside their directories.
+
+MAX_JSON_BODY = 256 * 1024  # cookies pastes are KBs; bigger bodies are abuse/bug
+MAX_URL_LEN = 2000
+MAX_COOKIES_TEXT = 200 * 1024
+MAX_PLAYLIST_ITEMS_LEN = 200
+MAX_SUB_LANG_LEN = 100
+
+YOUTUBE_HOSTS = frozenset({
+    "youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+})
+
+
+class HttpError(Exception):
+    """Raised for request errors that map directly to an HTTP status."""
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
+def validate_url(url: str | None) -> str:
+    """Allowlist check: only http(s) YouTube URLs (incl. subdomains)."""
+    u = (url or "").strip()
+    if not u:
+        raise ValueError("Paste a YouTube URL first.")
+    if len(u) > MAX_URL_LEN:
+        raise ValueError("That URL is too long to be a YouTube link.")
+    if not u.startswith(("http://", "https://")):
+        u = "https://" + u
+    try:
+        parts = urllib.parse.urlsplit(u)
+        host = (parts.hostname or "").lower().rstrip(".")
+    except Exception:
+        raise ValueError("That doesn't look like a valid URL.")
+    if parts.scheme not in ("http", "https") or not host:
+        raise ValueError("That doesn't look like a valid URL.")
+    if not any(host == h or host.endswith("." + h) for h in YOUTUBE_HOSTS):
+        raise ValueError("Only YouTube links are supported (youtube.com / youtu.be).")
+    return u
+
+
+def safe_child(base: Path, name: str) -> Path | None:
+    """Resolve `name` strictly under `base`. Returns None on traversal attempts."""
+    candidate = (base / name).resolve()
+    try:
+        candidate.relative_to(base.resolve())
+    except ValueError:
+        return None
+    if candidate.name.startswith("."):
+        return None
+    return candidate
+
+
 def clean_text(value, limit: int = 2000) -> str:
     """Strip ANSI codes, carriage returns and C0 controls so text is JSON-safe
     and displays cleanly in the UI log."""
@@ -172,7 +230,8 @@ def resolve_cookies(payload: dict) -> dict:
         return opts
     if mode in ("upload", "text", "file"):
         text = payload.get("cookies_text") or ""
-        path_hint = (payload.get("cookies_file") or "").strip()
+        if len(text) > MAX_COOKIES_TEXT:
+            raise ValueError("Cookies text is too large (max ~200 KB).")
         if text:
             SESSION_COOKIE_FILE.write_text(text, encoding="utf-8")
             opts["cookiefile"] = str(SESSION_COOKIE_FILE)
@@ -180,12 +239,6 @@ def resolve_cookies(payload: dict) -> dict:
         # file saved earlier via /api/cookies/upload
         if SESSION_COOKIE_FILE.exists() and SESSION_COOKIE_FILE.stat().st_size > 0:
             opts["cookiefile"] = str(SESSION_COOKIE_FILE)
-            return opts
-        if path_hint:
-            p = Path(path_hint).expanduser()
-            if not p.exists():
-                raise ValueError(f"Cookies file not found: {path_hint}")
-            opts["cookiefile"] = str(p)
             return opts
         raise ValueError("No cookies provided. Upload a cookies.txt file or paste its contents.")
     return opts
@@ -254,9 +307,7 @@ def summarize_formats(info: dict) -> list[dict]:
 def fetch_info(url: str, payload: dict) -> dict:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
-    url = url.strip()
-    if not url:
-        raise ValueError("Paste a YouTube URL first.")
+    url = validate_url(url)
     opts = base_ydl_opts(payload)
     opts.update({"extract_flat": False, "skip_download": True})
     flat = payload.get("flat_playlist")
@@ -366,6 +417,8 @@ def build_download_opts(job: dict, payload: dict) -> dict:
             raise ValueError("Playlist start/end must be numbers.")
         items = (payload.get("playlist_items") or "").strip()
         if items:
+            if len(items) > MAX_PLAYLIST_ITEMS_LEN:
+                raise ValueError("Playlist items is too long. Example: 1-5,7,10-12")
             if not re.fullmatch(r"[\d\s,\-:;]+", items):
                 raise ValueError("Playlist items looks invalid. Example: 1-5,7,10-12")
             opts["playlistitems"] = items.replace(";", ",")
@@ -375,6 +428,8 @@ def build_download_opts(job: dict, payload: dict) -> dict:
         opts["writesubtitles"] = True
         opts["writeautomaticsub"] = bool(payload.get("auto_subs"))
         lang = (payload.get("sub_lang") or "en").strip() or "en"
+        if len(lang) > MAX_SUB_LANG_LEN or not re.fullmatch(r"[A-Za-z\-, ]+", lang):
+            raise ValueError("Subtitle language looks invalid. Example: en or en,de.")
         opts["subtitleslangs"] = [s.strip() for s in lang.split(",") if s.strip()]
         opts["subtitlesformat"] = "srt"
         opts["embedsubtitles"] = False
@@ -511,22 +566,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
     def read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except (TypeError, ValueError):
+            raise HttpError(400, "Invalid Content-Length.")
+        if length < 0:
+            raise HttpError(400, "Invalid Content-Length.")
         if not length:
             return {}
+        if length > MAX_JSON_BODY:
+            raise HttpError(413, "Request body too large.")
         raw = self.rfile.read(length)
         try:
-            return json.loads(raw.decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"))
         except Exception:
             return {}
+        return data if isinstance(data, dict) else {}
 
     def serve_static(self, rel: str):
-        path = (WEB_DIR / rel).resolve()
-        if not str(path).startswith(str(WEB_DIR.resolve())) or not path.exists():
+        path = safe_child(WEB_DIR, rel)
+        if path is None or not path.is_file():
             self.send_error(404)
             return
         ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
@@ -534,13 +599,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-cache")
+        if path.suffix == ".html":
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; img-src 'self' https: data:; "
+                "style-src 'self'; script-src 'self'; connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'",
+            )
         self.end_headers()
         self.wfile.write(data)
 
     def serve_download_file(self, name: str):
         safe = Path(urllib.parse.unquote(name)).name
-        path = (DOWNLOAD_DIR / safe).resolve()
-        if not str(path).startswith(str(DOWNLOAD_DIR.resolve())) or not path.exists():
+        if not safe or safe == ".gitkeep":
+            self.send_error(404)
+            return
+        path = safe_child(DOWNLOAD_DIR, safe)
+        if path is None or not path.is_file():
             self.send_error(404)
             return
         ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
@@ -548,6 +625,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(path.stat().st_size))
         self.send_header("Content-Disposition", f'attachment; filename="{safe}"')
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         with open(path, "rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
@@ -613,7 +692,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
-        body = self.read_json()
+        try:
+            body = self.read_json()
+        except HttpError as exc:
+            return self.send_json({"ok": False, "error": str(exc)}, exc.status)
 
         if route == "/api/info":
             try:
@@ -629,9 +711,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":
-            url = (body.get("url") or "").strip()
-            if not url:
-                return self.send_json({"ok": False, "error": "Paste a URL first."}, 400)
+            try:
+                url = validate_url(body.get("url"))
+            except ValueError as exc:
+                return self.send_json({"ok": False, "error": str(exc)}, 400)
             if parse_time_to_seconds(body.get("clip_from")) is None and (body.get("clip_from") or "").strip():
                 return self.send_json({"ok": False, "error": "Invalid 'from' time. Use MM:SS or HH:MM:SS."}, 400)
             if parse_time_to_seconds(body.get("clip_to")) is None and (body.get("clip_to") or "").strip():
