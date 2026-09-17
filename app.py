@@ -108,7 +108,6 @@ QUALITY_FORMATS = {
     "audio_m4a": "ba/b",
 }
 
-TIME_RE = re.compile(r"^\s*(\d+:)?(\d{1,3}:)?(\d{1,3})(\.\d+)?\s*$")
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 
@@ -226,24 +225,15 @@ def format_seconds(sec: float | None) -> str:
     return f"{m}:{s:02d}"
 
 
-def section_range_str(from_val: str | None, to_val: str | None) -> str | None:
-    """Build yt-dlp --download-sections '*from-to' value."""
-    f = parse_time_to_seconds(from_val) if from_val else None
-    t = parse_time_to_seconds(to_val) if to_val else None
-    if f is None and t is None:
+def format_bytes(n: float | None) -> str | None:
+    if not n:
         return None
-
-    def fmt(sec: float | None, default: str) -> str:
-        if sec is None:
-            return default
-        sec_i = int(sec)
-        h, rem = divmod(sec_i, 3600)
-        m, s = divmod(rem, 60)
-        if h:
-            return f"{h:02d}:{m:02d}:{s:02d}"
-        return f"{m:02d}:{s:02d}"
-
-    return f"*{fmt(f, '00:00')}-{fmt(t, 'inf')}"
+    n = float(n)
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1000 or unit == "GB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return None  # unreachable
 
 
 def cookie_file_for(job_id: str | None) -> Path:
@@ -348,12 +338,14 @@ def summarize_formats(info: dict) -> list[dict]:
         if acodec != "none":
             has_audio = True
     ladder = sorted(heights.values(), key=lambda x: -x["height"])
-    out = [{"id": "best", "label": "Best available", "height": None}]
+    out = [{"id": "best", "label": "Best available", "height": None, "filesize": None, "filesize_str": None}]
     for q in ladder:
         h = q["height"]
         size = q["filesize"]
-        size_str = f" ~{size / 1e6:.0f} MB" if size else ""
-        out.append({"id": str(h), "label": f"{h}p{size_str}", "height": h})
+        size_str = format_bytes(size)
+        label = f"{h}p" + (f" ~{size_str}" if size_str else "")
+        out.append({"id": str(h), "label": label, "height": h,
+                    "filesize": size, "filesize_str": size_str})
     if has_audio:
         out.append({"id": "audio_mp3", "label": "Audio only (MP3)", "height": None})
         out.append({"id": "audio_m4a", "label": "Audio only (M4A)", "height": None})
@@ -365,10 +357,7 @@ def fetch_info(url: str, payload: dict) -> dict:
         raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
     url = validate_url(url)
     opts = base_ydl_opts(payload)
-    opts.update({"extract_flat": False, "skip_download": True})
-    flat = payload.get("flat_playlist")
-    if flat:
-        opts["extract_flat"] = True
+    opts.update({"skip_download": True})
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     if info is None:
@@ -647,6 +636,36 @@ def run_download(job_id: str, payload: dict):
 
 # ------------------------------- HTTP layer -------------------------------
 
+_health_cache: dict = {"at": 0.0, "checks": {}}
+
+
+def environment_checks() -> dict:
+    """yt-dlp/ffmpeg/node probes, cached 60s (ffmpeg -version spawn is slow)."""
+    now = time.monotonic()
+    if now - _health_cache["at"] < 60 and _health_cache["checks"]:
+        return _health_cache["checks"]
+    checks = {
+        "ffmpeg": bool(shutil.which("ffmpeg")),
+        "node": bool(shutil.which("node")),
+        "deno": bool(shutil.which("deno")),
+    }
+    try:
+        import subprocess
+        out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
+        checks["ffmpeg_version"] = (out.stdout.splitlines() or [""])[0][:80] if out.returncode == 0 else "not found"
+    except Exception:
+        checks["ffmpeg_version"] = "not found"
+        checks["ffmpeg"] = False
+    if yt_dlp is not None:
+        try:
+            checks["yt_dlp"] = yt_dlp.version.__version__
+        except Exception:
+            checks["yt_dlp"] = "installed"
+    else:
+        checks["yt_dlp"] = "missing"
+    _health_cache.update(at=now, checks=checks)
+    return checks
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "yt-downloader/1.0"
 
@@ -735,24 +754,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route in ("/app.js", "/styles.css"):
             return self.serve_static(route.lstrip("/"))
         if route == "/api/health":
-            checks = {
-                "yt_dlp": getattr(yt_dlp, "version", None) and getattr(yt_dlp, "__version__", "installed") or ("missing" if yt_dlp is None else "installed"),
-                "ffmpeg": bool(shutil.which("ffmpeg")),
-                "node": bool(shutil.which("node")),
-                "deno": bool(shutil.which("deno")),
-            }
-            try:
-                import subprocess
-                out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
-                checks["ffmpeg_version"] = (out.stdout.splitlines() or [""])[0][:80] if out.returncode == 0 else "not found"
-            except Exception:
-                checks["ffmpeg_version"] = "not found"
-            if yt_dlp is not None:
-                try:
-                    checks["yt_dlp"] = __import__("yt_dlp").version.__version__
-                except Exception:
-                    checks["yt_dlp"] = "installed"
-            return self.send_json({"ok": True, "checks": checks})
+            return self.send_json({"ok": True, "checks": environment_checks()})
         if route == "/api/jobs":
             with jobs_lock:
                 return self.send_json({"jobs": list(jobs.values())})
@@ -772,12 +774,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         {
                             "name": p.name,
                             "size": st.st_size,
-                            "size_str": f"{st.st_size / 1e6:.1f} MB",
+                            "size_str": format_bytes(st.st_size) or "?",
                             "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
                             "url": f"/files/{urllib.parse.quote(p.name)}",
                         }
                     )
-            return self.send_json({"files": files})
+            try:
+                free = shutil.disk_usage(DOWNLOAD_DIR).free
+            except OSError:
+                free = None
+            return self.send_json({
+                "files": files,
+                "disk_free": free,
+                "disk_free_str": format_bytes(free),
+            })
         if route.startswith("/files/"):
             return self.serve_download_file(route[len("/files/"):])
         return self.send_error(404)
@@ -860,9 +870,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     {"ok": False, "error": "That download already started and can't be stopped."}, 409
                 )
 
+        if route == "/api/files/delete":
+            name = str(body.get("name") or "")
+            safe = Path(urllib.parse.unquote(name)).name
+            if not safe:
+                return self.send_json({"ok": False, "error": "Missing file name."}, 400)
+            path = safe_child(DOWNLOAD_DIR, safe)
+            if path is None or not path.is_file():
+                return self.send_json({"ok": False, "error": "File not found."}, 404)
+            try:
+                path.unlink()
+            except OSError as exc:
+                return self.send_json({"ok": False, "error": f"Could not delete: {exc}"}, 500)
+            return self.send_json({"ok": True, "deleted": safe})
+
         if route == "/api/cookies/upload":
             # JSON: {"cookies_text": "..."} — stores for this session
             text = body.get("cookies_text") or ""
+            if len(text) > MAX_COOKIES_TEXT:
+                return self.send_json({"ok": False, "error": "Cookies text is too large (max ~200 KB)."}, 400)
             if not text.strip():
                 return self.send_json({"ok": False, "error": "Empty cookies."}, 400)
             SESSION_COOKIE_FILE.write_text(text, encoding="utf-8")
