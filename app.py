@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import socketserver
+import sys
 import threading
 import time
 import urllib.parse
@@ -119,6 +120,7 @@ MAX_URL_LEN = 2000
 MAX_COOKIES_TEXT = 200 * 1024
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
+MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
 
 YOUTUBE_HOSTS = frozenset({
     "youtube.com",
@@ -259,6 +261,27 @@ def cookie_file_for(job_id: str | None) -> Path:
 def cleanup_job_cookies(job_id: str) -> None:
     try:
         cookie_file_for(job_id).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def cleanup_stale_files() -> None:
+    """Remove orphaned per-job cookies and partial downloads from kills."""
+    try:
+        for p in COOKIES_DIR.glob("job-*.cookies.txt"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+    try:
+        for p in DOWNLOAD_DIR.iterdir():
+            if p.is_file() and is_temp_file(p.name):
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
     except OSError:
         pass
 
@@ -753,8 +776,16 @@ def environment_checks() -> dict:
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "offtube/1.0"
 
-    def log_message(self, fmt, *args):  # quieter logs
-        pass
+    def log_message(self, fmt, *args):  # stderr access log for API only
+        try:
+            requestline = str(args[0]) if args else ""
+            code = str(args[1]) if len(args) > 1 else ""
+            if "/api/" in requestline or code.startswith("4") or code.startswith("5"):
+                sys.stderr.write(
+                    f"{_dt.datetime.now().isoformat(timespec='seconds')} {self.address_string()} {fmt % args}\n"
+                )
+        except Exception:
+            pass
 
     # -- helpers ---------------------------------------------------------
     def send_json(self, obj: dict, status: int = 200):
@@ -962,6 +993,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 build_download_opts({"id": "validate"}, body, persist=False)  # validate playlist/quality
             except ValueError as exc:
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
+            try:
+                if shutil.disk_usage(DOWNLOAD_DIR).free < MIN_DISK_FREE:
+                    return self.send_json(
+                        {"ok": False, "error": "Disk is almost full (<200 MB free). Free space and retry."}, 507
+                    )
+            except OSError:
+                pass
             jid = uuid.uuid4().hex[:12]
             job = {
                 "id": jid,
@@ -1038,10 +1076,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 def main():
-    port = int(os.environ.get("PORT", "8000"))
-    with socketserver.ThreadingTCPServer(("127.0.0.1", port), Handler) as httpd:
-        httpd.allow_reuse_address = True
-        httpd.daemon_threads = True
+    try:
+        port = int(os.environ.get("PORT", "8000"))
+    except ValueError:
+        print("PORT must be a number (e.g. PORT=8080).", file=sys.stderr)
+        raise SystemExit(2)
+    if not 1 <= port <= 65535:
+        print("PORT must be 1-65535.", file=sys.stderr)
+        raise SystemExit(2)
+    cleanup_stale_files()
+    # Must be set before bind; assigning on the instance afterwards is a no-op.
+    socketserver.ThreadingTCPServer.allow_reuse_address = True
+
+    class ReuseServer(socketserver.ThreadingTCPServer):
+        allow_reuse_address = True
+        daemon_threads = True
+
+    with ReuseServer(("127.0.0.1", port), Handler) as httpd:
         print(f"\nofftube running → http://127.0.0.1:{port}")
         print(f"Downloads folder   → {DOWNLOAD_DIR}")
         print("Paste a YouTube link in the page, pick quality / from-to, hit Download.\n")
