@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>yt-downloader — local archive tool</title>
+<meta name="description" content="Paste a YouTube link, pick a format, keep the file. Local-only downloader powered by yt-dlp." />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<a class="skip" href="#main">Skip to download form</a>
+
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="mark" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+      <span class="brand-name">yt-downloader</span>
+      <span class="brand-tag">local utility</span>
+    </div>
+    <div class="topbar-right">
+      <span id="health" class="status" role="status">
+        <span class="status-dot" aria-hidden="true"></span><span id="healthText">checking environment…</span>
+      </span>
+    </div>
+  </div>
+</header>
+
+<main id="main" class="layout">
+  <div class="primary">
+
+    <!-- 01 SOURCE -->
+    <section class="panel" aria-labelledby="h-source">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">01</span>
+        <div>
+          <h1 id="h-source">Source</h1>
+          <p class="lede">Paste a link. Everything else follows from it.</p>
+        </div>
+      </div>
+
+      <label class="field-label" for="url">Video or playlist URL</label>
+      <div class="url-row">
+        <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
+               placeholder="https://www.youtube.com/watch?v=…" aria-describedby="urlHint" />
+        <button id="fetchBtn" class="btn" type="button">Inspect</button>
+      </div>
+      <p id="urlHint" class="hint">Pastes are inspected automatically. Public, unlisted, private and members-only links you can already watch.</p>
+
+      <div id="infoBox" class="preview is-empty" aria-live="polite">
+        <div class="preview-empty">
+          <p class="preview-empty-title">Nothing inspected yet</p>
+          <p class="preview-empty-sub">Paste a link above — title, duration and available formats appear here.</p>
+        </div>
+      </div>
+      <p id="infoError" class="inline-error hidden" role="alert"></p>
+    </section>
+
+    <!-- 02 FORMAT -->
+    <section class="panel" aria-labelledby="h-format">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">02</span>
+        <div>
+          <h2 id="h-format">Format</h2>
+          <p class="lede">What file do you want to keep?</p>
+        </div>
+      </div>
+
+      <div class="seg" role="radiogroup" aria-label="Output type">
+        <label class="seg-opt"><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
+        <label class="seg-opt"><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
+      </div>
+
+      <fieldset class="quality-field">
+        <legend class="field-label">Quality ceiling</legend>
+        <div class="qualities" id="qualities"></div>
+        <p class="hint" id="qualityNote">“Best” keeps the highest available stream and merges to MP4.</p>
+      </fieldset>
+
+      <label class="row-check">
+        <input type="checkbox" id="subs" />
+        <span><strong>Keep subtitles</strong><em>English first, SRT sidecar next to the file.</em></span>
+      </label>
+    </section>
+
+    <!-- 03 OPTIONS -->
+    <section class="panel" aria-labelledby="h-options">
+      <div class="panel-head">
+        <span class="step" aria-hidden="true">03</span>
+        <div>
+          <h2 id="h-options">Options</h2>
+          <p class="lede">Only when you need them. Defaults download the whole video, no login.</p>
+        </div>
+      </div>
+
+      <details class="disclosure" id="discTrim">
+        <summary><span>Clip <em>trim to a from–to range</em></span><span class="disc-state" id="trimState">off</span></summary>
+        <div class="disc-body">
+          <div class="trim-row">
+            <div class="field"><label for="clipFrom">From</label><input id="clipFrom" class="mono" placeholder="01:30" autocomplete="off" spellcheck="false" /></div>
+            <span class="trim-dash" aria-hidden="true">→</span>
+            <div class="field"><label for="clipTo">To</label><input id="clipTo" class="mono" placeholder="02:45" autocomplete="off" spellcheck="false" /></div>
+            <button id="clearClip" class="btn btn-quiet" type="button">Clear</button>
+          </div>
+          <p class="hint">Accepts <code>90</code>, <code>1:30</code>, <code>1:02:03</code>. Requires ffmpeg. Leave empty for the full video.</p>
+          <p id="trimError" class="inline-error hidden" role="alert"></p>
+        </div>
+      </details>
+
+      <details class="disclosure" id="discPlaylist">
+        <summary><span>Playlist <em id="plSummary">single video</em></span><span class="disc-state" id="plState">off</span></summary>
+        <div class="disc-body">
+          <div class="seg seg-small" role="radiogroup" aria-label="Playlist scope">
+            <label class="seg-opt"><input type="radio" name="plmode" value="single" checked /><span>This video only</span></label>
+            <label class="seg-opt"><input type="radio" name="plmode" value="playlist" /><span>Playlist / range</span></label>
+          </div>
+          <div class="trim-row" id="plRangeRow">
+            <div class="field field-narrow"><label for="plStart">Start #</label><input id="plStart" class="mono" type="number" min="1" placeholder="1" /></div>
+            <div class="field field-narrow"><label for="plEnd">End #</label><input id="plEnd" class="mono" type="number" min="1" placeholder="—" /></div>
+            <div class="field field-wide"><label for="plItems">Items <span class="label-note">overrides start / end</span></label><input id="plItems" class="mono" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></div>
+          </div>
+        </div>
+      </details>
+
+      <details class="disclosure" id="discAccess">
+        <summary><span>Access <em id="accessSummary">public — no login</em></span><span class="disc-state" id="accessState">off</span></summary>
+        <div class="disc-body">
+          <div class="seg seg-small seg-three" role="radiogroup" aria-label="Access method">
+            <label class="seg-opt"><input type="radio" name="cmode" value="none" checked /><span>Public</span></label>
+            <label class="seg-opt"><input type="radio" name="cmode" value="upload" /><span>Cookies file</span></label>
+            <label class="seg-opt"><input type="radio" name="cmode" value="browser" /><span>Browser</span></label>
+          </div>
+          <div id="cookieNone" class="cpane">
+            <p class="hint">For public and unlisted videos. If YouTube asks you to join or sign in to watch, use a cookies file instead.</p>
+          </div>
+          <div id="cookieUpload" class="cpane hidden">
+            <div class="file-row">
+              <label for="cookieFile" class="btn btn-quiet">Choose cookies.txt</label>
+              <input id="cookieFile" type="file" accept=".txt" class="visually-hidden" />
+              <span id="cookieFileName" class="mono muted">no file chosen</span>
+            </div>
+            <label class="field-label" for="cookieText">Or paste file contents</label>
+            <textarea id="cookieText" rows="3" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
+            <p class="hint">Export with “Get cookies.txt Locally” while signed in as the account that can watch the video. Cookies expire — re-export when downloads fail. This file never leaves your machine.</p>
+          </div>
+          <div id="cookieBrowser" class="cpane hidden">
+            <div class="field field-wide">
+              <label for="cookieBrowserName">Read cookies from</label>
+              <select id="cookieBrowserName">
+                <option value="chrome">Chrome</option>
+                <option value="chromium">Chromium</option>
+                <option value="brave">Brave</option>
+                <option value="edge">Edge</option>
+                <option value="firefox">Firefox</option>
+                <option value="safari">Safari</option>
+                <option value="opera">Opera</option>
+                <option value="vivaldi">Vivaldi</option>
+              </select>
+            </div>
+            <p class="hint">Reads directly from the browser on this machine. Quit the browser first on some systems.</p>
+          </div>
+        </div>
+      </details>
+    </section>
+
+    <!-- 04 DOWNLOAD -->
+    <section class="panel panel-dark" aria-labelledby="h-dl">
+      <div class="panel-head">
+        <span class="step step-inv" aria-hidden="true">04</span>
+        <div>
+          <h2 id="h-dl">Download</h2>
+          <p class="lede lede-inv" id="dlLede">Ready when you are.</p>
+        </div>
+        <div class="pct mono" id="jobPct" aria-hidden="true">—</div>
+      </div>
+      <button id="dlBtn" class="btn btn-ink" type="button">
+        <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        Download
+      </button>
+      <div class="deck" id="progressWrap" aria-live="polite">
+        <div class="deck-line"><span id="jobStatus">Idle. Files land in <span class="mono">downloads/</span>.</span></div>
+        <div class="meter" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter"><div id="bar"></div></div>
+        <pre id="jobLog" class="deck-log" tabindex="0" aria-label="Download log"></pre>
+      </div>
+    </section>
+  </div>
+
+  <aside class="side">
+    <section class="panel panel-side" aria-labelledby="h-queue">
+      <div class="side-head">
+        <h2 id="h-queue">Queue</h2>
+        <span class="count mono" id="queueCount">0</span>
+      </div>
+      <div id="queue" class="queue">
+        <p class="empty">No downloads yet this session.</p>
+      </div>
+    </section>
+
+    <section class="panel panel-side" aria-labelledby="h-lib">
+      <div class="side-head">
+        <h2 id="h-lib">Library</h2>
+        <button id="refreshFiles" class="btn btn-quiet btn-small" type="button">Refresh</button>
+      </div>
+      <input id="fileSearch" type="search" placeholder="Filter files…" aria-label="Filter downloaded files" autocomplete="off" />
+      <div id="files" class="files">
+        <p class="empty">Nothing saved yet.</p>
+      </div>
+    </section>
+
+    <section class="panel panel-side panel-note" aria-label="About this tool">
+      <h2 class="note-title">Local only</h2>
+      <p>Files never leave this machine. Only keep content you own or are allowed to archive. Members-only videos need <strong>your own</strong> active membership — this tool can’t bypass paywalls.</p>
+      <p class="mono micro" id="envLine">env —</p>
+    </section>
+  </aside>
+</main>
+
+<footer class="foot">
+  <span>yt-downloader · stdlib server + yt-dlp engine</span>
+  <span class="mono" id="footFiles"></span>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+# virtualenv (project-local, created by run.sh)
+.venv/
+# downloads go here (keep the dir, ignore its contents)
+downloads/*
+!downloads/.gitkeep
+# user cookies (never commit)
+cookies/*.txt
+__pycache__/
+*.pyc
+.pytest_cache/
