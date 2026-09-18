@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "offtube — keep YouTube locally",
+  "version": "0.1.0",
+  "description": "Detects the YouTube video in your current tab and sends it to your local offtube server (127.0.0.1) to keep. Manual link override supported.",
+  "minimum_chrome_version": "114",
+  "action": {
+    "default_popup": "popup/popup.html",
+    "default_title": "offtube"
+  },
+  "permissions": ["tabs", "storage", "sidePanel"],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  }
+}

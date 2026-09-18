@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="head">
+    <div class="brand"><span class="mark" aria-hidden="true">↓</span> offtube</div>
+    <span id="health" class="status" role="status"><span class="dot" aria-hidden="true"></span><span id="healthText">checking…</span></span>
+  </header>
+
+  <main>
+    <p id="tabLine" class="tab-line">Reading current tab…</p>
+
+    <label class="label" for="url">YouTube link <span class="muted">(auto-filled from tab, editable)</span></label>
+    <div class="row">
+      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" />
+      <button id="useTab" class="btn quiet" type="button" title="Re-read URL from current tab">Tab</button>
+    </div>
+
+    <div id="preview" class="preview" aria-live="polite">
+      <p class="muted">Nothing inspected yet.</p>
+    </div>
+    <p id="error" class="error hidden" role="alert"></p>
+
+    <div class="row2">
+      <div class="field">
+        <label class="label" for="quality">Quality</label>
+        <select id="quality">
+          <option value="best">Best available</option>
+          <option value="2160">2160p</option>
+          <option value="1440">1440p</option>
+          <option value="1080" selected>1080p</option>
+          <option value="720">720p</option>
+          <option value="480">480p</option>
+          <option value="360">360p</option>
+          <option value="audio_mp3">Audio MP3</option>
+          <option value="audio_m4a">Audio M4A</option>
+        </select>
+      </div>
+      <div class="field">
+        <label class="label" for="server">Server</label>
+        <input id="server" class="mono" type="url" autocomplete="off" spellcheck="false" />
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="inspect" class="btn quiet" type="button">Inspect</button>
+      <button id="download" class="btn primary" type="button">Download</button>
+    </div>
+
+    <div class="progress" aria-live="polite">
+      <div class="bar"><i id="bar"></i></div>
+      <p id="status" class="muted">Idle.</p>
+    </div>
+
+    <div class="foot">
+      <button id="openPanel" class="link" type="button">Open side panel →</button>
+      <button id="openLib" class="link" type="button">Library</button>
+    </div>
+  </main>
+
+  <script src="popup.js"></script>
+</body>
+</html>

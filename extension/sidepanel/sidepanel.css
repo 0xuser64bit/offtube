@@ -1,0 +1,40 @@
+body { margin: 0; padding: 12px 14px 20px; font: 13px/1.45 system-ui, sans-serif; color: #1a1a1a; }
+.head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.brand { font-weight: 700; }
+.mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: #1a1a1a; color: #fff; font-size: 12px; margin-right: 6px; }
+.status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: #666; border: 1px solid #e3e3e3; border-radius: 999px; padding: 2px 8px; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #bbb; }
+.status.ok .dot { background: #1a7f37; }
+.status.bad .dot { background: #c00; }
+.panel { border: 1px solid #e8e8e8; border-radius: 12px; padding: 12px; margin-bottom: 10px; }
+.panel.dark { background: #141414; color: #f2f2f2; }
+.panel.dark .muted { color: #aaa; }
+h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin: 0 0 8px; }
+.muted { color: #777; }
+.tab-line { font-size: 12px; background: #f6f6f6; border: 1px solid #eee; border-radius: 8px; padding: 6px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.label { display: block; font-size: 11px; font-weight: 600; margin: 10px 0 4px; }
+input, select { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+.row { display: flex; gap: 8px; margin-top: 8px; }
+.row2 { display: flex; gap: 8px; }
+.row2 > div { flex: 1; }
+.seg { display: flex; gap: 12px; margin-top: 8px; font-size: 12px; }
+.check { display: flex; gap: 6px; align-items: center; margin-top: 8px; font-size: 12px; }
+.check input { width: auto; }
+.hint { font-size: 11px; color: #666; }
+.btn { border: 1px solid #1a1a1a; background: #1a1a1a; color: #fff; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+.btn.quiet { background: #fff; color: #1a1a1a; }
+.panel.dark .btn.quiet { background: transparent; color: #fff; border-color: #555; }
+.btn:disabled { opacity: 0.55; }
+.btn.primary { width: 100%; }
+.preview { margin-top: 8px; border-top: 1px solid #eee; padding-top: 8px; display: flex; gap: 8px; }
+.preview img { width: 112px; border-radius: 6px; }
+.preview h3 { margin: 0; font-size: 13px; }
+.error { color: #b00; font-size: 12px; }
+.hidden { display: none; }
+.bar { height: 6px; background: #333; border-radius: 999px; overflow: hidden; margin-top: 10px; }
+.bar i { display: block; height: 100%; width: 0; background: #fff; }
+.log { background: #000; color: #c9c9c9; font-size: 11px; border-radius: 8px; padding: 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; }
+.job { border: 1px solid #eee; border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
+.file { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
+.file a { color: #0b5fff; }

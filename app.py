@@ -798,6 +798,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
+        # Local extension client (chrome-extension://) fetches this API from
+        # an opaque origin; host_permissions bypasses page CORS but the
+        # server still needs to emit ACAO + answer OPTIONS preflights.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(body)
 
@@ -833,15 +838,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def check_origin(self) -> bool:
         """Localhost CSRF/DNS-rebinding guard. Same-origin + curl (no header)
-        pass; a page on evil.com posting here is rejected."""
+        pass; the unpacked extension (chrome-extension://) passes; a page on
+        evil.com posting here is rejected."""
         for hdr in ("Origin", "Referer"):
             val = self.headers.get(hdr)
             if not val:
                 continue
             try:
-                host = (urllib.parse.urlsplit(val).hostname or "").lower().rstrip(".")
+                parts = urllib.parse.urlsplit(val)
+                host = (parts.hostname or "").lower().rstrip(".")
+                scheme = (parts.scheme or "").lower()
             except Exception:
                 return False
+            if scheme == "chrome-extension":
+                continue
             if host in ("127.0.0.1", "localhost", "::1"):
                 continue
             return False
@@ -897,6 +907,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             shutil.copyfileobj(fh, self.wfile)
 
     # -- routes ------------------------------------------------------------
+    def do_OPTIONS(self):
+        # CORS preflight for the local extension client (fetch with
+        # Content-Type: application/json triggers one). Localhost-only
+        # server, so reflecting * is fine; evil.com is still blocked at
+        # POST time by check_origin.
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path

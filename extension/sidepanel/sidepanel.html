@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header class="head">
+    <div class="brand"><span class="mark" aria-hidden="true">↓</span> offtube</div>
+    <span id="health" class="status" role="status"><span class="dot" aria-hidden="true"></span><span id="healthText">checking…</span></span>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>01 · Source <span class="muted">auto-filled from tab</span></h2>
+      <p id="tabLine" class="tab-line">Reading current tab…</p>
+      <label class="label" for="url">YouTube link (editable override)</label>
+      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" />
+      <div class="row">
+        <button id="useTab" class="btn quiet" type="button">Use current tab</button>
+        <button id="inspect" class="btn quiet" type="button">Inspect</button>
+      </div>
+      <div id="preview" class="preview" aria-live="polite"><p class="muted">Nothing inspected yet.</p></div>
+      <p id="error" class="error hidden" role="alert"></p>
+    </section>
+
+    <section class="panel">
+      <h2>02 · Format</h2>
+      <div class="seg" role="radiogroup" aria-label="Output type">
+        <label><input type="radio" name="otype" value="video" checked /> Video</label>
+        <label><input type="radio" name="otype" value="audio" /> Audio</label>
+      </div>
+      <label class="label" for="quality">Quality ceiling</label>
+      <select id="quality">
+        <option value="best">Best available</option>
+        <option value="2160">2160p</option>
+        <option value="1440">1440p</option>
+        <option value="1080" selected>1080p</option>
+        <option value="720">720p</option>
+        <option value="480">480p</option>
+        <option value="360">360p</option>
+        <option value="audio_mp3">Audio MP3</option>
+        <option value="audio_m4a">Audio M4A</option>
+      </select>
+      <label class="check"><input type="checkbox" id="subs" /> Keep subtitles (SRT)</label>
+    </section>
+
+    <section class="panel">
+      <h2>03 · Options</h2>
+      <div class="row2">
+        <div><label class="label" for="clipFrom">From</label><input id="clipFrom" class="mono" placeholder="01:30" autocomplete="off" /></div>
+        <div><label class="label" for="clipTo">To</label><input id="clipTo" class="mono" placeholder="02:45" autocomplete="off" /></div>
+      </div>
+      <div class="seg" role="radiogroup" aria-label="Playlist scope">
+        <label><input type="radio" name="plmode" value="single" checked /> This video</label>
+        <label><input type="radio" name="plmode" value="playlist" /> Playlist</label>
+      </div>
+      <label class="label" for="access">Access</label>
+      <select id="access">
+        <option value="none" selected>Public — no login</option>
+        <option value="browser">Browser cookies (this machine)</option>
+      </select>
+      <p class="hint">Members-only / private videos you can already watch need Browser mode. The server reads cookies locally — nothing is uploaded anywhere.</p>
+    </section>
+
+    <section class="panel dark">
+      <h2>04 · Download</h2>
+      <button id="download" class="btn primary" type="button">Download</button>
+      <div class="bar"><i id="bar"></i></div>
+      <p id="status" class="muted">Idle. Files land in downloads/ on your machine.</p>
+      <pre id="log" class="log" tabindex="0" aria-label="Download log"></pre>
+    </section>
+
+    <section class="panel">
+      <h2>Queue <span id="queueCount" class="mono muted">0</span></h2>
+      <div id="queue"><p class="muted">No downloads yet.</p></div>
+      <h2>Library</h2>
+      <div class="row">
+        <input id="server" class="mono" type="url" autocomplete="off" spellcheck="false" aria-label="offtube server URL" />
+        <button id="openLib" class="btn quiet" type="button">Open</button>
+      </div>
+      <div id="files"><p class="muted">Nothing loaded.</p></div>
+    </section>
+  </main>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>

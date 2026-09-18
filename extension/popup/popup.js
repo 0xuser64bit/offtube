@@ -1,0 +1,208 @@
+/* offtube popup — MV3, no inline scripts, async/await only.
+ * Reads the active tab URL (needs "tabs" permission — without it tab.url
+ * is silently undefined), lets the user override it, talks to the local
+ * offtube server over http://127.0.0.1 (see host_permissions in manifest).
+ */
+'use strict';
+
+const DEFAULT_SERVER = 'http://127.0.0.1:8000';
+const YT_RE = /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i;
+
+const $ = (id) => document.getElementById(id);
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
+async function getSettings() {
+  const { serverUrl = DEFAULT_SERVER, quality = '1080' } = await chrome.storage.local.get(['serverUrl', 'quality']);
+  return { serverUrl: String(serverUrl || DEFAULT_SERVER).replace(/\/+$/, ''), quality };
+}
+
+async function getActiveTabUrl() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return { url: tab?.url || '', title: tab?.title || '' };
+}
+
+function isYouTubeUrl(v) {
+  return YT_RE.test(String(v || '').trim());
+}
+
+async function api(server, path, body) {
+  const res = await fetch(server + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body || {}),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function apiGet(server, path) {
+  const res = await fetch(server + path);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+function setError(msg) {
+  const el = $('error');
+  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
+  el.textContent = msg;
+  el.classList.remove('hidden');
+}
+
+function setStatus(msg, pct) {
+  $('status').textContent = msg;
+  if (typeof pct === 'number') $('bar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
+}
+
+async function checkHealth(server) {
+  const badge = $('health');
+  try {
+    const { checks } = await apiGet(server, '/api/health');
+    if (!checks?.ffmpeg) throw new Error('ffmpeg missing');
+    badge.className = 'status ok';
+    $('healthText').textContent = `ready · ${checks.yt_dlp || ''}`;
+  } catch {
+    badge.className = 'status bad';
+    $('healthText').textContent = 'server unreachable';
+  }
+}
+
+function renderPreview(info) {
+  const box = $('preview');
+  if (info.type === 'playlist') {
+    box.innerHTML = `<div><h3>${escapeHtml(info.title || 'Playlist')}</h3><p>Playlist · ${escapeHtml(String(info.count || ''))} videos</p></div>`;
+    return;
+  }
+  const quals = (info.qualities || []).map((q) => escapeHtml(q.label)).join(' · ');
+  box.innerHTML = `${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" />` : ''}`
+    + `<div><h3>${escapeHtml(info.title || 'Video')}</h3><p>${escapeHtml(info.uploader || '')}${info.duration_str ? ` · ${escapeHtml(info.duration_str)}` : ''}</p><p>${quals}</p></div>`;
+  const ladder = (info.qualities || []).map((q) => q.id);
+  const sel = $('quality');
+  for (const opt of sel.options) {
+    if (ladder.length && opt.value !== 'best' && !opt.value.startsWith('audio') && !ladder.includes(opt.value)) {
+      opt.disabled = true;
+    } else {
+      opt.disabled = false;
+    }
+  }
+}
+
+async function inspect() {
+  setError('');
+  const { serverUrl } = await getSettings();
+  const url = $('url').value.trim();
+  if (!url) { setError('Paste a link or open a YouTube tab first.'); return; }
+  if (!isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
+  $('inspect').disabled = true;
+  try {
+    const { info } = await api(serverUrl, '/api/info', { url, cookies_mode: 'none' });
+    renderPreview(info);
+    setStatus('Inspected. Pick quality and hit Download.');
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    $('inspect').disabled = false;
+  }
+}
+
+async function pollJob(server, jobId) {
+  for (;;) {
+    await new Promise((r) => { setTimeout(r, 900); });
+    let job;
+    try {
+      job = await apiGet(server, `/api/job?id=${encodeURIComponent(jobId)}`);
+    } catch {
+      setStatus('Lost connection — retrying…');
+      continue;
+    }
+    setStatus(job.detail || job.status, job.progress || 0);
+    if (job.status === 'done') {
+      setStatus(`Done — ${(job.files || []).join(', ') || 'saved'}`, 100);
+      return;
+    }
+    if (job.status === 'error' || job.status === 'cancelled') {
+      setError(job.detail || job.status);
+      return;
+    }
+  }
+}
+
+async function download() {
+  setError('');
+  const { serverUrl } = await getSettings();
+  const url = $('url').value.trim();
+  if (!url) { setError('Paste a link first.'); return; }
+  const btn = $('download');
+  btn.disabled = true;
+  try {
+    await chrome.storage.local.set({ quality: $('quality').value, serverUrl: $('server').value.trim() || DEFAULT_SERVER });
+    const { job_id } = await api(serverUrl, '/api/download', {
+      url, quality: $('quality').value, cookies_mode: 'none',
+    });
+    setStatus('Queued…', 0);
+    await pollJob(serverUrl, job_id);
+  } catch (err) {
+    setError(err.message);
+    setStatus('Failed.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function fillFromTab() {
+  const { url, title } = await getActiveTabUrl();
+  const line = $('tabLine');
+  if (url && isYouTubeUrl(url)) {
+    if (!$('url').value.trim()) $('url').value = url;
+    line.textContent = `Tab: ${title || url}`.slice(0, 90);
+    line.title = url;
+  } else if (url) {
+    line.textContent = 'Current tab is not YouTube — paste a link below.';
+    line.title = url;
+  } else {
+    line.textContent = 'Could not read tab URL (need “tabs” permission). Paste a link below.';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const { serverUrl, quality } = await getSettings();
+  $('server').value = serverUrl;
+  $('quality').value = quality;
+  await fillFromTab();
+  await checkHealth(serverUrl);
+  if (isYouTubeUrl($('url').value)) inspect();
+});
+
+$('useTab').addEventListener('click', async () => {
+  const { url } = await getActiveTabUrl();
+  if (url) { $('url').value = url; inspect(); }
+});
+
+$('url').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); inspect(); }
+});
+
+$('inspect').addEventListener('click', inspect);
+$('download').addEventListener('click', download);
+
+$('server').addEventListener('change', async () => {
+  const v = $('server').value.trim() || DEFAULT_SERVER;
+  await chrome.storage.local.set({ serverUrl: v });
+  await checkHealth(v.replace(/\/+$/, ''));
+});
+
+$('openPanel').addEventListener('click', async () => {
+  const win = await chrome.windows.getLastFocused();
+  await chrome.sidePanel.open({ windowId: win.id });
+});
+
+$('openLib').addEventListener('click', async () => {
+  const { serverUrl } = await getSettings();
+  await chrome.tabs.create({ url: `${serverUrl}/` });
+});
