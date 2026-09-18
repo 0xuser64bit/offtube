@@ -207,6 +207,14 @@ async function followTabIfNeeded() {
   if (changed && current === lastTabUrl && current !== lastInspected) inspect();
 }
 
+chrome.storage.session.onChanged.addListener(async (changes) => {
+  if (!changes.pendingUrl || !changes.pendingUrl.newValue) return;
+  $('url').value = changes.pendingUrl.newValue;
+  lastTabUrl = changes.pendingUrl.newValue;
+  await chrome.storage.session.remove('pendingUrl');
+  inspect();
+});
+
 chrome.tabs.onActivated.addListener(async () => {
   await followTabIfNeeded();
 });
