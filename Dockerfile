@@ -14,11 +14,13 @@ WORKDIR /app
 
 # ffmpeg for merge/trim; pinned Deno static binary for yt-dlp JS challenges.
 # curl/unzip are build-only and purged in the same layer.
+# Arch is taken from uname inside the image (not TARGETARCH): compose bake
+# substitutes ARG defaults at parse time, so ARG TARGETARCH=amd64 pulled an
+# x86_64 binary into arm64 images and deno died with a Rosetta/ELF error.
 ARG DENO_VERSION=2.9.7
-ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip \
-    && ARCH=$(case "$TARGETARCH" in amd64) echo x86_64;; arm64) echo aarch64;; *) echo x86_64;; esac) \
+    && ARCH="$(uname -m)" \
     && curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${ARCH}-unknown-linux-gnu.zip" -o /tmp/deno.zip \
     && unzip /tmp/deno.zip -d /usr/local/bin \
     && chmod +x /usr/local/bin/deno \
