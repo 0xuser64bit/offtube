@@ -44,6 +44,46 @@ def test_validate_url_rejects_oversize():
         app.validate_url("https://youtube.com/" + "x" * 2000)
 
 
+@pytest.mark.parametrize("url, kind", [
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "video"),
+    ("https://www.youtube.com/watch?v=x&list=RDxxxx", "video"),
+    ("https://youtu.be/dQw4w9WgXcQ", "video"),
+    ("https://www.youtube.com/shorts/dQw4w9WgXcQ", "video"),
+    ("https://www.youtube.com/playlist?list=PLxxxx", "playlist"),
+    ("https://www.youtube.com/channel/UCxxxx", "channel"),
+    ("https://www.youtube.com/@someone/videos", "channel"),
+    ("https://www.youtube.com/", "other"),
+    ("https://www.youtube.com/results?search_query=x", "other"),
+])
+def test_classify_youtube_url(url, kind):
+    assert app.classify_youtube_url(url) == kind
+
+
+def test_reject_unsupported_youtube_blocks_channels():
+    with pytest.raises(ValueError, match="Channel pages"):
+        app.reject_unsupported_youtube("https://www.youtube.com/@someone")
+    with pytest.raises(ValueError, match="isn't a video"):
+        app.reject_unsupported_youtube("https://www.youtube.com/results?search_query=x")
+    assert app.reject_unsupported_youtube(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDxxxx"
+    ).startswith("http")
+
+
+def test_inspect_opts_watch_list_is_single_video():
+    url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDxxxx"
+    opts = app._inspect_opts({"cookies_mode": "none"}, "info-x", url)
+    assert opts["noplaylist"] is True
+    assert "extract_flat" not in opts
+
+
+def test_inspect_opts_playlist_is_flat():
+    url = "https://www.youtube.com/playlist?list=PLxxxx"
+    opts = app._inspect_opts({"cookies_mode": "none"}, "info-x", url)
+    assert opts["extract_flat"] == "in_playlist"
+    assert opts["playlistend"] == 50
+    assert opts["noplaylist"] is False
+
+
 # --- CORS / origin trust ----------------------------------------------------
 @pytest.mark.parametrize("url", [
     "http://127.0.0.1:8000",
@@ -191,15 +231,26 @@ HTTPONLY_ROW = "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t9999999999\tSID\ts3cret"
 FOREIGN_ROW = ".facebook.com\tTRUE\t/\tTRUE\t9999999999\tc_user\tfb"
 
 
+HTTPONLY_FOREIGN = "#HttpOnly_.facebook.com\tTRUE\t/\tTRUE\t9999999999\tc_user\tfb"
+
+
 def test_filter_cookies_keeps_youtube_drops_foreign():
     raw = "\n".join([
         "# Netscape HTTP Cookie File",
-        HTTPONLY_ROW, YOUTUBE_ROW, GOOGLE_ROW, FOREIGN_ROW, "not-a-cookie-row",
+        HTTPONLY_ROW, YOUTUBE_ROW, GOOGLE_ROW, FOREIGN_ROW, HTTPONLY_FOREIGN,
+        "not-a-cookie-row",
     ])
     out = app.filter_cookies_text(raw)
     assert "SID" in out and "LOGIN_INFO" in out and "APISID" in out
     assert "facebook" not in out and "c_user" not in out
     assert "not-a-cookie-row" in out  # non-rows pass through untouched
+
+
+def test_filter_cookies_drops_httponly_foreign_only_export():
+    raw = "\n".join(["# Netscape HTTP Cookie File", HTTPONLY_FOREIGN, HTTPONLY_ROW])
+    out = app.filter_cookies_text(raw)
+    assert "SID" in out
+    assert "facebook" not in out and "c_user" not in out
 
 
 def test_filter_cookies_adds_magic_header_when_missing():
@@ -230,19 +281,45 @@ def test_resolve_cookies_rejects_export_without_youtube(tmp_path, monkeypatch):
         app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw})
 
 
+def _clear_runtime_cache():
+    app._js_runtime_cache.update(at=0.0, runtimes=None, node_version=None)
+    app._health_cache.update(at=0.0, checks={})
+
+
 def test_base_ydl_opts_enables_installed_js_runtimes(monkeypatch):
+    _clear_runtime_cache()
     monkeypatch.setattr(app.shutil, "which",
                         lambda c: "/usr/bin/node" if c == "node" else None)
+    monkeypatch.setattr(app, "_cmd_version", lambda argv: "v23.5.0")
     opts = app.base_ydl_opts({"cookies_mode": "none"})
     assert opts["js_runtimes"] == {"node": {}}
     assert opts["remote_components"] == ["ejs:npm"]
 
 
+def test_base_ydl_opts_ignores_unsupported_node(monkeypatch):
+    _clear_runtime_cache()
+    monkeypatch.setattr(app.shutil, "which",
+                        lambda c: "/usr/bin/node" if c == "node" else None)
+    monkeypatch.setattr(app, "_cmd_version", lambda argv: "v18.19.0")
+    opts = app.base_ydl_opts({"cookies_mode": "none"})
+    assert "js_runtimes" not in opts
+    assert "remote_components" not in opts
+
+
 def test_base_ydl_opts_no_runtime_no_keys(monkeypatch):
+    _clear_runtime_cache()
     monkeypatch.setattr(app.shutil, "which", lambda c: None)
     opts = app.base_ydl_opts({"cookies_mode": "none"})
     assert "js_runtimes" not in opts
     assert "remote_components" not in opts
+
+
+def test_node_meets_yt_dlp():
+    assert app.node_meets_yt_dlp("v23.5.0")
+    assert app.node_meets_yt_dlp("v24.1.0")
+    assert not app.node_meets_yt_dlp("v18.19.0")
+    assert not app.node_meets_yt_dlp("v23.4.0")
+    assert not app.node_meets_yt_dlp(None)
 
 
 # --- session fallback (alternate player clients) ------------------------------
@@ -408,6 +485,23 @@ def test_playlist_progress_blends():
         assert "[2/4]" in app.jobs["j"]["detail"]
     finally:
         app.jobs.clear()
+
+
+def test_cleanup_job_temps_removes_part_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    (tmp_path / "Test Video [abc123].mp4.part").write_bytes(b"partial")
+    (tmp_path / "Test Video [abc123].mp4").write_bytes(b"keep")
+    (tmp_path / "Other [zzz].mp4.part").write_bytes(b"other")
+    job = {
+        "seen_files": ["Test Video [abc123].mp4.part", "Test Video [abc123].mp4",
+                       "Test Video [abc123]"],
+        "seen_ids": ["abc123"],
+    }
+    app.cleanup_job_temps(job)
+    names = {p.name for p in tmp_path.iterdir()}
+    assert "Test Video [abc123].mp4" in names
+    assert "Test Video [abc123].mp4.part" not in names
+    assert "Other [zzz].mp4.part" in names
 
 
 def test_progress_hook_cancel_raises():

@@ -201,6 +201,56 @@ def public_job(job: dict, log_limit: int | None = None) -> dict:
     return out
 
 
+# Path kinds we will send to yt-dlp. Channel/home/search URLs are rejected
+# because they can expand to thousands of videos and fill the disk.
+_CHANNEL_PATH = re.compile(r"^/(channel|c|user)/|^/@", re.I)
+_PLAYLIST_PATH = re.compile(r"/playlist(?:/|$)", re.I)
+_VIDEO_PATH = re.compile(
+    r"^/(watch/?$|shorts/|embed/|live/|v/|clip/|e/|tv[#/]|attribution_link)",
+    re.I,
+)
+_OTHER_PATH = re.compile(
+    r"^/(results|feed|gaming|premium|account|upload|music|hashtag|@me)/?$",
+    re.I,
+)
+
+
+def classify_youtube_url(url: str) -> str:
+    """Return 'video' | 'playlist' | 'channel' | 'other' for a validated URL."""
+    parts = urllib.parse.urlsplit(url)
+    host = (parts.hostname or "").lower().rstrip(".")
+    path = parts.path or "/"
+    if host == "youtu.be" or host.endswith(".youtu.be"):
+        return "video" if path.strip("/") else "other"
+    if _PLAYLIST_PATH.search(path):
+        return "playlist"
+    if _CHANNEL_PATH.search(path):
+        return "channel"
+    if _OTHER_PATH.match(path) or path in ("", "/"):
+        return "other"
+    if _VIDEO_PATH.match(path):
+        return "video"
+    # Unknown YouTube path: treat as a single video (noplaylist), not a dump.
+    return "video"
+
+
+def reject_unsupported_youtube(url: str) -> str:
+    """validate_url + refuse channel/home/search pages."""
+    u = validate_url(url)
+    kind = classify_youtube_url(u)
+    if kind == "channel":
+        raise ValueError(
+            "Channel pages aren't supported — they can be thousands of videos. "
+            "Paste a video or playlist link."
+        )
+    if kind == "other":
+        raise ValueError(
+            "That YouTube page isn't a video or playlist. "
+            "Paste a watch, shorts, or playlist link."
+        )
+    return u
+
+
 def safe_child(base: Path, name: str) -> Path | None:
     """Resolve `name` strictly under `base`. Returns None on traversal attempts."""
     candidate = (base / name).resolve()
@@ -299,6 +349,26 @@ def cleanup_job_cookies(job_id: str) -> None:
         pass
 
 
+def cleanup_job_temps(job: dict | None) -> None:
+    """Remove .part/.temp files this job was seen writing. Called on any exit."""
+    if not job:
+        return
+    names = list(job.get("seen_files") or [])
+    stems = {Path(n).stem for n in names if n}
+    ids = list(job.get("seen_ids") or [])
+    try:
+        for p in DOWNLOAD_DIR.iterdir():
+            if not p.is_file() or not is_temp_file(p.name):
+                continue
+            if p.name in names or p.stem in stems:
+                p.unlink(missing_ok=True)
+                continue
+            if ids and any(f"[{vid}]" in p.name for vid in ids):
+                p.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
 # Cookie domains yt-dlp needs for YouTube auth. Full-browser exports carry
 # MBs of unrelated sites (and used to trip the body cap), so pastes are
 # trimmed to these suffixes before being written to disk.
@@ -323,12 +393,40 @@ def _is_session_failure(msg: str | None) -> bool:
     return any(m in low for m in SESSION_FAILURE_MARKERS)
 
 
+HTTPONLY_PREFIX = "#HttpOnly_"
+
+
+def _cookie_domain_from_row(line: str) -> str | None:
+    """Domain of a Netscape cookie row, or None if this isn't a cookie row.
+
+    HttpOnly cookies are stored as '#HttpOnly_.example.com\\t...' — they look
+    like comments but must be filtered by domain the same as normal rows.
+    """
+    stripped = line.strip()
+    if not stripped:
+        return None
+    if stripped.startswith(HTTPONLY_PREFIX):
+        fields = stripped[len(HTTPONLY_PREFIX):].split("\t")
+    elif stripped.startswith("#"):
+        return None
+    else:
+        fields = line.split("\t")
+    if len(fields) < 6:
+        return None
+    return fields[0].strip().lower().lstrip(".")
+
+
+def _cookie_domain_kept(domain: str) -> bool:
+    if domain == "":
+        return True
+    return any(domain == sfx.lstrip(".") or domain.endswith(sfx)
+               for sfx in COOKIE_KEEP_SUFFIXES)
+
+
 def looks_like_cookie_export(text: str) -> bool:
-    """True if the paste contains tab-separated cookie rows."""
+    """True if the paste contains tab-separated cookie rows (incl. #HttpOnly_)."""
     try:
-        return any(len(ln.split("\t")) >= 6
-                   for ln in text.splitlines()
-                   if ln.strip() and not ln.strip().startswith("#"))
+        return any(_cookie_domain_from_row(ln) is not None for ln in text.splitlines())
     except Exception:
         return False
 
@@ -336,10 +434,11 @@ def looks_like_cookie_export(text: str) -> bool:
 def filter_cookies_text(text: str) -> str:
     """Trim a cookies.txt paste to YouTube-relevant domains.
 
-    Keeps comment lines (including "#HttpOnly_" cookies), blank lines, and
-    anything that isn't a cookie row; drops rows for other domains. Prepends
-    the Netscape magic header when rows exist but it's missing (cookie
-    parsers require it). Non-exports pass through byte-identical.
+    Keeps real comment lines, blank lines, and YouTube/Google cookie rows
+    (including #HttpOnly_ rows). Drops other sites' cookies — including
+    their HttpOnly rows, which used to sneak through as comments. Prepends
+    the Netscape magic header when rows exist but it's missing. Non-exports
+    pass through byte-identical.
     """
     if not looks_like_cookie_export(text):
         return text
@@ -350,18 +449,13 @@ def filter_cookies_text(text: str) -> str:
         if not stripped:
             kept.append(line)
             continue
-        if stripped.startswith("#"):
+        domain = _cookie_domain_from_row(line)
+        if domain is None:
             if "Netscape HTTP Cookie File" in stripped:
                 has_magic = True
             kept.append(line)
             continue
-        fields = line.split("\t")
-        if len(fields) < 6:
-            kept.append(line)  # not a cookie row — leave alone
-            continue
-        domain = fields[0].strip().lower().lstrip(".")
-        if domain == "" or any(domain == sfx.lstrip(".") or domain.endswith(sfx)
-                               for sfx in COOKIE_KEEP_SUFFIXES):
+        if _cookie_domain_kept(domain):
             kept.append(line)
     if not has_magic:
         kept.insert(0, NETSCAPE_MAGIC)
@@ -432,6 +526,47 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
     return opts
 
 
+# yt-dlp rejects Node below 23.5 for YouTube's JS challenges. Passing an
+# unsupported node in js_runtimes just produces "unsupported runtime" noise.
+MIN_NODE = (23, 5)
+_js_runtime_cache: dict = {"at": 0.0, "runtimes": None, "node_version": None}
+
+
+def node_meets_yt_dlp(version: str | None) -> bool:
+    m = re.search(r"(\d+)\.(\d+)", version or "")
+    if not m:
+        return False
+    return (int(m.group(1)), int(m.group(2))) >= MIN_NODE
+
+
+def _cmd_version(argv: list[str]) -> str | None:
+    try:
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    text = (out.stdout or out.stderr or "").strip()
+    return text.splitlines()[0][:80] if text else None
+
+
+def detect_js_runtimes() -> dict:
+    """Installed JS runtimes yt-dlp can actually use. Cached 60s."""
+    now = time.monotonic()
+    if _js_runtime_cache["runtimes"] is not None and now - _js_runtime_cache["at"] < 60:
+        return _js_runtime_cache["runtimes"]
+    runtimes: dict = {}
+    if shutil.which("deno"):
+        runtimes["deno"] = {}
+    if shutil.which("node"):
+        ver = _cmd_version(["node", "-v"])
+        _js_runtime_cache["node_version"] = ver
+        if node_meets_yt_dlp(ver):
+            runtimes["node"] = {}
+    else:
+        _js_runtime_cache["node_version"] = None
+    _js_runtime_cache.update(at=now, runtimes=runtimes)
+    return runtimes
+
+
 def base_ydl_opts(payload: dict | None = None, job_id: str | None = None,
                  persist: bool = True, player_clients: list[str] | None = None) -> dict:
     opts: dict = {
@@ -442,19 +577,12 @@ def base_ydl_opts(payload: dict | None = None, job_id: str | None = None,
         "retries": 3,
     }
     # YouTube PO-token/JS challenges need a JS runtime AND the ejs remote
-    # component. yt-dlp enables only deno by default, so an installed node
-    # sits unused unless requested explicitly (else: "JS runtimes: none",
-    # no PO tokens, and YouTube rejects sessions). Request what's on PATH.
-    js_runtimes = {}
-    for rt in ("deno", "node"):
-        if shutil.which(rt):
-            js_runtimes[rt] = {}
+    # component. yt-dlp enables only deno by default, so a supported node
+    # sits unused unless requested explicitly. Never pass Node < 23.5.
+    js_runtimes = detect_js_runtimes()
     if js_runtimes:
         opts["js_runtimes"] = js_runtimes
-        try:
-            opts["remote_components"] = ["ejs:npm"]
-        except Exception:
-            pass
+        opts["remote_components"] = ["ejs:npm"]
     if player_clients:
         opts["extractor_args"] = {"youtube": {"player_client": list(player_clients)}}
     if payload:
@@ -504,18 +632,38 @@ def summarize_formats(info: dict) -> list[dict]:
     return out
 
 
+info_sema = threading.Semaphore(2)
+
+
+def _inspect_opts(payload: dict, cookie_id: str, url: str,
+                  player_clients: list[str] | None = None) -> dict:
+    opts = base_ydl_opts(payload, cookie_id, player_clients=player_clients)
+    opts["skip_download"] = True
+    # watch?v=…&list=… is a video page that happens to mention a playlist.
+    # Inspect it as a single video so we don't auto-queue 200 mix items.
+    # Only /playlist?list= URLs extract as a playlist (flat, first 50).
+    if classify_youtube_url(url) == "playlist":
+        opts["extract_flat"] = "in_playlist"
+        opts["playlistend"] = 50
+        opts["noplaylist"] = False
+    else:
+        opts["noplaylist"] = True
+    return opts
+
+
 def fetch_info(url: str, payload: dict) -> dict:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
-    url = validate_url(url)
+    url = reject_unsupported_youtube(url)
+    if not info_sema.acquire(timeout=60):
+        raise RuntimeError("Too many inspect requests. Wait a moment and retry.")
     # Inspect must be side-effect-free: pasted cookies go to an ephemeral
     # per-request file, never to the shared session file or a predictable
     # "validate" path. Cleaned up even if extract_info raises.
     info_cookie_id = f"info-{uuid.uuid4().hex[:12]}"
-    opts = base_ydl_opts(payload, info_cookie_id)
-    opts.update({"skip_download": True})
     info = None
     try:
+        opts = _inspect_opts(payload, info_cookie_id, url)
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -523,25 +671,30 @@ def fetch_info(url: str, payload: dict) -> dict:
             if not _is_session_failure(str(exc)):
                 raise
             # Same session, different player clients — never a blind repeat.
-            fb_opts = base_ydl_opts(payload, info_cookie_id,
+            fb_opts = _inspect_opts(payload, info_cookie_id, url,
                                     player_clients=FALLBACK_PLAYER_CLIENTS)
-            fb_opts.update({"skip_download": True})
             with yt_dlp.YoutubeDL(fb_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
     finally:
+        info_sema.release()
         cleanup_job_cookies(info_cookie_id)
     if info is None:
         raise RuntimeError("Could not extract info for that URL.")
+    list_id = (urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list") or [None])[0]
     if info.get("_type") == "playlist":
         entries = []
         for e in (info.get("entries") or [])[:50]:
             if not e:
                 continue
+            vid = e.get("id")
+            entry_url = e.get("url") or e.get("webpage_url")
+            if not entry_url and vid:
+                entry_url = f"https://www.youtube.com/watch?v={vid}"
             entries.append(
                 {
-                    "id": e.get("id"),
+                    "id": vid,
                     "title": e.get("title"),
-                    "url": e.get("url") or e.get("webpage_url"),
+                    "url": entry_url,
                     "duration": e.get("duration"),
                     "duration_str": format_seconds(e.get("duration")),
                     "thumbnail": e.get("thumbnail"),
@@ -569,6 +722,8 @@ def fetch_info(url: str, payload: dict) -> dict:
         "qualities": summarize_formats(info),
         "subtitles": sorted(list((info.get("subtitles") or {}).keys()))[:12],
         "automatic_captions": sorted(list((info.get("automatic_captions") or {}).keys()))[:12],
+        "part_of_playlist": bool(list_id or info.get("playlist") or info.get("playlist_id")),
+        "playlist_id": list_id or info.get("playlist_id"),
     }
 
 
@@ -666,9 +821,10 @@ class JobLogger:
                 job["log"] = job["log"][-200:]
 
     def debug(self, msg):
-        if msg.startswith("[debug]"):
+        text = "" if msg is None else str(msg)
+        if text.startswith("[debug]"):
             return
-        self._append(msg)
+        self._append(text)
 
     def info(self, msg):
         self._append(msg)
@@ -737,7 +893,7 @@ def progress_hook(job_id: str, d: dict):
                 job["progress"] = round(((pl_index_v - 1) + file_pct / 100) / pl_count_v * 100, 1)
             elif total:
                 job["progress"] = file_pct
-            fname = (d.get("filename", "") or "").split("/")[-1]
+            fname = Path(d.get("filename") or "").name
             prefix = ""
             if job.get("playlist_count") and job.get("playlist_index"):
                 prefix = f"[{job['playlist_index']}/{job['playlist_count']}] "
@@ -891,6 +1047,9 @@ def run_download(job_id: str, payload: dict):
     finally:
         cleanup_job_cookies(job_id)
         with jobs_lock:
+            leftover = jobs.get(job_id)
+        cleanup_job_temps(leftover)
+        with jobs_lock:
             futures.pop(job_id, None)
             evict_jobs_locked()
 
@@ -901,20 +1060,26 @@ _health_cache: dict = {"at": 0.0, "checks": {}}
 
 
 def environment_checks() -> dict:
-    """yt-dlp/ffmpeg/node probes, cached 60s (ffmpeg -version spawn is slow)."""
+    """yt-dlp/ffmpeg/JS-runtime probes, cached 60s (version spawns are slow)."""
     now = time.monotonic()
     if now - _health_cache["at"] < 60 and _health_cache["checks"]:
         return _health_cache["checks"]
+    js = detect_js_runtimes()
+    node_ver = _js_runtime_cache.get("node_version")
     checks = {
         "ffmpeg": bool(shutil.which("ffmpeg")),
         "node": bool(shutil.which("node")),
+        "node_version": node_ver,
+        "node_supported": node_meets_yt_dlp(node_ver) if node_ver else False,
         "deno": bool(shutil.which("deno")),
+        "js_runtime": "deno" if "deno" in js else ("node" if "node" in js else "none"),
+        "js_runtime_ok": bool(js),
     }
-    try:
-        import subprocess
-        out = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True, timeout=5)
-        checks["ffmpeg_version"] = (out.stdout.splitlines() or [""])[0][:80] if out.returncode == 0 else "not found"
-    except Exception:
+    ff = _cmd_version(["ffmpeg", "-version"])
+    if ff:
+        checks["ffmpeg_version"] = ff
+        checks["ffmpeg"] = True
+    else:
         checks["ffmpeg_version"] = "not found"
         checks["ffmpeg"] = False
     if yt_dlp is not None:
@@ -1095,18 +1260,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json(snapshot)
         if route == "/api/files":
             files = []
-            for p in sorted(DOWNLOAD_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
-                if p.is_file() and not is_temp_file(p.name):
-                    st = p.stat()
-                    files.append(
-                        {
-                            "name": p.name,
-                            "size": st.st_size,
-                            "size_str": format_bytes(st.st_size) or "?",
-                            "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-                            "url": f"/files/{urllib.parse.quote(p.name)}",
-                        }
-                    )
+            listing = sorted(
+                (p for p in DOWNLOAD_DIR.iterdir() if p.is_file() and not is_temp_file(p.name)),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for p in listing[:500]:
+                st = p.stat()
+                files.append(
+                    {
+                        "name": p.name,
+                        "size": st.st_size,
+                        "size_str": format_bytes(st.st_size) or "?",
+                        "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
+                        "url": f"/files/{urllib.parse.quote(p.name)}",
+                    }
+                )
             try:
                 free = shutil.disk_usage(DOWNLOAD_DIR).free
             except OSError:
@@ -1156,7 +1325,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if route == "/api/download":
             try:
-                url = validate_url(body.get("url"))
+                url = reject_unsupported_youtube(body.get("url") or "")
             except ValueError as exc:
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
             if parse_time_to_seconds(body.get("clip_from")) is None and (body.get("clip_from") or "").strip():

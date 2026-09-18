@@ -147,6 +147,17 @@ def test_info_rejects_non_youtube_without_network(server):
     assert "YouTube" in body["error"]
 
 
+def test_info_and_download_reject_channel_urls(server):
+    status, body, _ = api(server, "POST", "/api/info",
+                           {"url": "https://www.youtube.com/@someone/videos"})
+    assert status == 400
+    assert "Channel" in body["error"]
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://www.youtube.com/channel/UCxxxx"})
+    assert status == 400
+    assert "Channel" in body["error"]
+
+
 def test_info_video_with_stub(server):
     status, body, _ = api(server, "POST", "/api/info",
                            {"url": "https://www.youtube.com/watch?v=abc123"})
