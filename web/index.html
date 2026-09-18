@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>offtube — keep videos locally</title>
 <meta name="description" content="Paste a YouTube link, pick a format, keep the file. Local-only downloader powered by yt-dlp." />
+<meta name="referrer" content="no-referrer" />
+<meta name="color-scheme" content="light" />
+<meta name="theme-color" content="#faf8f3" />
+<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
@@ -174,10 +178,13 @@
         </div>
         <div class="pct mono" id="jobPct" aria-hidden="true">—</div>
       </div>
-      <button id="dlBtn" class="btn btn-ink" type="button">
-        <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        Download
-      </button>
+      <div class="dl-actions">
+        <button id="dlBtn" class="btn btn-ink" type="button">
+          <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Download
+        </button>
+        <button id="cancelBtn" class="btn btn-ghost hidden" type="button">Cancel</button>
+      </div>
       <div class="deck" id="progressWrap" aria-live="polite">
         <div class="deck-line"><span id="jobStatus">Idle. Files land in <span class="mono">downloads/</span>.</span></div>
         <div class="meter" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter"><div id="bar"></div></div>

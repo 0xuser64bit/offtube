@@ -132,6 +132,9 @@ def test_static_dotfile_and_traversal_blocked(server):
         assert res.headers.get("X-Content-Type-Options") == "nosniff"
     with urllib.request.urlopen(server + "/", timeout=10) as res:
         assert "Content-Security-Policy" in res.headers
+    with urllib.request.urlopen(server + "/favicon.svg", timeout=10) as res:
+        assert res.status == 200
+        assert "svg" in (res.headers.get("Content-Type") or "")
     # raw traversal request (urllib normalizes "..", so hit the handler directly)
     req = urllib.request.Request(server + "/files/../app.py", method="GET")
     try:

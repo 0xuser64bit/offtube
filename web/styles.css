@@ -238,6 +238,8 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 .btn-quiet { background: transparent; box-shadow: none; }
 .btn-small { padding: 5px 11px; font-size: 12px; font-weight: 600; }
 
+.dl-actions { display: flex; gap: 8px; align-items: stretch; }
+.dl-actions .btn-ink { flex: 1; }
 .btn-ink {
   width: 100%;
   background: var(--ink);
@@ -253,6 +255,13 @@ input::placeholder, textarea::placeholder { color: var(--muted); }
 }
 .btn-ink:hover { background: #000; border-color: #000; }
 .btn-ink.is-busy { background: var(--ink-2); border-color: var(--ink-2); }
+.btn-ghost {
+  background: transparent;
+  border-color: var(--deck-line);
+  color: var(--deck-txt);
+  padding: 13px 16px;
+}
+.btn-ghost:hover { border-color: var(--deck-txt); }
 
 /* ---------- preview ---------- */
 .preview {

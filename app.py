@@ -1236,7 +1236,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if route in ("/", "/index.html"):
             return self.serve_static("index.html")
-        if route in ("/app.js", "/styles.css"):
+        if route in ("/app.js", "/styles.css", "/favicon.svg"):
             return self.serve_static(route.lstrip("/"))
         if route == "/api/health":
             return self.send_json({"ok": True, "checks": environment_checks()})
