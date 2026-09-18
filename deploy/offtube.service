@@ -1,9 +1,10 @@
 # offtube native background service (Linux, user scope). Runs ./run.sh so
 # cookies-from-browser keeps working (docker mode can't see host browsers).
 #
-# Install:
+# Install from the clone directory:
 #   mkdir -p ~/.config/systemd/user
-#   cp deploy/offtube.service ~/.config/systemd/user/
+#   sed "s|REPLACE_DIR|$PWD|g" deploy/offtube.service \
+#     > ~/.config/systemd/user/offtube.service
 #   systemctl --user daemon-reload
 #   systemctl --user enable --now offtube
 # Logs: journalctl --user -u offtube -f
@@ -14,8 +15,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/Code/offtube
-ExecStart=%h/Code/offtube/run.sh
+WorkingDirectory=REPLACE_DIR
+ExecStart=REPLACE_DIR/run.sh
 Restart=on-failure
 RestartSec=3
 Environment=PORT=8000

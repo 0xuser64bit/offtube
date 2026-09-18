@@ -12,16 +12,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# ffmpeg for merge/trim; deno (single static binary) for yt-dlp challenges.
+# ffmpeg for merge/trim; pinned Deno static binary for yt-dlp JS challenges.
 # curl/unzip are build-only and purged in the same layer.
+ARG DENO_VERSION=2.9.7
+ARG TARGETARCH=amd64
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip \
-    && curl -fsSL https://deno.land/install.sh | sh \
-    && cp /root/.deno/bin/deno /usr/local/bin/deno \
+    && ARCH=$(case "$TARGETARCH" in amd64) echo x86_64;; arm64) echo aarch64;; *) echo x86_64;; esac) \
+    && curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${ARCH}-unknown-linux-gnu.zip" -o /tmp/deno.zip \
+    && unzip /tmp/deno.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/deno \
     && deno --version \
     && apt-get purge -y curl unzip \
     && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/* /root/.deno /root/.cache
+    && rm -rf /var/lib/apt/lists/* /tmp/deno.zip /root/.cache
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt

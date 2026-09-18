@@ -10,3 +10,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .DS_Store
+# local agent tooling — not part of the product
+.agents/
+skills-lock.json
