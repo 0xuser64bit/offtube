@@ -11,7 +11,14 @@ body { width: 360px; margin: 0; padding: 12px 14px 10px; font: 13px/1.45 system-
 .muted { color: #777; font-weight: 400; }
 .row { display: flex; gap: 6px; }
 .row input { flex: 1; min-width: 0; }
-input, select { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+input, select, textarea { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+textarea { resize: vertical; min-height: 56px; }
+.hint { font-size: 11px; color: #666; margin: 4px 0 0; }
+.file-row { align-items: center; margin-top: 8px; }
+.file-row .btn { flex: none; }
+#cookieFileName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 .row2 { display: flex; gap: 8px; }
 .row2 .field { flex: 1; min-width: 0; }

@@ -13,7 +13,13 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; margin:
 .muted { color: #777; }
 .tab-line { font-size: 12px; background: #f6f6f6; border: 1px solid #eee; border-radius: 8px; padding: 6px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .label { display: block; font-size: 11px; font-weight: 600; margin: 10px 0 4px; }
-input, select { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+input, select, textarea { width: 100%; box-sizing: border-box; padding: 7px 8px; border: 1px solid #ccc; border-radius: 8px; font: inherit; }
+textarea { resize: vertical; min-height: 72px; }
+.file-row { align-items: center; }
+.file-row .btn { flex: none; }
+#cookieFileName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.small { padding: 5px 10px; font-size: 12px; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .mono { font-family: ui-monospace, monospace; font-size: 12px; }
 .row { display: flex; gap: 8px; margin-top: 8px; }
 .row2 { display: flex; gap: 8px; }

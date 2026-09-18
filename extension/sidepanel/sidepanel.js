@@ -15,12 +15,17 @@ const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
 }[c]));
 
 async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype']);
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access']);
   return {
     serverUrl: String(s.serverUrl || DEFAULT_SERVER).replace(/\/+$/, ''),
     quality: s.quality || '1080',
     otype: s.otype || 'video',
+    access: s.access || 'none',
   };
+}
+
+function syncAccess() {
+  $('cookieUpload').classList.toggle('hidden', $('access').value !== 'upload');
 }
 
 function isYouTubeUrl(v) {
@@ -94,7 +99,7 @@ async function inspect() {
   const url = $('url').value.trim();
   if (!url || !isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
   try {
-    const { info } = await api(serverUrl, '/api/info', { url, cookies_mode: 'none' });
+    const { info } = await api(serverUrl, '/api/info', { url, ...accessFields() });
     if (info.type === 'playlist') {
       $('preview').innerHTML = `<div><strong>${escapeHtml(info.title || 'Playlist')}</strong><br /><span class="muted">Playlist · ${escapeHtml(String(info.count || ''))} videos</span></div>`;
       document.querySelector('input[name="plmode"][value="playlist"]').checked = true;
@@ -107,6 +112,15 @@ async function inspect() {
   }
 }
 
+function accessFields() {
+  // Cookies themselves are never stored — only the mode. File/paste content
+  // lives in the textarea for this panel session.
+  const mode = $('access').value;
+  if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
+  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: 'chrome' };
+  return { cookies_mode: 'none' };
+}
+
 function payload() {
   return {
     url: $('url').value.trim(),
@@ -117,8 +131,7 @@ function payload() {
     clip_from: $('clipFrom').value.trim(),
     clip_to: $('clipTo').value.trim(),
     playlist_mode: document.querySelector('input[name="plmode"]:checked')?.value || 'single',
-    cookies_mode: $('access').value,
-    cookies_browser: 'chrome',
+    ...accessFields(),
   };
 }
 
@@ -163,9 +176,11 @@ async function pollJob(server, jobId) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const { serverUrl, quality, otype: ot } = await getSettings();
+  const { serverUrl, quality, otype: ot, access } = await getSettings();
   $('server').value = serverUrl;
   $('quality').value = quality;
+  $('access').value = access;
+  syncAccess();
   const r = document.querySelector(`input[name="otype"][value="${ot}"]`);
   if (r) r.checked = true;
   await fillFromTab(false);
@@ -195,13 +210,25 @@ $('download').addEventListener('click', async () => {
   $('download').disabled = true;
   $('status').textContent = 'Starting…';
   try {
-    await chrome.storage.local.set({ quality: $('quality').value, otype: otype() });
+    await chrome.storage.local.set({ quality: $('quality').value, otype: otype(), access: $('access').value });
     const { job_id } = await api(serverUrl, '/api/download', p);
     pollJob(serverUrl, job_id);
   } catch (err) {
     setError(err.message);
     $('download').disabled = false;
   }
+});
+
+$('access').addEventListener('change', async () => {
+  syncAccess();
+  await chrome.storage.local.set({ access: $('access').value });
+});
+
+$('cookieFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('cookieText').value = await f.text();
+  $('cookieFileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
 });
 
 $('openLib').addEventListener('click', async () => {

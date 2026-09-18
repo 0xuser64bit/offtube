@@ -115,9 +115,9 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 # Local-only server, but still: bound request sizes, restrict outbound fetch
 # targets to YouTube, and never serve files outside their directories.
 
-MAX_JSON_BODY = 256 * 1024  # cookies pastes are KBs; bigger bodies are abuse/bug
+MAX_JSON_BODY = 2 * 1024 * 1024  # full-browser cookie pastes can be MBs; trimmed after parse
 MAX_URL_LEN = 2000
-MAX_COOKIES_TEXT = 200 * 1024
+MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; YouTube-only rows surviving the trim are KBs
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
@@ -265,6 +265,75 @@ def cleanup_job_cookies(job_id: str) -> None:
         pass
 
 
+# Cookie domains yt-dlp needs for YouTube auth. Full-browser exports carry
+# MBs of unrelated sites (and used to trip the body cap), so pastes are
+# trimmed to these suffixes before being written to disk.
+COOKIE_KEEP_SUFFIXES = (".youtube.com", ".youtu.be", ".googlevideo.com",
+                        ".google.com", ".youtube-nocookie.com")
+
+NETSCAPE_MAGIC = "# Netscape HTTP Cookie File"
+
+
+# YouTube answers some sessions with "Sign in to confirm you're not a bot" /
+# "The page needs to be reloaded" on one player-client family but accepts
+# another. When extraction fails with one of these markers, offtube retries
+# once with alternate cookie-capable clients (none of these are in the
+# authed defaults web_embedded/tv_downgraded/web, so the retry is never a
+# repeat of the same request).
+SESSION_FAILURE_MARKERS = ("not a bot", "sign in to confirm", "needs to be reloaded")
+FALLBACK_PLAYER_CLIENTS = ["web_creator", "tv", "mweb"]
+
+
+def _is_session_failure(msg: str | None) -> bool:
+    low = (msg or "").lower()
+    return any(m in low for m in SESSION_FAILURE_MARKERS)
+
+
+def looks_like_cookie_export(text: str) -> bool:
+    """True if the paste contains tab-separated cookie rows."""
+    try:
+        return any(len(ln.split("\t")) >= 6
+                   for ln in text.splitlines()
+                   if ln.strip() and not ln.strip().startswith("#"))
+    except Exception:
+        return False
+
+
+def filter_cookies_text(text: str) -> str:
+    """Trim a cookies.txt paste to YouTube-relevant domains.
+
+    Keeps comment lines (including "#HttpOnly_" cookies), blank lines, and
+    anything that isn't a cookie row; drops rows for other domains. Prepends
+    the Netscape magic header when rows exist but it's missing (cookie
+    parsers require it). Non-exports pass through byte-identical.
+    """
+    if not looks_like_cookie_export(text):
+        return text
+    kept: list[str] = []
+    has_magic = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            kept.append(line)
+            continue
+        if stripped.startswith("#"):
+            if "Netscape HTTP Cookie File" in stripped:
+                has_magic = True
+            kept.append(line)
+            continue
+        fields = line.split("\t")
+        if len(fields) < 6:
+            kept.append(line)  # not a cookie row — leave alone
+            continue
+        domain = fields[0].strip().lower().lstrip(".")
+        if domain == "" or any(domain == sfx.lstrip(".") or domain.endswith(sfx)
+                               for sfx in COOKIE_KEEP_SUFFIXES):
+            kept.append(line)
+    if not has_magic:
+        kept.insert(0, NETSCAPE_MAGIC)
+    return "\n".join(kept) + "\n"
+
+
 def cleanup_stale_files() -> None:
     """Remove orphaned per-job cookies and partial downloads from kills."""
     try:
@@ -308,8 +377,13 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
     if mode in ("upload", "text", "file"):
         text = payload.get("cookies_text") or ""
         if len(text) > MAX_COOKIES_TEXT:
-            raise ValueError("Cookies text is too large (max ~200 KB).")
+            raise ValueError("Cookies paste is too large (max ~1 MB). Export YouTube-only cookies instead of your whole browser.")
         if text:
+            if looks_like_cookie_export(text):
+                text = filter_cookies_text(text)
+                if not any(ln.strip() and not ln.strip().startswith("#")
+                           for ln in text.splitlines()):
+                    raise ValueError("No YouTube cookies found in that file. Export while on youtube.com, logged in (single account), then retry.")
             target = cookie_file_for(job_id)
             if persist:
                 target.write_text(text, encoding="utf-8")
@@ -325,7 +399,7 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
 
 
 def base_ydl_opts(payload: dict | None = None, job_id: str | None = None,
-                 persist: bool = True) -> dict:
+                 persist: bool = True, player_clients: list[str] | None = None) -> dict:
     opts: dict = {
         "quiet": True,
         "no_warnings": True,
@@ -333,13 +407,22 @@ def base_ydl_opts(payload: dict | None = None, job_id: str | None = None,
         "socket_timeout": 30,
         "retries": 3,
     }
-    # Help with YouTube bot-guard challenges when node/deno is present
-    # (mirrors gist advice: --remote-components ejs:npm). Harmless if unavailable.
-    if shutil.which("node") or shutil.which("deno"):
+    # YouTube PO-token/JS challenges need a JS runtime AND the ejs remote
+    # component. yt-dlp enables only deno by default, so an installed node
+    # sits unused unless requested explicitly (else: "JS runtimes: none",
+    # no PO tokens, and YouTube rejects sessions). Request what's on PATH.
+    js_runtimes = {}
+    for rt in ("deno", "node"):
+        if shutil.which(rt):
+            js_runtimes[rt] = {}
+    if js_runtimes:
+        opts["js_runtimes"] = js_runtimes
         try:
             opts["remote_components"] = ["ejs:npm"]
         except Exception:
             pass
+    if player_clients:
+        opts["extractor_args"] = {"youtube": {"player_client": list(player_clients)}}
     if payload:
         try:
             opts.update(resolve_cookies(payload, job_id, persist=persist))
@@ -397,9 +480,20 @@ def fetch_info(url: str, payload: dict) -> dict:
     info_cookie_id = f"info-{uuid.uuid4().hex[:12]}"
     opts = base_ydl_opts(payload, info_cookie_id)
     opts.update({"skip_download": True})
+    info = None
     try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+        except Exception as exc:
+            if not _is_session_failure(str(exc)):
+                raise
+            # Same session, different player clients — never a blind repeat.
+            fb_opts = base_ydl_opts(payload, info_cookie_id,
+                                    player_clients=FALLBACK_PLAYER_CLIENTS)
+            fb_opts.update({"skip_download": True})
+            with yt_dlp.YoutubeDL(fb_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
     finally:
         cleanup_job_cookies(info_cookie_id)
     if info is None:
@@ -444,12 +538,14 @@ def fetch_info(url: str, payload: dict) -> dict:
     }
 
 
-def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
+def build_download_opts(job: dict, payload: dict, persist: bool = True,
+                        player_clients: list[str] | None = None) -> dict:
     quality = payload.get("quality") or "best"
     fmt = quality_to_format(quality)
     outtmpl = str(DOWNLOAD_DIR / "%(title)s [%(id)s].%(ext)s")
 
-    opts = base_ydl_opts(payload, job.get("id"), persist=persist)
+    opts = base_ydl_opts(payload, job.get("id"), persist=persist,
+                         player_clients=player_clients)
     opts.update(
         {
             "format": fmt,
@@ -677,8 +773,20 @@ def run_download(job_id: str, payload: dict):
         opts = build_download_opts(job, payload)
         url = validate_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
+        except DownloadError as exc:
+            if not _is_session_failure(str(exc)) or job.get("cancel_requested"):
+                raise
+            # Same session, different player clients — visible in the UI log
+            # so a repeated failure clearly means the session itself is bad.
+            with jobs_lock:
+                job["log"].append("Session rejected by default players — retrying with alternate player clients…")
+                job["detail"] = "Retrying with alternate players…"
+            opts = build_download_opts(job, payload, player_clients=FALLBACK_PLAYER_CLIENTS)
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                ydl.download([url])
         with jobs_lock:
             job = jobs.get(job_id)
             if job is None:
@@ -710,6 +818,15 @@ def run_download(job_id: str, payload: dict):
             hint = (" This looks like a members-only/private video. Make sure your cookies "
                     "come from an account that can already watch it, re-export them "
                     "(they expire), and check the membership tier.")
+        elif "not a bot" in msg or "Sign in to confirm" in msg:
+            hint = (" YouTube asked for a bot-check sign-in (it does this for public "
+                    "videos too). Add cookies and retry: upload a cookies.txt export, "
+                    "or run natively with Access → Browser (Docker can't read your "
+                    "host browser, so use the file there).")
+        elif "reload" in msg.lower():
+            hint = (" YouTube rejected the session. Re-export fresh cookies while on "
+                    "youtube.com, logged into a single account, then retry. "
+                    "Full-browser exports go stale fastest.")
         elif "cookies" in msg.lower():
             hint = " Your cookies may be expired — re-export cookies.txt and try again."
         elif "ffmpeg" in msg.lower():
@@ -826,7 +943,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     remaining -= len(chunk)
             except Exception:
                 pass
-            raise HttpError(413, "Request body too large.")
+            raise HttpError(413, "Request body too large (max ~2 MB). If pasting cookies, export YouTube-only cookies instead of your whole browser.")
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))
@@ -1002,6 +1119,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if "Join this channel" in msg:
                     msg += (" — this video needs membership access. Add cookies from an "
                             "account that can watch it, then retry.")
+                elif "not a bot" in msg or "Sign in to confirm" in msg:
+                    msg += (" — YouTube asked for a bot-check sign-in (it does this for "
+                            "public videos too). Add cookies and retry: upload a "
+                            "cookies.txt export, or run natively with Access → Browser "
+                            "(Docker can't read your host browser, so use the file there).")
+                elif "reload" in msg.lower():
+                    msg += (" — YouTube rejected the session. Re-export fresh cookies "
+                            "while on youtube.com, logged into a single account, then "
+                            "retry. Full-browser exports go stale fastest.")
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":
@@ -1099,6 +1225,12 @@ def main():
     if not 1 <= port <= 65535:
         print("PORT must be 1-65535.", file=sys.stderr)
         raise SystemExit(2)
+    # HOST defaults to loopback. Docker sets HOST=0.0.0.0 so the mapped port
+    # is reachable from the host (a container has its own loopback).
+    host = os.environ.get("HOST", "127.0.0.1").strip() or "127.0.0.1"
+    if host not in ("127.0.0.1", "localhost", "0.0.0.0", "::1"):
+        print("HOST must be 127.0.0.1, localhost, ::1, or 0.0.0.0 (docker only).", file=sys.stderr)
+        raise SystemExit(2)
     cleanup_stale_files()
     # Must be set before bind; assigning on the instance afterwards is a no-op.
     socketserver.ThreadingTCPServer.allow_reuse_address = True
@@ -1107,8 +1239,12 @@ def main():
         allow_reuse_address = True
         daemon_threads = True
 
-    with ReuseServer(("127.0.0.1", port), Handler) as httpd:
-        print(f"\nofftube running → http://127.0.0.1:{port}")
+    with ReuseServer((host, port), Handler) as httpd:
+        shown_host = "127.0.0.1" if host in ("0.0.0.0", "::1") else host
+        print(f"\nofftube running → http://{shown_host}:{port}")
+        if host == "0.0.0.0":
+            print("WARNING: listening on all interfaces (docker mode). "
+                  "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
         print(f"Downloads folder   → {DOWNLOAD_DIR}")
         print("Paste a YouTube link in the page, pick quality / from-to, hit Download.\n")
         try:

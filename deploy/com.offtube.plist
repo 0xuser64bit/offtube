@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- offtube native background service (macOS). Runs ./run.sh so
+     cookies-from-browser keeps working (docker mode can't see host browsers).
+     Install:
+       sed "s|REPLACE_ME|$USER|g" deploy/com.offtube.plist > ~/Library/LaunchAgents/com.offtube.plist
+       launchctl load ~/Library/LaunchAgents/com.offtube.plist
+     (the sed fills in your username in the two log paths below)
+     Logs: ~/Library/Logs/offtube.log -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.offtube</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-c</string>
+    <string>cd ~/Code/offtube &amp;&amp; exec ./run.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/REPLACE_ME/Library/Logs/offtube.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/REPLACE_ME/Library/Logs/offtube.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>8000</string>
+  </dict>
+</dict>
+</plist>

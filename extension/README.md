@@ -12,7 +12,11 @@ from the active tab (override manually if needed) and reuses the same
 - `host_permissions` is scoped to `127.0.0.1` + `localhost` only (bypasses
   CORS for the local API, no `<all_urls>`).
 - Popup = quick save. Side panel = full controls + progress (popups close
-  when you click away, side panels stay open).
+  when you click away, side panels stay open). "Open side panel →" closes the
+  popup — only one surface at a time.
+- Access modes in both: Public, Browser cookies (native server only — Docker
+  can't see your host browser), Cookies file upload/paste (the Docker path
+  for bot-checks + members-only). Cookie contents are never stored.
 - No icons bundled (omitted per MV3 guidance — Chrome uses a default).
 - No inline scripts, `async`/`await` only, no state in a service worker
   (polling lives in popup/sidepanel, which is why there is no background SW).

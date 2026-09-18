@@ -34,12 +34,46 @@ run.bat                     @rem same, via .venv\Scripts\python
 
 Then open **http://127.0.0.1:8000**.
 
-Prerequisites: Python 3.10+, `ffmpeg` on PATH, Node.js (optional, helps with YouTube bot-checks).
+## Docker & background services
+
+Same server, three ways to keep it running without a foreground terminal.
+The API stays at `http://127.0.0.1:8000`, so the web UI and extension work unchanged.
+
+```bash
+docker compose up -d --build   # service mode (restart: unless-stopped)
+docker compose logs -f
+docker compose down
+```
+
+- Image: `python:3.12-slim` + ffmpeg + node + yt-dlp. Healthcheck hits `/api/health`.
+- Port is published on loopback only (`127.0.0.1:8000:8000`); inside the
+  container `HOST=0.0.0.0` is required (a container has its own loopback).
+- Native `./run.sh` defaults to `HOST=127.0.0.1`; `HOST=0.0.0.0` is docker-only.
+- Limitation: cookies **from browser** can't work in docker (no host browser
+  profile inside the container) — use the cookies-file upload/paste instead.
+  Native mode + the OS services below keep from-browser working.
+
+```bash
+# macOS (native, auto-start on login)
+sed "s|REPLACE_ME|$USER|g" deploy/com.offtube.plist > ~/Library/LaunchAgents/com.offtube.plist
+launchctl load ~/Library/LaunchAgents/com.offtube.plist
+
+# Linux (native, user systemd unit)
+cp deploy/offtube.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now offtube
+journalctl --user -u offtube -f
+```
+
+Prerequisites: Python 3.10+, `ffmpeg` on PATH, and a JS runtime for YouTube's
+proof-of-origin challenges — Deno (any recent 2.x) or Node.js ≥ 23.5
+(older Node, e.g. Debian's 18.x, is rejected by yt-dlp as unsupported).
+The Docker image already includes Deno.
 
 | Tool | macOS | Windows |
 |---|---|---|
 | ffmpeg | `brew install ffmpeg` | `winget install Gyan.FFmpeg` (reopen terminal after) |
-| Node | `brew install node` | installer from nodejs.org |
+| JS runtime | `brew install deno` | `winget install DenoLand.Deno` |
 | Python deps | `pip install -r requirements.txt` | `python -m pip install -r requirements.txt` |
 
 ## How to use
@@ -96,7 +130,7 @@ jobs limit, and disk guard.
 - `POST /api/files/delete` `{name}` → `{deleted}`
 
 Only `youtube.com` / `youtu.be` URLs are accepted (400 otherwise). Bodies are
-capped at 256 KB (413). Past 5 active downloads `/api/download` returns 429.
+capped at ~2 MB (413). Past 5 active downloads `/api/download` returns 429.
 Under 200 MB free disk `/api/download` returns 507. Cross-site POSTs with a
 foreign `Origin`/`Referer` return 403 (localhost CSRF guard). Unknown `/api/*`
 routes return JSON 404. Jobs and UI prefs are in-memory/local only — a restart
@@ -106,6 +140,20 @@ Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`.
 
 ## Troubleshooting
 
+- **“Sign in to confirm you’re not a bot” (even on public videos)** → YouTube
+  is challenging this network, not a tool bug. Add cookies and retry:
+  export `cookies.txt` (step 5 above) and use the Cookies-file mode, or run
+  natively (`./run.sh`) with Access → Browser. In Docker you must use the
+  file — the container can't see your host browser. A YouTube-only export is
+  enough: other sites' cookies are trimmed automatically, and full-browser
+  pastes no longer hit the size cap. Natively, also make sure a supported JS
+  runtime is installed (Deno or Node ≥ 23.5 — older Nodes can't answer
+  YouTube's challenges); the Docker image ships Deno.
+- **“The page needs to be reloaded”** → the cookie session was rejected
+  (stale, mixed accounts, or exported from the wrong domain). offtube
+  automatically retries these with alternate player clients
+  (`web_creator`/`tv`/`mweb`) before giving up — if it still fails, re-export
+  fresh while on `youtube.com`, logged into a single account, then retry.
 - **“Join this channel to get access”** → not a tool bug: wrong/expired cookies, wrong account, or tier too low. Re-export cookies, verify you can watch in the browser first.
 - **Only image formats / no video streams** → same cause, or missing `ejs` component: install Node.js and refresh deps (`./run.sh --upgrade`).
 - **ffmpeg not recognized** → reopen the terminal after install (PATH refresh), then `ffmpeg -version`.

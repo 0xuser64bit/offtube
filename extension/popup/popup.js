@@ -17,8 +17,21 @@ function escapeHtml(s) {
 }
 
 async function getSettings() {
-  const { serverUrl = DEFAULT_SERVER, quality = '1080' } = await chrome.storage.local.get(['serverUrl', 'quality']);
-  return { serverUrl: String(serverUrl || DEFAULT_SERVER).replace(/\/+$/, ''), quality };
+  const { serverUrl = DEFAULT_SERVER, quality = '1080', access = 'none' } = await chrome.storage.local.get(['serverUrl', 'quality', 'access']);
+  return { serverUrl: String(serverUrl || DEFAULT_SERVER).replace(/\/+$/, ''), quality, access };
+}
+
+function accessPayload() {
+  // Cookies themselves are never stored — only the mode. File/paste content
+  // lives in the textarea for this popup session.
+  const mode = $('access').value;
+  if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
+  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: 'chrome' };
+  return { cookies_mode: 'none' };
+}
+
+function syncAccess() {
+  $('cookieUpload').classList.toggle('hidden', $('access').value !== 'upload');
 }
 
 async function getActiveTabUrl() {
@@ -101,7 +114,7 @@ async function inspect() {
   if (!isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
   $('inspect').disabled = true;
   try {
-    const { info } = await api(serverUrl, '/api/info', { url, cookies_mode: 'none' });
+    const { info } = await api(serverUrl, '/api/info', { url, ...accessPayload() });
     renderPreview(info);
     setStatus('Inspected. Pick quality and hit Download.');
   } catch (err) {
@@ -141,9 +154,9 @@ async function download() {
   const btn = $('download');
   btn.disabled = true;
   try {
-    await chrome.storage.local.set({ quality: $('quality').value, serverUrl: $('server').value.trim() || DEFAULT_SERVER });
+    await chrome.storage.local.set({ quality: $('quality').value, access: $('access').value, serverUrl: $('server').value.trim() || DEFAULT_SERVER });
     const { job_id } = await api(serverUrl, '/api/download', {
-      url, quality: $('quality').value, cookies_mode: 'none',
+      url, quality: $('quality').value, ...accessPayload(),
     });
     setStatus('Queued…', 0);
     await pollJob(serverUrl, job_id);
@@ -171,9 +184,11 @@ async function fillFromTab() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
-  const { serverUrl, quality } = await getSettings();
+  const { serverUrl, quality, access } = await getSettings();
   $('server').value = serverUrl;
   $('quality').value = quality;
+  $('access').value = access;
+  syncAccess();
   await fillFromTab();
   await checkHealth(serverUrl);
   if (isYouTubeUrl($('url').value)) inspect();
@@ -191,6 +206,18 @@ $('url').addEventListener('keydown', (e) => {
 $('inspect').addEventListener('click', inspect);
 $('download').addEventListener('click', download);
 
+$('access').addEventListener('change', async () => {
+  syncAccess();
+  await chrome.storage.local.set({ access: $('access').value });
+});
+
+$('cookieFile').addEventListener('change', async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $('cookieText').value = await f.text();
+  $('cookieFileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
+});
+
 $('server').addEventListener('change', async () => {
   const v = $('server').value.trim() || DEFAULT_SERVER;
   await chrome.storage.local.set({ serverUrl: v });
@@ -200,6 +227,7 @@ $('server').addEventListener('change', async () => {
 $('openPanel').addEventListener('click', async () => {
   const win = await chrome.windows.getLastFocused();
   await chrome.sidePanel.open({ windowId: win.id });
+  window.close(); // one surface at a time — never popup + panel together
 });
 
 $('openLib').addEventListener('click', async () => {

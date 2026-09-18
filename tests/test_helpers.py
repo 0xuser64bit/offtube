@@ -142,6 +142,162 @@ def test_resolve_cookies_persist_false_writes_nothing(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+# --- cookie export trimming ---------------------------------------------------
+YOUTUBE_ROW = ".youtube.com\tTRUE\t/\tFALSE\t9999999999\tLOGIN_INFO\tabc"
+GOOGLE_ROW = ".google.com\tTRUE\t/\tTRUE\t9999999999\tAPISID\tg"
+HTTPONLY_ROW = "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t9999999999\tSID\ts3cret"
+FOREIGN_ROW = ".facebook.com\tTRUE\t/\tTRUE\t9999999999\tc_user\tfb"
+
+
+def test_filter_cookies_keeps_youtube_drops_foreign():
+    raw = "\n".join([
+        "# Netscape HTTP Cookie File",
+        HTTPONLY_ROW, YOUTUBE_ROW, GOOGLE_ROW, FOREIGN_ROW, "not-a-cookie-row",
+    ])
+    out = app.filter_cookies_text(raw)
+    assert "SID" in out and "LOGIN_INFO" in out and "APISID" in out
+    assert "facebook" not in out and "c_user" not in out
+    assert "not-a-cookie-row" in out  # non-rows pass through untouched
+
+
+def test_filter_cookies_adds_magic_header_when_missing():
+    out = app.filter_cookies_text(YOUTUBE_ROW + "\n")
+    assert out.startswith("# Netscape HTTP Cookie File")
+    assert "LOGIN_INFO" in out
+
+
+def test_filter_cookies_leaves_non_export_byte_identical():
+    assert app.filter_cookies_text("AAA") == "AAA"
+    assert app.filter_cookies_text("") == ""
+
+
+def test_resolve_cookies_trims_export_to_youtube(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
+    raw = "# Netscape HTTP Cookie File\n" + YOUTUBE_ROW + "\n" + FOREIGN_ROW + "\n"
+    app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw}, job_id="trim1")
+    written = (tmp_path / "job-trim1.cookies.txt").read_text()
+    assert "LOGIN_INFO" in written and "facebook" not in written
+
+
+def test_resolve_cookies_rejects_export_without_youtube(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
+    raw = "# Netscape HTTP Cookie File\n" + FOREIGN_ROW + "\n"
+    with pytest.raises(ValueError, match="No YouTube cookies"):
+        app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw})
+
+
+def test_base_ydl_opts_enables_installed_js_runtimes(monkeypatch):
+    monkeypatch.setattr(app.shutil, "which",
+                        lambda c: "/usr/bin/node" if c == "node" else None)
+    opts = app.base_ydl_opts({"cookies_mode": "none"})
+    assert opts["js_runtimes"] == {"node": {}}
+    assert opts["remote_components"] == ["ejs:npm"]
+
+
+def test_base_ydl_opts_no_runtime_no_keys(monkeypatch):
+    monkeypatch.setattr(app.shutil, "which", lambda c: None)
+    opts = app.base_ydl_opts({"cookies_mode": "none"})
+    assert "js_runtimes" not in opts
+    assert "remote_components" not in opts
+
+
+# --- session fallback (alternate player clients) ------------------------------
+def test_is_session_failure_markers():
+    assert app._is_session_failure("Sign in to confirm you're not a bot")
+    assert app._is_session_failure("ERROR: [youtube] x: The page needs to be reloaded.")
+    assert not app._is_session_failure("Join this channel to get access")
+    assert not app._is_session_failure(None)
+
+
+def test_base_ydl_opts_player_clients():
+    opts = app.base_ydl_opts({"cookies_mode": "none"}, player_clients=["tv"])
+    assert opts["extractor_args"] == {"youtube": {"player_client": ["tv"]}}
+    assert "extractor_args" not in app.base_ydl_opts({"cookies_mode": "none"})
+
+
+def _stub_yt_dlp_fail_once(calls, exc_msg="The page needs to be reloaded"):
+    from types import SimpleNamespace
+
+    class DL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            calls.append(self.opts.get("extractor_args"))
+            if not self.opts.get("extractor_args"):
+                raise Exception(exc_msg)
+            return {"id": "x", "title": "T", "uploader": "u", "duration": 10,
+                    "thumbnail": None, "webpage_url": url, "is_live": False,
+                    "formats": [], "subtitles": {}, "automatic_captions": {}}
+
+    return SimpleNamespace(YoutubeDL=DL)
+
+
+def test_fetch_info_retries_session_failure_with_fallback(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "yt_dlp", _stub_yt_dlp_fail_once(calls))
+    info = app.fetch_info("https://www.youtube.com/watch?v=xxxxxxxxxxx",
+                          {"cookies_mode": "none"})
+    assert info["title"] == "T"
+    assert calls[0] is None
+    assert calls[1] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
+
+
+def test_fetch_info_no_retry_on_non_session_error(monkeypatch):
+    calls = []
+    monkeypatch.setattr(app, "yt_dlp", _stub_yt_dlp_fail_once(calls, "Private video"))
+    with pytest.raises(Exception, match="Private video"):
+        app.fetch_info("https://www.youtube.com/watch?v=xxxxxxxxxxx",
+                       {"cookies_mode": "none"})
+    assert len(calls) == 1
+
+
+def test_run_download_retries_session_failure_with_fallback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
+    (tmp_path / "cookies").mkdir()
+    seen = []
+
+    class DL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def download(self, urls):
+            seen.append(self.opts.get("extractor_args"))
+            if not self.opts.get("extractor_args"):
+                raise app.DownloadError("The page needs to be reloaded")
+            (tmp_path / "V [x].mp4").write_bytes(b"v")
+
+    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
+    app.jobs.clear()
+    jid = "fallback1"
+    app.jobs[jid] = {"id": jid, "status": "queued", "progress": 0,
+                     "detail": "", "log": [], "files": []}
+    try:
+        app.run_download(jid, {"url": "https://youtu.be/xxxxxxxxxxx", "quality": "best"})
+        job = app.jobs[jid]
+        assert job["status"] == "done"
+        assert seen[1] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
+        assert any("alternate player" in ln for ln in job["log"])
+    finally:
+        app.jobs.clear()
+
+
 # --- build_download_opts validation ------------------------------------------
 def test_build_download_opts_rejects_bad_ranges():
     job = {"id": "validate"}

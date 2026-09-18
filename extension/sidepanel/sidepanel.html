@@ -58,9 +58,19 @@
       <label class="label" for="access">Access</label>
       <select id="access">
         <option value="none" selected>Public — no login</option>
-        <option value="browser">Browser cookies (this machine)</option>
+        <option value="browser">Browser cookies (native server only)</option>
+        <option value="upload">Cookies file (upload / paste)</option>
       </select>
-      <p class="hint">Members-only / private videos you can already watch need Browser mode. The server reads cookies locally — nothing is uploaded anywhere.</p>
+      <div id="cookieUpload" class="hidden">
+        <div class="row file-row">
+          <label for="cookieFile" class="btn quiet small">Choose cookies.txt</label>
+          <input id="cookieFile" type="file" accept=".txt" class="visually-hidden" />
+          <span id="cookieFileName" class="mono muted">no file chosen</span>
+        </div>
+        <label class="label" for="cookieText">Or paste file contents</label>
+        <textarea id="cookieText" rows="4" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
+      </div>
+      <p class="hint">Bot-checks + members-only / private videos need cookies. Docker mode must use the file — the container can't read your host browser. Nothing here is stored; the file stays on your machine.</p>
     </section>
 
     <section class="panel dark">

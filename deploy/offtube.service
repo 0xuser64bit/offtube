@@ -1,0 +1,24 @@
+# offtube native background service (Linux, user scope). Runs ./run.sh so
+# cookies-from-browser keeps working (docker mode can't see host browsers).
+#
+# Install:
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/offtube.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now offtube
+# Logs: journalctl --user -u offtube -f
+[Unit]
+Description=offtube local YouTube keeper (127.0.0.1:8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Code/offtube
+ExecStart=%h/Code/offtube/run.sh
+Restart=on-failure
+RestartSec=3
+Environment=PORT=8000
+
+[Install]
+WantedBy=default.target

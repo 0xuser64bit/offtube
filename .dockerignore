@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.gitignore
+downloads/*
+!downloads/.gitkeep
+cookies/*.txt
+tests/
+extension/
+.agents/
+skills-lock.json
+.DS_Store

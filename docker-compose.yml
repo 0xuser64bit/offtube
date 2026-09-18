@@ -1,0 +1,20 @@
+# offtube as a background service (docker mode).
+# Extension + web UI keep working: published on loopback only, so the API
+# stays at http://127.0.0.1:8000 exactly like ./run.sh.
+#
+# NOTE: cookies "from browser" reads the *container's* browsers (i.e. none).
+# In docker mode use Access -> Cookies file (upload/paste). Native
+# ./run.sh + launchd/systemd keep the from-browser mode working.
+services:
+  offtube:
+    build: .
+    image: offtube:latest
+    environment:
+      HOST: "0.0.0.0" # container must bind all interfaces; publishing stays loopback-only
+      PORT: "8000"
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./cookies:/app/cookies
+    restart: unless-stopped
