@@ -42,5 +42,6 @@ textarea { resize: vertical; min-height: 72px; }
 .bar i { display: block; height: 100%; width: 0; background: #fff; }
 .log { background: #000; color: #c9c9c9; font-size: 11px; border-radius: 8px; padding: 8px; max-height: 160px; overflow: auto; white-space: pre-wrap; }
 .job { border: 1px solid #eee; border-radius: 8px; padding: 6px 8px; margin-bottom: 6px; font-size: 12px; }
+.job .btn { margin-top: 6px; }
 .file { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #f0f0f0; }
 .file a { color: #0b5fff; }

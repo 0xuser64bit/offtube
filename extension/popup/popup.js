@@ -5,25 +5,24 @@
  */
 'use strict';
 
-const DEFAULT_SERVER = 'http://127.0.0.1:8000';
-const YT_RE = /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i;
-
 const $ = (id) => document.getElementById(id);
 
-function escapeHtml(s) {
-  return String(s ?? '').replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-  }[c]));
-}
-
 async function getSettings() {
-  const { serverUrl = DEFAULT_SERVER, quality = '1080', access = 'none' } = await chrome.storage.local.get(['serverUrl', 'quality', 'access']);
-  return { serverUrl: String(serverUrl || DEFAULT_SERVER).replace(/\/+$/, ''), quality, access };
+  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access']);
+  let serverUrl = OFFTUBE.DEFAULT_SERVER;
+  try {
+    serverUrl = OFFTUBE.normalizeServerUrl(stored.serverUrl);
+  } catch {
+    serverUrl = OFFTUBE.DEFAULT_SERVER;
+  }
+  return {
+    serverUrl,
+    quality: stored.quality || '1080',
+    access: stored.access || 'none',
+  };
 }
 
 function accessPayload() {
-  // Cookies themselves are never stored — only the mode. File/paste content
-  // lives in the textarea for this popup session.
   const mode = $('access').value;
   if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
   if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: 'chrome' };
@@ -37,28 +36,6 @@ function syncAccess() {
 async function getActiveTabUrl() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return { url: tab?.url || '', title: tab?.title || '' };
-}
-
-function isYouTubeUrl(v) {
-  return YT_RE.test(String(v || '').trim());
-}
-
-async function api(server, path, body) {
-  const res = await fetch(server + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
-}
-
-async function apiGet(server, path) {
-  const res = await fetch(server + path);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
 }
 
 function setError(msg) {
@@ -76,25 +53,33 @@ function setStatus(msg, pct) {
 async function checkHealth(server) {
   const badge = $('health');
   try {
-    const { checks } = await apiGet(server, '/api/health');
-    if (!checks?.ffmpeg) throw new Error('ffmpeg missing');
-    badge.className = 'status ok';
-    $('healthText').textContent = `ready · ${checks.yt_dlp || ''}`;
+    const { checks } = await OFFTUBE.apiGet(server, '/api/health');
+    const problems = OFFTUBE.healthProblems(checks);
+    if (problems.length) {
+      badge.className = 'status bad';
+      $('healthText').textContent = problems.join(' · ');
+    } else {
+      badge.className = 'status ok';
+      $('healthText').textContent = `ready · ${checks.yt_dlp || ''}`;
+    }
   } catch {
     badge.className = 'status bad';
-    $('healthText').textContent = 'server unreachable';
+    $('healthText').textContent = 'server unreachable — start ./run.sh';
   }
 }
 
 function renderPreview(info) {
   const box = $('preview');
   if (info.type === 'playlist') {
-    box.innerHTML = `<div><h3>${escapeHtml(info.title || 'Playlist')}</h3><p>Playlist · ${escapeHtml(String(info.count || ''))} videos</p></div>`;
+    box.innerHTML = `<div><h3>${OFFTUBE.escapeHtml(info.title || 'Playlist')}</h3><p>Playlist · ${OFFTUBE.escapeHtml(String(info.count || ''))} videos</p></div>`;
     return;
   }
-  const quals = (info.qualities || []).map((q) => escapeHtml(q.label)).join(' · ');
-  box.innerHTML = `${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" />` : ''}`
-    + `<div><h3>${escapeHtml(info.title || 'Video')}</h3><p>${escapeHtml(info.uploader || '')}${info.duration_str ? ` · ${escapeHtml(info.duration_str)}` : ''}</p><p>${quals}</p></div>`;
+  const quals = (info.qualities || []).map((q) => OFFTUBE.escapeHtml(q.label)).join(' · ');
+  const plNote = info.part_of_playlist
+    ? '<p>Part of a playlist — open the side panel to grab more than this video.</p>'
+    : '';
+  box.innerHTML = `${info.thumbnail ? `<img src="${OFFTUBE.escapeHtml(info.thumbnail)}" alt="" />` : ''}`
+    + `<div><h3>${OFFTUBE.escapeHtml(info.title || 'Video')}</h3><p>${OFFTUBE.escapeHtml(info.uploader || '')}${info.duration_str ? ` · ${OFFTUBE.escapeHtml(info.duration_str)}` : ''}</p><p>${quals}</p>${plNote}</div>`;
   const ladder = (info.qualities || []).map((q) => q.id);
   const sel = $('quality');
   for (const opt of sel.options) {
@@ -111,10 +96,10 @@ async function inspect() {
   const { serverUrl } = await getSettings();
   const url = $('url').value.trim();
   if (!url) { setError('Paste a link or open a YouTube tab first.'); return; }
-  if (!isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
+  if (!OFFTUBE.isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
   $('inspect').disabled = true;
   try {
-    const { info } = await api(serverUrl, '/api/info', { url, ...accessPayload() });
+    const { info } = await OFFTUBE.api(serverUrl, '/api/info', { url, ...accessPayload() });
     renderPreview(info);
     setStatus('Inspected. Pick quality and hit Download.');
   } catch (err) {
@@ -129,7 +114,7 @@ async function pollJob(server, jobId) {
     await new Promise((r) => { setTimeout(r, 900); });
     let job;
     try {
-      job = await apiGet(server, `/api/job?id=${encodeURIComponent(jobId)}`);
+      job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(jobId)}`);
     } catch {
       setStatus('Lost connection — retrying…');
       continue;
@@ -148,14 +133,18 @@ async function pollJob(server, jobId) {
 
 async function download() {
   setError('');
-  const { serverUrl } = await getSettings();
   const url = $('url').value.trim();
   if (!url) { setError('Paste a link first.'); return; }
   const btn = $('download');
   btn.disabled = true;
   try {
-    await chrome.storage.local.set({ quality: $('quality').value, access: $('access').value, serverUrl: $('server').value.trim() || DEFAULT_SERVER });
-    const { job_id } = await api(serverUrl, '/api/download', {
+    const serverUrl = OFFTUBE.normalizeServerUrl($('server').value);
+    await chrome.storage.local.set({
+      quality: $('quality').value,
+      access: $('access').value,
+      serverUrl,
+    });
+    const { job_id } = await OFFTUBE.api(serverUrl, '/api/download', {
       url, quality: $('quality').value, ...accessPayload(),
     });
     setStatus('Queued…', 0);
@@ -171,7 +160,7 @@ async function download() {
 async function fillFromTab() {
   const { url, title } = await getActiveTabUrl();
   const line = $('tabLine');
-  if (url && isYouTubeUrl(url)) {
+  if (url && OFFTUBE.isYouTubeUrl(url)) {
     if (!$('url').value.trim()) $('url').value = url;
     line.textContent = `Tab: ${title || url}`.slice(0, 90);
     line.title = url;
@@ -184,6 +173,7 @@ async function fillFromTab() {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
   const { serverUrl, quality, access } = await getSettings();
   $('server').value = serverUrl;
   $('quality').value = quality;
@@ -191,7 +181,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   syncAccess();
   await fillFromTab();
   await checkHealth(serverUrl);
-  if (isYouTubeUrl($('url').value)) inspect();
+  if (OFFTUBE.isYouTubeUrl($('url').value)) inspect();
 });
 
 $('useTab').addEventListener('click', async () => {
@@ -219,15 +209,21 @@ $('cookieFile').addEventListener('change', async (e) => {
 });
 
 $('server').addEventListener('change', async () => {
-  const v = $('server').value.trim() || DEFAULT_SERVER;
-  await chrome.storage.local.set({ serverUrl: v });
-  await checkHealth(v.replace(/\/+$/, ''));
+  try {
+    const v = OFFTUBE.normalizeServerUrl($('server').value);
+    $('server').value = v;
+    await chrome.storage.local.set({ serverUrl: v });
+    await checkHealth(v);
+  } catch (err) {
+    setError(err.message);
+    $('server').value = OFFTUBE.DEFAULT_SERVER;
+  }
 });
 
 $('openPanel').addEventListener('click', async () => {
   const win = await chrome.windows.getLastFocused();
   await chrome.sidePanel.open({ windowId: win.id });
-  window.close(); // one surface at a time — never popup + panel together
+  window.close();
 });
 
 $('openLib').addEventListener('click', async () => {
