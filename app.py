@@ -1116,7 +1116,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self._apply_cors()
         self.end_headers()
-        self.wfile.write(body)
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(body)
 
     def _apply_cors(self) -> None:
         """Allow the local UI and chrome-extension:// clients; never *."""
@@ -1187,7 +1188,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "frame-ancestors 'none'; base-uri 'none'",
             )
         self.end_headers()
-        self.wfile.write(data)
+        if not getattr(self, "_omit_body", False):
+            self.wfile.write(data)
 
     def serve_download_file(self, name: str):
         safe = Path(urllib.parse.unquote(name)).name
@@ -1213,10 +1215,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
+        if getattr(self, "_omit_body", False):
+            return
         with open(path, "rb") as fh:
             shutil.copyfileobj(fh, self.wfile)
 
     # -- routes ------------------------------------------------------------
+    def do_HEAD(self):
+        self._omit_body = True
+        try:
+            self.do_GET()
+        finally:
+            self._omit_body = False
+
     def do_OPTIONS(self):
         # CORS preflight for the local extension client (fetch with
         # Content-Type: application/json triggers one). Untrusted origins
