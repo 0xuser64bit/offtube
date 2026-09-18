@@ -44,6 +44,48 @@ def test_validate_url_rejects_oversize():
         app.validate_url("https://youtube.com/" + "x" * 2000)
 
 
+# --- CORS / origin trust ----------------------------------------------------
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1:8000",
+    "http://localhost:8000",
+    "http://[::1]:8000",
+    "https://127.0.0.1",
+    "chrome-extension://abcdefghijklmnopqrstuvwxyz123456",
+])
+def test_origin_is_trusted(url):
+    assert app.origin_is_trusted(url)
+
+
+@pytest.mark.parametrize("url", [
+    "https://evil.com",
+    "http://127.0.0.1.evil.com",
+    "https://example.com",
+    "chrome-extension://",
+    "file:///etc/passwd",
+    "ftp://127.0.0.1",
+    "",
+])
+def test_origin_is_untrusted(url):
+    assert not app.origin_is_trusted(url)
+
+
+def test_cors_allow_origin_reflects_only_trusted():
+    assert app.cors_allow_origin(None) is None
+    assert app.cors_allow_origin("https://evil.com") is None
+    assert app.cors_allow_origin("http://127.0.0.1:8000") == "http://127.0.0.1:8000"
+    ext = "chrome-extension://abcdefghijklmnopqrstuvwxyz123456"
+    assert app.cors_allow_origin(ext) == ext
+
+
+def test_public_job_strips_payload():
+    job = {"id": "abc", "status": "done", "log": ["a", "b", "c"],
+           "payload": {"cookies_mode": "upload", "url": "https://youtu.be/x"}}
+    out = app.public_job(job, log_limit=2)
+    assert "payload" not in out
+    assert out["log"] == ["b", "c"]
+    assert job["payload"]["cookies_mode"] == "upload"  # original untouched
+
+
 # --- safe_child -------------------------------------------------------------
 def test_safe_child_allows_inside():
     assert app.safe_child(app.WEB_DIR, "index.html") is not None

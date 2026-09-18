@@ -206,6 +206,55 @@ def test_invalid_json_rejected(server):
     assert "Invalid JSON" in body.get("error", "")
 
 
+def _acao(headers):
+    return headers.get("Access-Control-Allow-Origin") or headers.get("access-control-allow-origin")
+
+
+def test_cors_reflects_localhost_and_extension_not_star(server):
+    status, _, headers = api(server, "GET", "/api/health",
+                             headers={"Origin": "https://evil.com"})
+    assert status == 200
+    acao = _acao(headers)
+    assert acao not in ("*", "https://evil.com")
+
+    status, _, headers = api(server, "GET", "/api/health",
+                             headers={"Origin": "http://127.0.0.1:8000"})
+    assert status == 200
+    assert _acao(headers) == "http://127.0.0.1:8000"
+
+    ext = "chrome-extension://abcdefghijklmnopqrstuvwxyz123456"
+    status, _, headers = api(server, "GET", "/api/health", headers={"Origin": ext})
+    assert status == 200
+    assert _acao(headers) == ext
+
+
+def test_cors_preflight_extension_allowed_evil_omitted(server):
+    ext = "chrome-extension://abcdefghijklmnopqrstuvwxyz123456"
+    status, _, headers = api(server, "OPTIONS", "/api/download",
+                             headers={"Origin": ext,
+                                      "Access-Control-Request-Method": "POST"})
+    assert status == 204
+    assert _acao(headers) == ext
+
+    status, _, headers = api(server, "OPTIONS", "/api/download",
+                             headers={"Origin": "https://evil.com",
+                                      "Access-Control-Request-Method": "POST"})
+    assert status in (200, 204)
+    assert _acao(headers) not in ("*", "https://evil.com")
+
+
+def test_job_listing_omits_payload(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123", "quality": "720",
+                            "cookies_mode": "none"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert "payload" not in job
+    status, data, _ = api(server, "GET", "/api/jobs?limit=5")
+    assert status == 200
+    assert all("payload" not in j for j in data["jobs"])
+
+
 def test_cross_site_post_blocked(server):
     status, body, _ = api(server, "POST", "/api/download",
                            {"url": "https://youtu.be/abc123"},

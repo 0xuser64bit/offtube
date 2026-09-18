@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -128,6 +129,11 @@ YOUTUBE_HOSTS = frozenset({
     "youtube-nocookie.com",
 })
 
+# Origins that may read JSON responses (extension + the local web UI).
+# Never reflect * — that lets any website fetch /api/jobs and /api/files
+# while offtube is running on loopback.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 # In-progress / fragment files yt-dlp leaves behind mid-download. These must
 # never appear in the library or in a job's claimed outputs.
 TEMP_SUFFIXES = (".part", ".temp", ".tmp", ".ytdl", ".ydl", ".frag")
@@ -165,6 +171,34 @@ def validate_url(url: str | None) -> str:
     if not any(host == h or host.endswith("." + h) for h in YOUTUBE_HOSTS):
         raise ValueError("Only YouTube links are supported (youtube.com / youtu.be).")
     return u
+
+
+def origin_is_trusted(url: str) -> bool:
+    """True for the local web UI and unpacked/packed Chrome extension pages."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower().rstrip(".")
+        scheme = (parts.scheme or "").lower()
+    except Exception:
+        return False
+    if scheme == "chrome-extension":
+        return bool(parts.netloc)
+    return scheme in ("http", "https") and host in LOCAL_HOSTS
+
+
+def cors_allow_origin(origin: str | None) -> str | None:
+    """Reflect a trusted Origin, otherwise omit CORS (browser hides the body)."""
+    if not origin:
+        return None
+    return origin if origin_is_trusted(origin) else None
+
+
+def public_job(job: dict, log_limit: int | None = None) -> dict:
+    """API view of a job: never include the original request payload."""
+    out = {k: v for k, v in job.items() if k != "payload"}
+    if log_limit is not None:
+        out["log"] = (out.get("log") or [])[-log_limit:]
+    return out
 
 
 def safe_child(base: Path, name: str) -> Path | None:
@@ -915,13 +949,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
-        # Local extension client (chrome-extension://) fetches this API from
-        # an opaque origin; host_permissions bypasses page CORS but the
-        # server still needs to emit ACAO + answer OPTIONS preflights.
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Vary", "Origin")
+        self._apply_cors()
         self.end_headers()
         self.wfile.write(body)
+
+    def _apply_cors(self) -> None:
+        """Allow the local UI and chrome-extension:// clients; never *."""
+        allowed = cors_allow_origin(self.headers.get("Origin"))
+        self.send_header("Vary", "Origin")
+        if allowed:
+            self.send_header("Access-Control-Allow-Origin", allowed)
 
     def read_json(self) -> dict:
         try:
@@ -961,17 +998,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             val = self.headers.get(hdr)
             if not val:
                 continue
-            try:
-                parts = urllib.parse.urlsplit(val)
-                host = (parts.hostname or "").lower().rstrip(".")
-                scheme = (parts.scheme or "").lower()
-            except Exception:
+            if not origin_is_trusted(val):
                 return False
-            if scheme == "chrome-extension":
-                continue
-            if host in ("127.0.0.1", "localhost", "::1"):
-                continue
-            return False
         return True
 
     def serve_static(self, rel: str):
@@ -1026,11 +1054,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # -- routes ------------------------------------------------------------
     def do_OPTIONS(self):
         # CORS preflight for the local extension client (fetch with
-        # Content-Type: application/json triggers one). Localhost-only
-        # server, so reflecting * is fine; evil.com is still blocked at
-        # POST time by check_origin.
+        # Content-Type: application/json triggers one). Untrusted origins
+        # get 204 without ACAO so the browser hides the response.
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._apply_cors()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.send_header("Access-Control-Max-Age", "86400")
@@ -1056,19 +1083,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             limit = max(1, min(50, limit))
             with jobs_lock:
                 items = list(jobs.values())[-limit:]
-                # Trim logs in list view; full log via /api/job.
-                trimmed = [
-                    {**j, "log": (j.get("log") or [])[-20:]}
-                    for j in items
-                ]
+                trimmed = [public_job(j, log_limit=20) for j in items]
                 return self.send_json({"jobs": trimmed})
         if route == "/api/job":
             jid = (qs.get("id") or [""])[0]
             with jobs_lock:
                 job = jobs.get(jid)
-            if not job:
+                snapshot = public_job(job) if job else None
+            if not snapshot:
                 return self.send_json({"error": "Unknown job id."}, 404)
-            return self.send_json(job)
+            return self.send_json(snapshot)
         if route == "/api/files":
             files = []
             for p in sorted(DOWNLOAD_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
