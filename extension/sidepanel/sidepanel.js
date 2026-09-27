@@ -10,7 +10,7 @@ let lastInspected = '';
 let activeJobId = null;
 
 async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookiesBrowser']);
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
   try {
     serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
@@ -22,7 +22,7 @@ async function getSettings() {
     quality: s.quality || '1080',
     otype: s.otype || 'video',
     access: s.access || 'none',
-    cookiesBrowser: s.cookiesBrowser || 'chrome',
+    cookiesBrowser: s.cookies_browser || 'chrome',
   };
 }
 
@@ -276,7 +276,7 @@ $('access').addEventListener('change', async () => {
 });
 
 $('cookieBrowserName').addEventListener('change', async () => {
-  await chrome.storage.local.set({ cookiesBrowser: $('cookieBrowserName').value });
+  await chrome.storage.local.set({ cookies_browser: $('cookieBrowserName').value });
 });
 
 $('cookieFile').addEventListener('change', async (e) => {
