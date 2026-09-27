@@ -1082,7 +1082,7 @@ def run_download(job_id: str, payload: dict):
             evict_jobs_locked()
 
 
-def enqueue_download(body: dict, route: str) -> tuple[str | None, tuple[str, int] | None]:
+def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     """Validate a download request and submit it. Returns (job_id, None) on
     success or (None, (message, status)) on refusal. Shared by /api/download
     and /api/retry so a retry is byte-for-byte the same code path."""
@@ -1430,7 +1430,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":
-            jid, err = enqueue_download(body, route)
+            jid, err = enqueue_download(body)
             if err is not None:
                 return self.send_json({"ok": False, "error": err[0]}, err[1])
             return self.send_json({"ok": True, "job_id": jid})
@@ -1446,7 +1446,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not is_terminal(job):
                     return self.send_json({"ok": False, "error": "That job is still running."}, 400)
                 payload = dict(job.get("payload") or {})
-            new_id, err = enqueue_download(payload, route)
+            new_id, err = enqueue_download(payload)
             if err is not None:
                 return self.send_json({"ok": False, "error": err[0]}, err[1])
             return self.send_json({"ok": True, "job_id": new_id, "retried": jid})
