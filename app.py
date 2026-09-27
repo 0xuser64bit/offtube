@@ -193,9 +193,19 @@ def cors_allow_origin(origin: str | None) -> str | None:
     return origin if origin_is_trusted(origin) else None
 
 
+# Fields safe to expose on the wire. Everything else in a job record is
+# internal: `payload` (may hold pasted cookies), `filename`/`seen_files`
+# (absolute server paths), `seen_ids`, `cancel_requested`.
+PUBLIC_JOB_FIELDS = (
+    "id", "url", "quality", "status", "progress", "detail", "log", "files",
+    "created_at", "finished_at", "downloaded_bytes", "total_bytes", "speed",
+    "eta", "playlist_index", "playlist_count",
+)
+
+
 def public_job(job: dict, log_limit: int | None = None) -> dict:
-    """API view of a job: never include the original request payload."""
-    out = {k: v for k, v in job.items() if k != "payload"}
+    """API view of a job: a whitelist, so new internal fields never leak."""
+    out = {k: job[k] for k in PUBLIC_JOB_FIELDS if k in job}
     if log_limit is not None:
         out["log"] = (out.get("log") or [])[-log_limit:]
     return out
@@ -349,22 +359,40 @@ def cleanup_job_cookies(job_id: str) -> None:
         pass
 
 
+def _job_claims_name(job: dict, name: str) -> bool:
+    """True if this job's hook-observed names/ids match a temp `name`."""
+    seen = set(job.get("seen_files") or [])
+    if name in seen:
+        return True
+    stem = Path(name).stem
+    if any(Path(n).stem == stem for n in seen if n):
+        return True
+    ids = job.get("seen_ids") or []
+    return bool(ids) and any(f"[{vid}]" in name for vid in ids)
+
+
 def cleanup_job_temps(job: dict | None) -> None:
-    """Remove .part/.temp files this job was seen writing. Called on any exit."""
+    """Remove .part/.temp files this job was seen writing. Called on any exit.
+
+    A temp file another live job is also writing is left alone: two jobs can
+    legitimately claim the same stem/id (the same video queued twice, or a
+    playlist containing an in-flight video), and unlinking it mid-write would
+    corrupt that download.
+    """
     if not job:
         return
-    names = list(job.get("seen_files") or [])
-    stems = {Path(n).stem for n in names if n}
-    ids = list(job.get("seen_ids") or [])
     try:
+        with jobs_lock:
+            others = [j for j in jobs.values()
+                      if j.get("id") != job.get("id") and not is_terminal(j)]
         for p in DOWNLOAD_DIR.iterdir():
             if not p.is_file() or not is_temp_file(p.name):
                 continue
-            if p.name in names or p.stem in stems:
-                p.unlink(missing_ok=True)
+            if not _job_claims_name(job, p.name):
                 continue
-            if ids and any(f"[{vid}]" in p.name for vid in ids):
-                p.unlink(missing_ok=True)
+            if any(_job_claims_name(o, p.name) for o in others):
+                continue
+            p.unlink(missing_ok=True)
     except OSError:
         pass
 
@@ -1054,6 +1082,53 @@ def run_download(job_id: str, payload: dict):
             evict_jobs_locked()
 
 
+def enqueue_download(body: dict, route: str) -> tuple[str | None, tuple[str, int] | None]:
+    """Validate a download request and submit it. Returns (job_id, None) on
+    success or (None, (message, status)) on refusal. Shared by /api/download
+    and /api/retry so a retry is byte-for-byte the same code path."""
+    try:
+        url = reject_unsupported_youtube(body.get("url") or "")
+    except ValueError as exc:
+        return None, (str(exc), 400)
+    if parse_time_to_seconds(body.get("clip_from")) is None and (body.get("clip_from") or "").strip():
+        return None, ("Invalid 'from' time. Use MM:SS or HH:MM:SS.", 400)
+    if parse_time_to_seconds(body.get("clip_to")) is None and (body.get("clip_to") or "").strip():
+        return None, ("Invalid 'to' time. Use MM:SS or HH:MM:SS.", 400)
+    try:
+        resolve_cookies(body, persist=False)  # validate early for a clear error
+        # Validation must not write cookie files (no "validate" orphan).
+        build_download_opts({"id": "validate"}, body, persist=False)  # validate playlist/quality
+    except ValueError as exc:
+        return None, (str(exc), 400)
+    try:
+        if shutil.disk_usage(DOWNLOAD_DIR).free < MIN_DISK_FREE:
+            return None, ("Disk is almost full (<200 MB free). Free space and retry.", 507)
+    except OSError:
+        pass
+    jid = uuid.uuid4().hex[:12]
+    job = {
+        "id": jid,
+        "url": url,
+        "quality": body.get("quality") or "best",
+        "status": "queued",
+        "progress": 0,
+        "detail": "Queued…",
+        "log": [],
+        "files": [],
+        "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
+        # The full request params, kept in memory only (public_job whitelists
+        # what it exposes) so /api/retry can re-run a failed job faithfully.
+        "payload": dict(body),
+    }
+    with jobs_lock:
+        if active_job_count_locked() >= MAX_ACTIVE_JOBS:
+            return None, ("Too many active downloads. Wait for one to finish.", 429)
+        jobs[jid] = job
+        evict_jobs_locked()
+        futures[jid] = executor.submit(run_download, jid, body)
+    return jid, None
+
+
 # ------------------------------- HTTP layer -------------------------------
 
 _health_cache: dict = {"at": 0.0, "checks": {}}
@@ -1094,6 +1169,9 @@ def environment_checks() -> dict:
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "offtube/1.0"
+    # A stalled client must not pin a worker thread forever. BaseHTTPRequestHandler
+    # checks this between requests and on socket reads.
+    timeout = 30
 
     def log_message(self, fmt, *args):  # stderr access log for API only
         try:
@@ -1168,6 +1246,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return False
         return True
 
+    def check_host(self) -> bool:
+        """Reject requests whose Host header isn't this machine's loopback.
+
+        Without this, a site the user can reach could point a domain at
+        127.0.0.1 (DNS rebinding) and talk to offtube directly. Origin/Referer
+        checks already stop the browser path; this closes non-browser clients.
+        """
+        host = (self.headers.get("Host") or "").split(":", 1)[0].strip().lower()
+        if not host:
+            return True  # HTTP/1.0-style probes
+        host = host.replace("[", "").replace("]", "")
+        return host in ("127.0.0.1", "localhost", "::1")
+
     def serve_static(self, rel: str):
         path = safe_child(WEB_DIR, rel)
         if path is None or not path.is_file():
@@ -1241,6 +1332,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        if not self.check_host():
+            return self.send_error(403)
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         qs = urllib.parse.parse_qs(parsed.query)
@@ -1307,6 +1400,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = parsed.path
         if route.startswith("/api/") and not self.check_origin():
             return self.send_json({"ok": False, "error": "Cross-site requests blocked."}, 403)
+        if not self.check_host():
+            return self.send_error(403)
         try:
             body = self.read_json()
         except HttpError as exc:
@@ -1335,49 +1430,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":
-            try:
-                url = reject_unsupported_youtube(body.get("url") or "")
-            except ValueError as exc:
-                return self.send_json({"ok": False, "error": str(exc)}, 400)
-            if parse_time_to_seconds(body.get("clip_from")) is None and (body.get("clip_from") or "").strip():
-                return self.send_json({"ok": False, "error": "Invalid 'from' time. Use MM:SS or HH:MM:SS."}, 400)
-            if parse_time_to_seconds(body.get("clip_to")) is None and (body.get("clip_to") or "").strip():
-                return self.send_json({"ok": False, "error": "Invalid 'to' time. Use MM:SS or HH:MM:SS."}, 400)
-            try:
-                resolve_cookies(body, persist=False)  # validate early for a clear error
-                # Validation must not write cookie files (no "validate" orphan).
-                build_download_opts({"id": "validate"}, body, persist=False)  # validate playlist/quality
-            except ValueError as exc:
-                return self.send_json({"ok": False, "error": str(exc)}, 400)
-            try:
-                if shutil.disk_usage(DOWNLOAD_DIR).free < MIN_DISK_FREE:
-                    return self.send_json(
-                        {"ok": False, "error": "Disk is almost full (<200 MB free). Free space and retry."}, 507
-                    )
-            except OSError:
-                pass
-            jid = uuid.uuid4().hex[:12]
-            job = {
-                "id": jid,
-                "url": url,
-                "quality": body.get("quality") or "best",
-                "status": "queued",
-                "progress": 0,
-                "detail": "Queued…",
-                "log": [],
-                "files": [],
-                "created_at": _dt.datetime.now().isoformat(timespec="seconds"),
-                "payload": {k: v for k, v in body.items() if k != "cookies_text"},
-            }
-            with jobs_lock:
-                if active_job_count_locked() >= MAX_ACTIVE_JOBS:
-                    return self.send_json(
-                        {"ok": False, "error": "Too many active downloads. Wait for one to finish."}, 429
-                    )
-                jobs[jid] = job
-                evict_jobs_locked()
-                futures[jid] = executor.submit(run_download, jid, body)
+            jid, err = enqueue_download(body, route)
+            if err is not None:
+                return self.send_json({"ok": False, "error": err[0]}, err[1])
             return self.send_json({"ok": True, "job_id": jid})
+
+        if route == "/api/retry":
+            # Re-run a finished job from its stored params. The payload is
+            # internal-only; the client just names the job.
+            jid = str(body.get("job_id") or "").strip()
+            with jobs_lock:
+                job = jobs.get(jid)
+                if job is None:
+                    return self.send_json({"ok": False, "error": "Unknown job id."}, 404)
+                if not is_terminal(job):
+                    return self.send_json({"ok": False, "error": "That job is still running."}, 400)
+                payload = dict(job.get("payload") or {})
+            new_id, err = enqueue_download(payload, route)
+            if err is not None:
+                return self.send_json({"ok": False, "error": err[0]}, err[1])
+            return self.send_json({"ok": True, "job_id": new_id, "retried": jid})
 
         if route == "/api/cancel":
             jid = str(body.get("job_id") or "").strip()
@@ -1400,6 +1472,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 job["cancel_requested"] = True
                 job["detail"] = "Cancelling…"
                 return self.send_json({"ok": True, "cancelled": True, "stopping": True})
+
+        if route == "/api/jobs/clear":
+            with jobs_lock:
+                terminal = [jid for jid, j in jobs.items() if is_terminal(j)]
+                for jid in terminal:
+                    futures.pop(jid, None)
+                    jobs.pop(jid, None)
+            return self.send_json({"ok": True, "cleared": len(terminal)})
 
         if route == "/api/files/delete":
             name = str(body.get("name") or "")

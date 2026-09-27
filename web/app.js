@@ -235,6 +235,7 @@ async function fetchInfo() {
   } catch (e) {
     if (my !== fetchToken) return;
     lastInfo = null;
+    fetchedQualities = null;
     $("infoBox").classList.add("is-empty");
     $("infoBox").innerHTML = `<div class="preview-empty">
       <p class="preview-empty-title">Couldn’t inspect that link</p>
@@ -398,7 +399,7 @@ function setDeck(text, state) {
 function setProgress(pct, job) {
   $("bar").style.width = `${pct}%`;
   $("meter").setAttribute("aria-valuenow", String(Math.round(pct)));
-  $("jobPct").textContent = job && job.total_bytes ? `${pct}%` : pct > 0 ? `${pct}%` : "—";
+  $("jobPct").textContent = pct > 0 ? `${pct}%` : "—";
 }
 
 async function pollJob(job_id) {
@@ -460,7 +461,8 @@ async function refreshQueue(silent) {
   try {
     const { jobs } = await api("/api/jobs");
     const list = (jobs || []).slice(-5).reverse();
-    $("queueCount").textContent = String((jobs || []).length);
+    const active = (jobs || []).filter((j) => !["done", "error", "cancelled"].includes(j.status)).length;
+    $("queueCount").textContent = String(active);
     if (!list.length) {
       if (!silent) $("queue").innerHTML = `<p class="empty">No downloads yet this session.</p>`;
       return;
@@ -470,14 +472,18 @@ async function refreshQueue(silent) {
         const pct = Math.round(j.progress || 0);
         const short = (j.url || "").replace(/^https?:\/\//, "").slice(0, 42);
         const cancellable = ["queued", "starting", "downloading", "processing"].includes(j.status);
+        const retryable = j.status === "error";
         const cancel = cancellable
-          ? `<button class="job-cancel" data-cancel="${escapeHtml(j.id)}" type="button">Cancel</button>`
+          ? `<button class="job-cancel" data-cancel="${escapeHtml(j.id)}" type="button" aria-label="Cancel job">Cancel</button>`
           : "";
-        return `<div class="job" data-state="${escapeHtml(j.status)}">
+        const retry = retryable
+          ? `<button class="job-cancel" data-retry="${escapeHtml(j.id)}" type="button" aria-label="Retry job">Retry</button>`
+          : "";
+        return `<div class="job" data-state="${escapeHtml(j.status)}" data-jid="${escapeHtml(j.id)}">
           <div class="job-top"><span class="badge" data-s="${escapeHtml(j.status)}">${escapeHtml(j.status)}</span><span class="job-pct">${pct}%</span></div>
           <div class="job-detail" title="${escapeHtml(j.url || "")}">${escapeHtml(short)}</div>
           <div class="job-bar"><i style="width:${pct}%"></i></div>
-          ${cancel}
+          <div class="job-actions">${cancel}${retry}</div>
         </div>`;
       })
       .join("");
@@ -485,16 +491,70 @@ async function refreshQueue(silent) {
 }
 
 $("queue").addEventListener("click", async (e) => {
-  const btn = e.target.closest("[data-cancel]");
-  if (!btn) return;
-  btn.disabled = true;
+  const cancelBtn = e.target.closest("[data-cancel]");
+  const retryBtn = e.target.closest("[data-retry]");
+  if (cancelBtn) {
+    cancelBtn.disabled = true;
+    try {
+      await api("/api/cancel", { method: "POST", body: JSON.stringify({ job_id: cancelBtn.dataset.cancel }) });
+    } catch (err) {
+      setDeck("Cancel failed: " + err.message, "error");
+    }
+    refreshQueue();
+    return;
+  }
+  if (retryBtn) {
+    retryBtn.disabled = true;
+    try {
+      await api("/api/retry", { method: "POST", body: JSON.stringify({ job_id: retryBtn.dataset.retry }) });
+    } catch (err) {
+      setDeck("Retry failed: " + err.message, "error");
+    }
+    refreshQueue();
+  }
+});
+
+$("clearQueue").addEventListener("click", async () => {
   try {
-    await api("/api/cancel", { method: "POST", body: JSON.stringify({ job_id: btn.dataset.cancel }) });
+    await api("/api/jobs/clear", { method: "POST", body: "{}" });
   } catch (err) {
-    setDeck("Cancel failed: " + err.message, "error");
+    setDeck("Clear failed: " + err.message, "error");
   }
   refreshQueue();
 });
+
+$("queue").addEventListener("click", (e) => {
+  const jobEl = e.target.closest(".job");
+  if (!jobEl || e.target.closest("button")) return;
+  viewJob(jobEl.dataset.jid);
+});
+
+async function viewJob(job_id) {
+  if (!job_id) return;
+  clearInterval(pollTimer);
+  activeJobId = null;
+  setCancelVisible(false);
+  try {
+    const job = await api(`/api/job?id=${encodeURIComponent(job_id)}`);
+    const pct = job.progress || 0;
+    setProgress(pct, job);
+    $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
+    if (job.status === "done") {
+      setDeck(`Done — ${(job.files || []).join(", ") || "saved to downloads/"}`, "done");
+    } else if (job.status === "error") {
+      setDeck(job.detail || "Download failed.", "error");
+    } else if (job.status === "cancelled") {
+      setDeck("Cancelled.", "cancelled");
+    } else {
+      setDeck((job.detail || job.status), "busy");
+      activeJobId = job_id;
+      setCancelVisible(true);
+      pollJob(job_id);
+    }
+  } catch (err) {
+    setDeck("Could not load job: " + err.message, "error");
+  }
+}
 
 /* ---------------- files ---------------- */
 let diskFreeStr = "";

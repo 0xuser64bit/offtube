@@ -207,7 +207,10 @@
     <section class="panel panel-side" aria-labelledby="h-queue">
       <div class="side-head">
         <h2 id="h-queue">Queue</h2>
-        <span class="count mono" id="queueCount">0</span>
+        <div class="side-head-actions">
+          <span class="count mono" id="queueCount">0</span>
+          <button id="clearQueue" class="btn btn-quiet btn-small" type="button" title="Remove finished jobs from the list">Clear</button>
+        </div>
       </div>
       <div id="queue" class="queue">
         <p class="empty">No downloads yet this session.</p>
