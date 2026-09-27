@@ -90,7 +90,7 @@ The Docker image already includes Deno.
 4. **Playlist** — “Just this video” or “Whole playlist / range” with Start/End or Items like `1-5,7,10-12`.
 5. **Cookies** — only needed for members-only/private/age-restricted:
    - **Upload cookies.txt**: in Chrome, install [*Get cookies.txt Locally*](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc), open YouTube logged in as the member account, export Netscape format, upload here. Re-export when downloads start failing (cookies expire).
-   - **From browser**: reads Chrome/Edge/Firefox/… cookies directly from this machine.
+   - **From browser**: reads Chrome/Edge/Firefox/… cookies directly from this machine. Pick the browser in Options → Access (web UI) or the side panel (extension); the extension's right-click "Keep with offtube" honors that choice.
    - Tip from the field: export in an incognito window with only `youtube.com/robots.txt` open if you hit weird auth errors; disable adblockers while exporting; make sure only the member account is signed in.
 6. **⬇ Download** — watch live progress; queue another while one runs. Finished files appear in the library and in `downloads/`.
 
@@ -122,7 +122,9 @@ offtube/
 stubbed `YoutubeDL`, covering health/headers, traversal blocks, info
 validation, download → files → delete, bad input, oversized bodies,
 queued + running cancel, origin/CORS, payload stripping, channel
-rejection, temp-file hiding, disposition, jobs limit, and disk guard.
+rejection, temp-file hiding, disposition, jobs limit, disk guard, the
+public-job field whitelist, Host-header guard, `/api/retry`, and
+`/api/jobs/clear`.
 
 ## API (for scripting)
 
@@ -131,6 +133,8 @@ rejection, temp-file hiding, disposition, jobs limit, and disk guard.
 - `POST /api/download` `{url, quality, clip_from, clip_to, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
 - `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running jobs stop cooperatively at the next progress callback)
+- `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
+- `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
 - `GET /api/files` → `{files, disk_free, disk_free_str}` (in-progress `.part`/`.temp` hidden); `GET /files/<name>` downloads one (RFC 5987 filename)
 - `POST /api/files/delete` `{name}` → `{deleted}`
@@ -140,9 +144,11 @@ and search pages are rejected. Inspect treats `watch?v=&list=` as a single
 video; only `/playlist?list=` is a playlist. Bodies are capped at ~2 MB (413).
 Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
 `/api/download` returns 507. Cross-site POSTs with a foreign `Origin`/`Referer`
-return 403. JSON responses reflect `Access-Control-Allow-Origin` only for
-localhost and `chrome-extension://` — never `*`. Unknown `/api/*` routes
-return JSON 404. Jobs and UI prefs are in-memory/local only — a restart
+return 403, as do non-loopback `Host` headers. JSON responses reflect
+`Access-Control-Allow-Origin` only for localhost and `chrome-extension://` —
+never `*`. Unknown `/api/*` routes return JSON 404. Job records expose a fixed
+whitelist of fields — internal paths and the stored request payload never
+leave the server. Jobs and UI prefs are in-memory/local only — a restart
 clears history; leftover `.part` files and orphaned job cookies are cleaned
 on boot and when a job ends.
 
