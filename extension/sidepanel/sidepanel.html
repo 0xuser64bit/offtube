@@ -63,6 +63,19 @@
         <option value="browser">Browser cookies (native server only)</option>
         <option value="upload">Cookies file (upload / paste)</option>
       </select>
+      <div id="cookieBrowserPane" class="hidden">
+        <label class="label" for="cookieBrowserName">Read cookies from</label>
+        <select id="cookieBrowserName">
+          <option value="chrome">Chrome</option>
+          <option value="chromium">Chromium</option>
+          <option value="brave">Brave</option>
+          <option value="edge">Edge</option>
+          <option value="firefox">Firefox</option>
+          <option value="safari">Safari</option>
+          <option value="opera">Opera</option>
+          <option value="vivaldi">Vivaldi</option>
+        </select>
+      </div>
       <div id="cookieUpload" class="hidden">
         <div class="row file-row">
           <label for="cookieFile" class="btn quiet small">Choose cookies.txt</label>

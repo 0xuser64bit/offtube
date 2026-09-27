@@ -513,3 +513,250 @@ def test_progress_hook_cancel_raises():
             app.progress_hook("j", {"status": "downloading", "filename": "x.mp4"})
     finally:
         app.jobs.clear()
+
+
+# --- public_job whitelist ----------------------------------------------------
+def test_public_job_whitelists_internal_fields():
+    job = {
+        "id": "abc", "url": "https://youtu.be/x", "quality": "720",
+        "status": "downloading", "progress": 42, "detail": "Downloading…",
+        "log": ["a"], "files": [], "created_at": "t", "finished_at": None,
+        "downloaded_bytes": 1, "total_bytes": 2, "speed": 3, "eta": 4,
+        "playlist_index": 1, "playlist_count": 2,
+        # internals that must never reach a client:
+        "filename": "/srv/offtube/downloads/Secret [x].mp4",
+        "seen_files": ["Secret [x].mp4"], "seen_ids": ["x"],
+        "cancel_requested": False, "payload": {"cookies_text": "SECRET"},
+    }
+    out = app.public_job(job)
+    for leak in ("filename", "seen_files", "seen_ids", "cancel_requested", "payload"):
+        assert leak not in out
+    # public fields survive
+    for k in ("id", "url", "quality", "status", "progress", "detail", "log",
+              "files", "created_at", "downloaded_bytes", "total_bytes",
+              "speed", "eta", "playlist_index", "playlist_count"):
+        assert k in out
+    # original untouched
+    assert job["payload"]["cookies_text"] == "SECRET"
+
+
+def test_public_job_log_limit():
+    job = {"id": "a", "log": [str(i) for i in range(50)]}
+    assert app.public_job(job, log_limit=5)["log"] == ["45", "46", "47", "48", "49"]
+
+
+# --- cross-job temp protection -------------------------------------------------
+def test_cleanup_job_temps_skips_file_another_live_job_writes(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    (tmp_path / "Video [abc].f137.mp4.part").write_bytes(b"partial")
+    (tmp_path / "Video [abc].mp4").write_bytes(b"done")
+    (tmp_path / "Other [zzz].mp4.part").write_bytes(b"keep")
+    app.jobs.clear()
+    app.jobs["a"] = {"id": "a", "status": "downloading",
+                     "seen_files": ["Video [abc].f137.mp4.part"], "seen_ids": ["abc"]}
+    app.jobs["b"] = {"id": "b", "status": "downloading",
+                     "seen_files": ["Video [abc].f137.mp4.part"], "seen_ids": ["abc"]}
+    try:
+        app.cleanup_job_temps(app.jobs["a"])
+        names = {p.name for p in tmp_path.iterdir()}
+        # b is still writing it — a must not delete it
+        assert "Video [abc].f137.mp4.part" in names
+        assert "Video [abc].mp4" in names
+        assert "Other [zzz].mp4.part" in names
+    finally:
+        app.jobs.clear()
+
+
+def test_cleanup_job_temps_deletes_own_orphan(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    (tmp_path / "Video [abc].f137.mp4.part").write_bytes(b"partial")
+    (tmp_path / "Video [abc].mp4").write_bytes(b"done")
+    app.jobs.clear()
+    app.jobs["a"] = {"id": "a", "status": "downloading",
+                     "seen_files": ["Video [abc].f137.mp4.part"], "seen_ids": ["abc"]}
+    try:
+        app.cleanup_job_temps(app.jobs["a"])
+        names = {p.name for p in tmp_path.iterdir()}
+        assert "Video [abc].f137.mp4.part" not in names
+        assert "Video [abc].mp4" in names
+    finally:
+        app.jobs.clear()
+
+
+def test_job_claims_name():
+    job = {"seen_files": ["Video [abc].mp4", "Clip [abc]"], "seen_ids": ["abc"]}
+    assert app._job_claims_name(job, "Video [abc].f137.mp4.part")
+    assert app._job_claims_name(job, "Clip [abc].webm.part")
+    assert app._job_claims_name(job, "Other [abc].mp4.part")  # id match
+    assert not app._job_claims_name(job, "Other [xyz].mp4.part")
+
+
+# --- cookie_file_for sanitization ---------------------------------------------
+def test_cookie_file_for_sanitizes_job_id(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    p = app.cookie_file_for("../../etc/passwd")
+    assert p.name == "job-etcpasswd.cookies.txt"
+    assert p.parent == tmp_path
+
+
+# --- is_terminal / active count -----------------------------------------------
+def test_is_terminal():
+    assert app.is_terminal({"status": "done"})
+    assert app.is_terminal({"status": "error"})
+    assert app.is_terminal({"status": "cancelled"})
+    assert not app.is_terminal({"status": "downloading"})
+    assert not app.is_terminal({"status": "queued"})
+
+
+def test_active_job_count_locked():
+    app.jobs.clear()
+    app.jobs["a"] = {"id": "a", "status": "queued"}
+    app.jobs["b"] = {"id": "b", "status": "downloading"}
+    app.jobs["c"] = {"id": "c", "status": "done"}
+    try:
+        assert app.active_job_count_locked() == 2
+    finally:
+        app.jobs.clear()
+
+
+def test_evict_jobs_locked_drops_oldest_terminal():
+    app.jobs.clear()
+    app.jobs["old"] = {"id": "old", "status": "done", "finished_at": "2020-01-01T00:00:00"}
+    app.jobs["new"] = {"id": "new", "status": "done", "finished_at": "2021-01-01T00:00:00"}
+    app.futures["old"] = object()
+    try:
+        app.MAX_JOBS = 1
+        app.evict_jobs_locked()
+        assert "old" not in app.jobs and "new" in app.jobs
+        assert "old" not in app.futures
+    finally:
+        app.MAX_JOBS = 50
+        app.jobs.clear()
+        app.futures.clear()
+
+
+# --- resolve_cookies "file" mode ----------------------------------------------
+def test_resolve_cookies_file_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
+    opts = app.resolve_cookies({"cookies_mode": "file", "cookies_text": "AAA"}, job_id="f1")
+    assert opts["cookiefile"].endswith("job-f1.cookies.txt")
+
+
+# --- detect_js_runtimes cache ---------------------------------------------------
+def test_detect_js_runtimes_caches(monkeypatch):
+    app._js_runtime_cache.update(at=0.0, runtimes=None, node_version=None)
+    calls = []
+    monkeypatch.setattr(app.shutil, "which",
+                        lambda c: calls.append(c) or ("/usr/bin/deno" if c == "deno" else None))
+    first = app.detect_js_runtimes()
+    second = app.detect_js_runtimes()
+    assert first == second == {"deno": {}}
+    # deno + node probes ran once total, not once per call (cached)
+    assert calls == ["deno", "node"]
+
+
+# --- summarize_formats without audio -------------------------------------------
+def test_summarize_formats_no_audio():
+    info = {"formats": [
+        {"vcodec": "avc1", "acodec": "none", "height": 1080, "ext": "mp4",
+         "format_id": "248"},
+    ]}
+    ids = [q["id"] for q in app.summarize_formats(info)]
+    assert ids == ["best", "1080"]  # no audio entries
+
+
+# --- quality_to_format numeric --------------------------------------------------
+def test_quality_to_format_numeric_height():
+    assert "height<=480" in app.quality_to_format("480")
+    assert "height<=1080" in app.quality_to_format("1080")
+    assert "height<=9999" in app.quality_to_format("9999")
+
+
+# --- filter_cookies_text foreign-only export ------------------------------------
+def test_filter_cookies_text_foreign_only_returns_rows():
+    raw = "# Netscape HTTP Cookie File\n" + FOREIGN_ROW + "\n"
+    out = app.filter_cookies_text(raw)
+    assert "facebook" not in out and "c_user" not in out
+    assert out.startswith("# Netscape HTTP Cookie File")
+
+
+# --- postprocessor_hook ----------------------------------------------------------
+def test_postprocessor_hook_sets_processing():
+    app.jobs.clear()
+    app.jobs["j"] = {"id": "j", "status": "downloading", "progress": 0,
+                     "log": [], "files": []}
+    try:
+        app.postprocessor_hook("j", {"status": "started", "postprocessor_name": "Merger"})
+        assert app.jobs["j"]["status"] == "processing"
+        app.postprocessor_hook("j", {"status": "finished"})
+        assert app.jobs["j"]["detail"] == "Post-processing done."
+    finally:
+        app.jobs.clear()
+
+
+def test_postprocessor_hook_cancel_raises():
+    app.jobs.clear()
+    app.jobs["j"] = {"id": "j", "status": "processing", "progress": 0,
+                     "log": [], "files": [], "cancel_requested": True}
+    try:
+        with pytest.raises(Exception, match="Cancelled"):
+            app.postprocessor_hook("j", {"status": "started"})
+    finally:
+        app.jobs.clear()
+
+
+# --- JobLogger -------------------------------------------------------------------
+def test_job_logger_appends_cleaned():
+    app.jobs.clear()
+    app.jobs["j"] = {"id": "j", "status": "downloading", "progress": 0,
+                     "log": [], "files": []}
+    try:
+        log = app.JobLogger("j")
+        log.info("hello\x1b[31m world\r")
+        log.debug("[debug] skipped")
+        log.warning("careful")
+        assert app.jobs["j"]["log"] == ["hello world", "WARNING: careful"]
+    finally:
+        app.jobs.clear()
+
+
+# --- attribute_new_files fallback (no hooks saw anything) ------------------------
+def test_attribute_new_files_raw_diff_fallback(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    before = set(tmp_path.iterdir())
+    (tmp_path / "Brand New [qqq].mp4").write_bytes(b"x")
+    (tmp_path / "half.mp4.part").write_bytes(b"y")
+    job = {"seen_files": [], "seen_ids": []}
+    assert app.attribute_new_files(job, before) == ["Brand New [qqq].mp4"]
+
+
+# --- cleanup_stale_files -----------------------------------------------------------
+def test_cleanup_stale_files_removes_orphans(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path / "dl")
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "ck")
+    (tmp_path / "dl").mkdir()
+    (tmp_path / "ck").mkdir()
+    (tmp_path / "dl" / "half.mp4.part").write_bytes(b"x")
+    (tmp_path / "dl" / "keep.mp4").write_bytes(b"y")
+    (tmp_path / "ck" / "job-abc.cookies.txt").write_bytes(b"z")
+    (tmp_path / "ck" / ".gitkeep").write_bytes(b"")
+    app.cleanup_stale_files()
+    assert not (tmp_path / "dl" / "half.mp4.part").exists()
+    assert (tmp_path / "dl" / "keep.mp4").exists()
+    assert not (tmp_path / "ck" / "job-abc.cookies.txt").exists()
+    assert (tmp_path / "ck" / ".gitkeep").exists()
+
+
+# --- environment_checks ------------------------------------------------------------
+def test_environment_checks_reports_missing(monkeypatch):
+    app._health_cache.update(at=0.0, checks={})
+    app._js_runtime_cache.update(at=0.0, runtimes=None, node_version=None)
+    monkeypatch.setattr(app.shutil, "which", lambda c: None)
+    monkeypatch.setattr(app, "_cmd_version", lambda argv: None)
+    monkeypatch.setattr(app, "yt_dlp", None)
+    checks = app.environment_checks()
+    assert checks["ffmpeg"] is False
+    assert checks["yt_dlp"] == "missing"
+    assert checks["js_runtime"] == "none"
+    assert checks["js_runtime_ok"] is False

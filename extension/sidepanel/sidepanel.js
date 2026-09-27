@@ -10,7 +10,7 @@ let lastInspected = '';
 let activeJobId = null;
 
 async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access']);
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookiesBrowser']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
   try {
     serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
@@ -22,11 +22,13 @@ async function getSettings() {
     quality: s.quality || '1080',
     otype: s.otype || 'video',
     access: s.access || 'none',
+    cookiesBrowser: s.cookiesBrowser || 'chrome',
   };
 }
 
 function syncAccess() {
   $('cookieUpload').classList.toggle('hidden', $('access').value !== 'upload');
+  $('cookieBrowserPane').classList.toggle('hidden', $('access').value !== 'browser');
 }
 
 function setError(msg) {
@@ -49,7 +51,7 @@ function effectiveQuality() {
 function accessFields() {
   const mode = $('access').value;
   if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
-  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: 'chrome' };
+  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: $('cookieBrowserName').value };
   return { cookies_mode: 'none' };
 }
 
@@ -178,10 +180,11 @@ async function pollJob(server, jobId) {
 
 document.addEventListener('DOMContentLoaded', async () => {
   try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
-  const { serverUrl, quality, otype: ot, access } = await getSettings();
+  const { serverUrl, quality, otype: ot, access, cookiesBrowser } = await getSettings();
   $('server').value = serverUrl;
   $('quality').value = quality;
   $('access').value = access;
+  $('cookieBrowserName').value = cookiesBrowser;
   syncAccess();
   const r = document.querySelector(`input[name="otype"][value="${ot}"]`);
   if (r) r.checked = true;
@@ -270,6 +273,10 @@ $('queue').addEventListener('click', async (e) => {
 $('access').addEventListener('change', async () => {
   syncAccess();
   await chrome.storage.local.set({ access: $('access').value });
+});
+
+$('cookieBrowserName').addEventListener('change', async () => {
+  await chrome.storage.local.set({ cookiesBrowser: $('cookieBrowserName').value });
 });
 
 $('cookieFile').addEventListener('change', async (e) => {

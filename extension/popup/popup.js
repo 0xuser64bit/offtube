@@ -7,8 +7,10 @@
 
 const $ = (id) => document.getElementById(id);
 
+let savedBrowser = 'chrome';
+
 async function getSettings() {
-  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access']);
+  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access', 'cookies_browser']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
   try {
     serverUrl = OFFTUBE.normalizeServerUrl(stored.serverUrl);
@@ -19,13 +21,14 @@ async function getSettings() {
     serverUrl,
     quality: stored.quality || '1080',
     access: stored.access || 'none',
+    cookiesBrowser: stored.cookies_browser || 'chrome',
   };
 }
 
 function accessPayload() {
   const mode = $('access').value;
   if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
-  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: 'chrome' };
+  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: savedBrowser };
   return { cookies_mode: 'none' };
 }
 
@@ -174,7 +177,8 @@ async function fillFromTab() {
 
 document.addEventListener('DOMContentLoaded', async () => {
   try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
-  const { serverUrl, quality, access } = await getSettings();
+  const { serverUrl, quality, access, cookiesBrowser } = await getSettings();
+  savedBrowser = cookiesBrowser;
   $('server').value = serverUrl;
   $('quality').value = quality;
   $('access').value = access;

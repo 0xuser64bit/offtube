@@ -380,3 +380,120 @@ def test_cancel_queued_job(server):
     # The running job we cancelled must end as cancelled, not done/error.
     s, job, _ = api(server, "GET", f"/api/job?id={first[0]}")
     assert job["status"] == "cancelled"
+
+
+# --- public job field whitelist -------------------------------------------------
+def test_public_job_omits_internal_paths(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123", "quality": "720"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["status"] == "done"
+    for leak in ("filename", "seen_files", "seen_ids", "cancel_requested", "payload"):
+        assert leak not in job
+    # the file is still attributed and listed
+    assert job["files"] == ["Test Video [abc123].mp4"]
+
+
+# --- Host header guard (DNS rebinding) ------------------------------------------
+def test_non_loopback_host_rejected(server):
+    status, body, _ = api(server, "GET", "/api/health",
+                           headers={"Host": "evil.example.com"})
+    assert status == 403
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123"},
+                           headers={"Host": "offtube.example.com:8000"})
+    assert status == 403
+    # loopback Host still works
+    status, body, _ = api(server, "GET", "/api/health",
+                           headers={"Host": "127.0.0.1:8000"})
+    assert status == 200
+
+
+# --- /api/jobs/clear -------------------------------------------------------------
+def test_jobs_clear_evicts_only_terminal(server):
+    ids = []
+    for i in range(3):
+        s, b, _ = api(server, "POST", "/api/download",
+                       {"url": "https://youtu.be/abc123", "quality": "720"})
+        assert s == 200, b
+        ids.append(b["job_id"])
+    for jid in ids:
+        wait_for(server, jid)
+    s, body, _ = api(server, "POST", "/api/jobs/clear", {})
+    assert s == 200 and body["cleared"] == 3
+    s, data, _ = api(server, "GET", "/api/jobs")
+    assert data["jobs"] == []
+
+
+# --- /api/retry -------------------------------------------------------------------
+def test_retry_unknown_job(server):
+    s, body, _ = api(server, "POST", "/api/retry", {"job_id": "nope"})
+    assert s == 404
+
+
+def test_retry_running_job_refused(server):
+    BLOCK.clear()
+    try:
+        s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/block0"})
+        assert s == 200
+        jid = b["job_id"]
+        time.sleep(0.5)
+        s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
+        assert s == 400 and "still running" in body["error"]
+    finally:
+        BLOCK.set()
+        for j in list(app.jobs.values()):
+            if j.get("status") not in ("done", "error", "cancelled"):
+                wait_for(server, j["id"], timeout=15)
+
+
+def test_retry_resubmits_stored_payload(server):
+    # First run succeeds; retry must re-enqueue the same url/quality.
+    s, b, _ = api(server, "POST", "/api/download",
+                   {"url": "https://youtu.be/abc123", "quality": "720"})
+    assert s == 200, b
+    first = wait_for(server, b["job_id"])
+    assert first["status"] == "done"
+
+    s, body, _ = api(server, "POST", "/api/retry", {"job_id": first["id"]})
+    assert s == 200, body
+    assert body["retried"] == first["id"]
+    second = wait_for(server, body["job_id"])
+    assert second["status"] == "done"
+    assert second["url"] == first["url"]
+    assert second["quality"] == first["quality"]
+
+
+def test_retry_validates_stored_payload(server, tmp_path, monkeypatch):
+    # A stored payload that no longer validates (bad clip range) is refused.
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path / "dl")
+    (tmp_path / "dl").mkdir()
+    app.jobs.clear()
+    jid = "badclip"
+    app.jobs[jid] = {
+        "id": jid, "url": "https://youtu.be/abc123", "quality": "720",
+        "status": "error", "progress": 0, "detail": "x", "log": [], "files": [],
+        "payload": {"url": "https://youtu.be/abc123", "clip_from": "02:00", "clip_to": "01:00"},
+    }
+    try:
+        s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
+        assert s == 400 and "after" in body["error"]
+    finally:
+        app.jobs.clear()
+
+
+# --- serve_download_file traversal -----------------------------------------------
+def test_download_file_traversal_blocked(server):
+    import urllib.error
+    for name in ("../app.py", "..%2Fapp.py", "%2e%2e%2fapp.py", ".gitkeep", "sub/../../app.py"):
+        try:
+            urllib.request.urlopen(server + f"/files/{name}", timeout=10)
+            raise AssertionError(f"{name} should 404")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 404
+
+
+# --- request timeout is configured --------------------------------------------------
+def test_handler_has_timeout():
+    assert app.Handler.timeout is not None and app.Handler.timeout > 0

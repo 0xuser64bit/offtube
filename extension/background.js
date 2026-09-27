@@ -51,7 +51,7 @@ async function keepUrl(url) {
     await setBadge('!', '#bc3d1e');
     return;
   }
-  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access']);
+  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access', 'cookies_browser']);
   let server;
   try {
     server = OFFTUBE.normalizeServerUrl(stored.serverUrl);
@@ -63,13 +63,13 @@ async function keepUrl(url) {
   if (stored.access === 'upload') {
     await chrome.storage.session.set({ pendingUrl: url });
     const win = await chrome.windows.getLastFocused();
-    await chrome.sidePanel.open({ windowId: win.id });
+    if (win) await chrome.sidePanel.open({ windowId: win.id });
     return;
   }
   await setBadge('…', '#1b1a17');
   try {
     const access = stored.access === 'browser'
-      ? { cookies_mode: 'browser', cookies_browser: 'chrome' }
+      ? { cookies_mode: 'browser', cookies_browser: stored.cookies_browser || 'chrome' }
       : { cookies_mode: 'none' };
     await OFFTUBE.api(server, '/api/download', {
       url,
@@ -90,5 +90,5 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 chrome.commands.onCommand.addListener(async (command) => {
   if (command !== 'open-side-panel') return;
   const win = await chrome.windows.getLastFocused();
-  await chrome.sidePanel.open({ windowId: win.id });
+  if (win) await chrome.sidePanel.open({ windowId: win.id });
 });

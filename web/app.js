@@ -186,7 +186,7 @@ $("cookieFile").addEventListener("change", async (e) => {
 
 /* ---------------- inspect ---------------- */
 function looksLikeUrl(v) {
-  return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be)\//i.test(v.trim());
+  return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\//i.test(v.trim());
 }
 
 let debounce = null;
