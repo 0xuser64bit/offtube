@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
 
 BLOCK = threading.Event()
@@ -509,3 +510,45 @@ def test_download_file_traversal_blocked(server):
 # --- request timeout is configured --------------------------------------------------
 def test_handler_has_timeout():
     assert app.Handler.timeout is not None and app.Handler.timeout > 0
+
+
+# --- gallery-dl engine over HTTP ------------------------------------------------
+@pytest.fixture()
+def fake_gallery(monkeypatch):
+    from test_helpers import FAKE_GALLERY
+    monkeypatch.setattr(app, "gallery_cmd",
+                        lambda payload, cookie_id: [sys.executable, "-c", FAKE_GALLERY])
+
+
+def test_pinterest_inspect_and_download_via_gallery(server, fake_gallery):
+    status, body, _ = api(server, "POST", "/api/info",
+                           {"url": "https://www.pinterest.com/ann/moodboard/"})
+    assert status == 200, body
+    info = body["info"]
+    assert info["engine"] == "gallery-dl" and info["type"] == "gallery"
+    assert info["source"] == {"id": "pinterest", "label": "Pinterest"}
+
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://www.pinterest.com/pin/664281013778109217/"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["status"] == "done", job
+    assert job["source"] == "Pinterest"
+    assert "pinterest_1.jpg" in job["files"]
+    assert "proc" not in job
+
+
+def test_cancel_running_gallery_job_kills_process(server, fake_gallery):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://www.pinterest.com/pin/664281013778109217/?slow=1"})
+    assert status == 200, body
+    jid = body["job_id"]
+    deadline = time.time() + 10
+    while time.time() < deadline and app.jobs[jid].get("proc") is None:
+        time.sleep(0.05)
+    started = time.time()
+    status, _, _ = api(server, "POST", "/api/cancel", {"job_id": jid})
+    assert status == 200
+    job = wait_for(server, jid, timeout=10)
+    assert job["status"] == "cancelled"
+    assert time.time() - started < 5  # terminated, not left to sleep 30s

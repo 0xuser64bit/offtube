@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-offtube — paste-a-link media keeper (local web UI + yt-dlp engine).
+offtube — paste-a-link media keeper (local web UI + yt-dlp/gallery-dl engines).
 
 Features:
-  - Paste a link from any site yt-dlp has a dedicated extractor for
-    (YouTube, TikTok, Instagram, X, Reddit, Vimeo, Twitch, SoundCloud, …)
+  - Paste a link from any site yt-dlp (video/audio) or gallery-dl (images,
+    boards, galleries) has a dedicated extractor for: YouTube, TikTok,
+    Instagram, Pinterest, X, Reddit, Vimeo, Twitch, SoundCloud, DeviantArt, …
   - Fetch metadata + thumbnails + available qualities before downloading
   - Quality picker (best / 2160p / 1440p / 1080p / 720p / 480p / 360p / audio-only)
   - Clip trim (from-to, uses yt-dlp --download-sections, needs ffmpeg)
@@ -12,7 +13,7 @@ Features:
   - Cookies: none / upload cookies.txt (Netscape) / paste text / from browser
   - Optional subtitles, live progress, file browser
 
-Only stdlib + yt-dlp. No Flask/FastAPI needed.
+Only stdlib + yt-dlp + gallery-dl. No Flask/FastAPI needed.
 
 Usage:
     ./run.sh                     # venv + deps + serve
@@ -68,6 +69,13 @@ except ImportError:  # pragma: no cover
     yt_dlp = None
     gen_extractor_classes = None
     DownloadError = Exception
+
+try:
+    from gallery_dl import extractor as gallery_extractors
+    from gallery_dl.version import __version__ as GALLERY_DL_VERSION
+except ImportError:  # pragma: no cover
+    gallery_extractors = None
+    GALLERY_DL_VERSION = None
 
 jobs: dict[str, dict] = {}
 futures: dict[str, concurrent.futures.Future] = {}
@@ -260,9 +268,11 @@ def classify_youtube_url(url: str) -> str:
 
 
 # ------------------------------- sources -------------------------------
-# A link is supported when yt-dlp has a *dedicated* extractor for it — the
-# same one yt-dlp itself would pick. Its Generic extractor (scrape any page)
-# is never used, so outbound fetches stay on sites yt-dlp explicitly knows.
+# A link is supported when yt-dlp (video/audio, ~1,800 sites) or gallery-dl
+# (images/galleries, ~300 sites) has a *dedicated* extractor for it — the
+# one the tool itself would pick. Their catch-alls (yt-dlp Generic,
+# gallery-dl directlink/generic) are never used, so outbound fetches stay on
+# sites those projects explicitly support.
 
 # Short-link and alternate domains, folded into the site they belong to.
 SITE_ALIASES = {
@@ -320,6 +330,23 @@ def site_label(url: str) -> str:
     return SOURCE_LABELS.get(site_id(host), site_domain(host))
 
 
+# gallery-dl catch-alls: bare file URLs on any host, and any-page scraping.
+GALLERY_SKIP = frozenset({"directlink", "generic"})
+# yt-dlp only sees the video posts on these and fails (or lists a partial
+# board) on images, so gallery-dl goes first.
+GALLERY_FIRST = frozenset({"pinterest", "imgur"})
+
+
+@functools.lru_cache(maxsize=1024)
+def gallery_extractor(url: str) -> str | None:
+    """gallery-dl category for `url` ('pinterest', 'deviantart', …), or None.
+    Local regex match, no network."""
+    if gallery_extractors is None:
+        return None
+    ex = gallery_extractors.find(url)
+    return None if ex is None or ex.category in GALLERY_SKIP else ex.category
+
+
 @functools.lru_cache(maxsize=1024)
 def ytdlp_extractor(url: str) -> str | None:
     """Key of the extractor yt-dlp would pick for `url`, or None when only
@@ -356,13 +383,15 @@ def resolve_source(url: str) -> dict:
             "That service is DRM-protected (Spotify, Netflix, Disney+, …). "
             "offtube can't download from it."
         )
-    engines = ["yt-dlp"] if yt else []
+    engines = [name for name, hit in (("yt-dlp", yt), ("gallery-dl", gallery_extractor(url))) if hit]
     if not engines:
         raise ValueError(
             f"offtube doesn't support that {site_domain(host)} link. Paste a "
-            "specific video, post, track or playlist — YouTube, TikTok, "
-            "Instagram, X, Reddit, Vimeo, SoundCloud and ~1,800 more sites work."
+            "specific video, post, board, track or playlist — YouTube, TikTok, "
+            "Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more sites work."
         )
+    if sid in GALLERY_FIRST:
+        engines.reverse()
     return {"id": sid, "label": site_label(url), "engines": engines}
 
 
@@ -832,37 +861,63 @@ def _inspect_opts(payload: dict, cookie_id: str, url: str,
     return opts
 
 
+def _engine_error(exc: Exception) -> str:
+    """An engine's error without yt-dlp's 'ERROR:' prefix and 'please report
+    this issue' tail."""
+    msg = clean_text(str(exc), 400).split("; please report this issue")[0]
+    return msg.removeprefix("ERROR: ")
+
+
 def fetch_info(url: str, payload: dict) -> dict:
-    if yt_dlp is None:
-        raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
+    """Inspect `url` with each engine that supports it, in order, and return
+    the first answer, tagged with its source and engine."""
     url, src = check_url(url)
-    youtube = src["id"] == "youtube"
     if not info_sema.acquire(timeout=60):
         raise RuntimeError("Too many inspect requests. Wait a moment and retry.")
     # Inspect must be side-effect-free: pasted cookies go to an ephemeral
     # per-request file, never to the shared session file or a predictable
-    # "validate" path. Cleaned up even if extract_info raises.
-    info_cookie_id = f"info-{uuid.uuid4().hex[:12]}"
-    info = None
+    # "validate" path. Cleaned up even if an engine raises.
+    cookie_id = f"info-{uuid.uuid4().hex[:12]}"
+    errors: list[tuple[str, Exception]] = []
     try:
-        opts = _inspect_opts(payload, info_cookie_id, url)
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-        except Exception as exc:
-            if not youtube or not _is_session_failure(str(exc)):
-                raise
-            # Same session, different player clients — never a blind repeat.
-            fb_opts = _inspect_opts(payload, info_cookie_id, url,
-                                    player_clients=FALLBACK_PLAYER_CLIENTS)
-            with yt_dlp.YoutubeDL(fb_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
+        for engine in src["engines"]:
+            inspect = inspect_gallery if engine == "gallery-dl" else inspect_ytdlp
+            try:
+                info = inspect(url, payload, src, cookie_id)
+                break
+            except ValueError:
+                raise  # bad cookies/input: no other engine will do better
+            except Exception as exc:
+                errors.append((engine, exc))
+        else:
+            if len(errors) == 1:
+                raise errors[0][1]
+            raise RuntimeError(" · ".join(f"{e}: {_engine_error(x)}" for e, x in errors))
     finally:
         info_sema.release()
-        cleanup_job_cookies(info_cookie_id)
+        cleanup_job_cookies(cookie_id)
+    info["source"] = {"id": src["id"], "label": src["label"]}
+    info["engine"] = engine
+    return info
+
+
+def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
+    if yt_dlp is None:
+        raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
+    youtube = src["id"] == "youtube"
+    try:
+        with yt_dlp.YoutubeDL(_inspect_opts(payload, cookie_id, url)) as ydl:
+            info = ydl.extract_info(url, download=False)
+    except Exception as exc:
+        if not youtube or not _is_session_failure(str(exc)):
+            raise
+        # Same session, different player clients — never a blind repeat.
+        fb_opts = _inspect_opts(payload, cookie_id, url,
+                                player_clients=FALLBACK_PLAYER_CLIENTS)
+        with yt_dlp.YoutubeDL(fb_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
     if info is None:
         raise RuntimeError("Could not extract info for that URL.")
-    source = {"id": src["id"], "label": src["label"]}
     list_id = None
     if youtube:
         list_id = (urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list") or [None])[0]
@@ -887,7 +942,6 @@ def fetch_info(url: str, payload: dict) -> dict:
             )
         return {
             "type": "playlist",
-            "source": source,
             "title": info.get("title"),
             "uploader": info.get("uploader"),
             "count": info.get("playlist_count") or len(entries),
@@ -900,7 +954,6 @@ def fetch_info(url: str, payload: dict) -> dict:
         q["id"].startswith("audio") for q in qualities)
     return {
         "type": "video",
-        "source": source,
         "media": "audio" if audio_only else "video",
         "id": info.get("id"),
         "title": info.get("title"),
@@ -916,6 +969,166 @@ def fetch_info(url: str, payload: dict) -> dict:
         "part_of_playlist": bool(list_id or info.get("playlist") or info.get("playlist_id")),
         "playlist_id": list_id or info.get("playlist_id"),
     }
+
+
+# ------------------------------- gallery-dl engine -------------------------------
+# Runs as a subprocess, not via the Python API: gallery-dl's config is
+# process-global, so two jobs with different cookies would trample each
+# other. A process is also the one thing that cancels instantly.
+
+GALLERY_INSPECT_LIMIT = 50
+VIDEO_EXTS = frozenset({"mp4", "webm", "mov", "m4v", "mkv"})
+
+
+def gallery_cmd(payload: dict, cookie_id: str) -> list[str]:
+    """gallery-dl argv prefix: ignores the user's own gallery-dl config,
+    never prompts, skips text-only 'files' (story text, captions), and
+    carries the request's cookies."""
+    cmd = [sys.executable, "-m", "gallery_dl", "--config-ignore", "--no-input",
+           "--no-colors", "--filter", "extension != 'txt'"]
+    opts = resolve_cookies(payload, cookie_id)
+    if "cookiefile" in opts:
+        cmd += ["--cookies", opts["cookiefile"]]
+    elif "cookiesfrombrowser" in opts:
+        browser, profile = opts["cookiesfrombrowser"][:2]
+        cmd += ["--cookies-from-browser", browser + (f":{profile}" if profile else "")]
+    return cmd
+
+
+def gallery_range_args(payload: dict) -> list[str]:
+    """The playlist range controls, as gallery-dl --range (same syntax)."""
+    if (payload.get("playlist_mode") or "single").lower() == "single":
+        return []
+    items = (payload.get("playlist_items") or "").strip().replace(";", ",")
+    if items:
+        return ["--range", items]
+    start, end = payload.get("playlist_start"), payload.get("playlist_end")
+    if start or end:
+        return ["--range", f"{int(start or 1)}-{int(end) if end else ''}"]
+    return []
+
+
+def _gallery_text(meta: dict, keys: tuple[str, ...]) -> str | None:
+    """First non-empty string among `keys`; dict values yield their name."""
+    for k in keys:
+        v = meta.get(k)
+        if isinstance(v, dict):
+            v = v.get("full_name") or v.get("name") or v.get("username") or v.get("title")
+        if isinstance(v, str) and v.strip():
+            return clean_text(v.strip(), 200)
+    return None
+
+
+def _gallery_thumb(file_url: str, meta: dict) -> str | None:
+    if file_url.startswith(("http://", "https://")) and \
+            str(meta.get("extension") or "").lower() not in VIDEO_EXTS:
+        return file_url
+    for k in ("thumbnail", "image_medium_url", "preview"):
+        v = meta.get(k)
+        if isinstance(v, str) and v.startswith(("http://", "https://")):
+            return v
+    return None
+
+
+def inspect_gallery(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
+    """List the first files at `url` (gallery-dl -j) as a 'gallery' info."""
+    cmd = gallery_cmd(payload, cookie_id) + [
+        "-j", "--range", f"1-{GALLERY_INSPECT_LIMIT}", "--", url]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=90)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("gallery-dl took too long to list that link.")
+    try:
+        messages = json.loads(out.stdout or "[]")
+    except ValueError:
+        messages = []
+    # -j emits [type, ...]: 3 = file [3, url, meta], -1 = error [-1, {message}].
+    files = [(m[1], m[2]) for m in messages
+             if m and m[0] == 3 and len(m) > 2 and isinstance(m[2], dict)
+             and isinstance(m[1], str) and not m[1].startswith("text:")]
+    if not files:
+        errors = [m[1].get("message") for m in messages
+                  if m and m[0] == -1 and isinstance(m[1], dict)]
+        tail = (out.stderr or "").strip().splitlines()
+        raise RuntimeError(next((e for e in errors if e), None)
+                           or (tail[-1] if tail else "Nothing downloadable at that link."))
+    entries = []
+    for file_url, meta in files:
+        ext = str(meta.get("extension") or "").lower()
+        entries.append({
+            "title": _gallery_text(meta, ("title", "grid_title", "description", "content", "caption")),
+            "thumbnail": _gallery_thumb(file_url, meta),
+            "ext": ext,
+            "is_video": ext in VIDEO_EXTS,
+        })
+    videos = sum(e["is_video"] for e in entries)
+    first = files[0][1]
+    one_post = len({str(m.get("id")) for _, m in files}) == 1
+    title = (entries[0]["title"] if one_post else
+             _gallery_text(first, ("board", "album", "gallery", "collection"))
+             or f"{src['label']} {first.get('subcategory') or 'collection'}")
+    return {
+        "type": "gallery",
+        "media": "video" if videos == len(entries) else ("image" if not videos else "mixed"),
+        "title": title or f"{src['label']} post",
+        "uploader": _gallery_text(first, ("author", "user", "owner", "pinner", "uploader", "artist", "username")),
+        "count": len(entries),
+        "more": len(entries) >= GALLERY_INSPECT_LIMIT,
+        "thumbnail": next((e["thumbnail"] for e in entries if e["thumbnail"]), None),
+        "entries": entries,
+        "webpage_url": url,
+    }
+
+
+def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
+    """Download with gallery-dl; returns the names it saved (or already had)."""
+    cmd = gallery_cmd(payload, job["id"]) + [
+        "-D", str(DOWNLOAD_DIR), *gallery_range_args(payload), "--", url]
+    # Unbuffered: a piped child would otherwise hold its lines until exit.
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, encoding="utf-8", errors="replace",
+                            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    with jobs_lock:
+        job["proc"] = proc  # internal: /api/cancel terminates it
+        job["status"] = "downloading"
+        job["detail"] = "Fetching…"
+    root = DOWNLOAD_DIR.resolve()
+    files: list[str] = []
+    errors: list[str] = []
+    try:
+        # stdout: one absolute path per saved file, "# path" when it already
+        # existed; everything else is gallery-dl's log ("[site][error] …").
+        for raw in proc.stdout:
+            line = raw.rstrip("\r\n")
+            path = Path(line[2:] if line.startswith("# ") else line)
+            with jobs_lock:
+                if path.is_absolute() and path.parent.resolve() == root:
+                    if path.name not in files:
+                        files.append(path.name)
+                    job["detail"] = clean_text(f"Saved {len(files)} file{'s' if len(files) != 1 else ''} — {path.name}", 500)
+                elif line.strip():
+                    job["log"].append(clean_text(line))
+                    job["log"] = job["log"][-200:]
+                    if "][error]" in line:
+                        errors.append(line.split("][error]", 1)[1].strip())
+                if job.get("cancel_requested"):
+                    proc.terminate()
+        proc.wait()
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+        with jobs_lock:
+            job.pop("proc", None)
+    if job.get("cancel_requested"):
+        raise DownloadError("Cancelled by user.")
+    if not files:
+        raise DownloadError(errors[-1] if errors else
+                            f"gallery-dl saved nothing (exit {proc.returncode}).")
+    if errors:
+        with jobs_lock:
+            job["log"].append(f"WARNING: {len(errors)} item(s) failed; kept the rest.")
+    return files
 
 
 def build_download_opts(job: dict, payload: dict, persist: bool = True,
@@ -1149,28 +1362,30 @@ def run_download(job_id: str, payload: dict):
         job["status"] = "starting"
         job["detail"] = "Resolving formats…"
     try:
-        assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
         job = jobs.get(job_id)
         if job is None:
             return
-        opts = build_download_opts(job, payload)
         url, src = check_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
-        try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
-        except DownloadError as exc:
-            if (src["id"] != "youtube" or not _is_session_failure(str(exc))
-                    or job.get("cancel_requested")):
-                raise
-            # Same session, different player clients — visible in the UI log
-            # so a repeated failure clearly means the session itself is bad.
-            with jobs_lock:
-                job["log"].append("Session rejected by default players — retrying with alternate player clients…")
-                job["detail"] = "Retrying with alternate players…"
-            opts = build_download_opts(job, payload, player_clients=FALLBACK_PLAYER_CLIENTS)
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([url])
+        files = None
+        engines = src["engines"]
+        for i, engine in enumerate(engines):
+            try:
+                if engine == "gallery-dl":
+                    files = run_gallery(job, payload, url)
+                else:
+                    run_ytdlp(job, payload, url, src)
+                break
+            except DownloadError as exc:
+                if job.get("cancel_requested") or i == len(engines) - 1:
+                    raise
+                # e.g. an image-only tweet: yt-dlp finds no video, gallery-dl
+                # takes the photos. Logged so a double failure reads clearly.
+                with jobs_lock:
+                    job["log"].append(clean_text(
+                        f"{engine}: {_engine_error(exc)} — trying {engines[i + 1]}…"))
+                    job["detail"] = f"Trying {engines[i + 1]}…"
+                    job["progress"] = 0
         with jobs_lock:
             job = jobs.get(job_id)
             if job is None:
@@ -1183,7 +1398,7 @@ def run_download(job_id: str, payload: dict):
             job["status"] = "done"
             job["progress"] = 100
             job["detail"] = "Done."
-            job["files"] = attribute_new_files(job, before)
+            job["files"] = files if files is not None else attribute_new_files(job, before)
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except DownloadError as exc:
         msg = str(exc)
@@ -1229,6 +1444,26 @@ def run_download(job_id: str, payload: dict):
         with jobs_lock:
             futures.pop(job_id, None)
             evict_jobs_locked()
+
+
+def run_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
+    assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
+    opts = build_download_opts(job, payload)
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except DownloadError as exc:
+        if (src["id"] != "youtube" or not _is_session_failure(str(exc))
+                or job.get("cancel_requested")):
+            raise
+        # Same session, different player clients — visible in the UI log
+        # so a repeated failure clearly means the session itself is bad.
+        with jobs_lock:
+            job["log"].append("Session rejected by default players — retrying with alternate player clients…")
+            job["detail"] = "Retrying with alternate players…"
+        opts = build_download_opts(job, payload, player_clients=FALLBACK_PLAYER_CLIENTS)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
 
 
 def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
@@ -1314,6 +1549,7 @@ def environment_checks() -> dict:
             checks["yt_dlp"] = "installed"
     else:
         checks["yt_dlp"] = "missing"
+    checks["gallery_dl"] = GALLERY_DL_VERSION or "missing"
     _health_cache.update(at=now, checks=checks)
     return checks
 
@@ -1619,8 +1855,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     cleanup_job_cookies(jid)
                     return self.send_json({"ok": True, "cancelled": True})
                 # Already running: cooperative cancel via hooks. The worker
-                # notices on its next progress/postprocessor callback.
+                # notices on its next progress/postprocessor callback; a
+                # gallery-dl process is simply terminated.
                 job["cancel_requested"] = True
+                if job.get("proc") is not None:
+                    job["proc"].terminate()
                 job["detail"] = "Cancelling…"
                 return self.send_json({"ok": True, "cancelled": True, "stopping": True})
 
@@ -1688,6 +1927,10 @@ def main():
             print("\nbye!")
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
+            with jobs_lock:
+                for job in jobs.values():
+                    if job.get("proc") is not None:
+                        job["proc"].terminate()
 
 
 if __name__ == "__main__":

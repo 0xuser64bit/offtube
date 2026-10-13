@@ -10,7 +10,7 @@ if not exist .venv\Scripts\python.exe (
   python -m venv .venv
 )
 REM Install deps only when missing (fast restarts); pass --upgrade to refresh.
-.venv\Scripts\python -c "import yt_dlp" >nul 2>&1
+.venv\Scripts\python -c "import yt_dlp, gallery_dl" >nul 2>&1
 if errorlevel 1 (
   .venv\Scripts\python -m pip install -r requirements.txt
 )

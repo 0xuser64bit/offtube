@@ -861,3 +861,163 @@ def test_output_name_caps_long_captions_and_keeps_id():
 def test_failure_hint(msg, needle):
     hint = app.failure_hint(msg, "Instagram")
     assert (needle in hint) if needle else hint == ""
+
+
+# --- gallery-dl engine (fake CLI, no network) -----------------------------------
+FAKE_GALLERY = r'''
+import json, pathlib, sys, time
+args = sys.argv[1:]
+url = args[-1]
+if "-j" in args:
+    if "missing" in url:
+        print(json.dumps([[-1, {"error": "NotFoundError", "message": "Requested pin could not be found"}]]))
+    else:
+        meta = {"category": "pinterest", "subcategory": "board", "extension": "jpg",
+                "board": {"name": "Moodboard"}, "pinner": {"full_name": "Ann"}}
+        print(json.dumps([
+            [2, meta],
+            [3, "https://i.pinimg.com/originals/a.jpg", dict(meta, id="1", title="A")],
+            [3, "ytdl:https://v1.pinimg.com/b.m3u8", dict(meta, id="2", extension="mp4",
+                                                       image_medium_url="https://i.pinimg.com/b.jpg")],
+            [3, "text:follow now", dict(meta, id="2", extension="txt")],
+        ]))
+    sys.exit(0)
+d = pathlib.Path(args[args.index("-D") + 1])
+if "slow" in url:
+    time.sleep(30)
+if "fail" in url:
+    print("[pinterest][error] Requested pin could not be found", flush=True)
+    sys.exit(8)
+(d / "pinterest_1.jpg").write_bytes(b"img")
+print(d / "pinterest_1.jpg", flush=True)
+print("# " + str(d / "pinterest_0.jpg"), flush=True)
+if "partial" in url:
+    print("[pinterest][error] HttpError: 403 Forbidden", flush=True)
+    sys.exit(4)
+'''
+
+
+@pytest.fixture()
+def fake_gallery(monkeypatch):
+    monkeypatch.setattr(app, "gallery_cmd", lambda payload, cookie_id: [sys.executable, "-c", FAKE_GALLERY])
+
+
+@pytest.mark.parametrize("url, engines", [
+    ("https://www.pinterest.com/pin/664281013778109217/", ["gallery-dl", "yt-dlp"]),
+    ("https://pin.it/1Q2YHZ5Hb", ["gallery-dl"]),
+    ("https://www.pinterest.ca/mashal0407/cool-diys/", ["gallery-dl", "yt-dlp"]),
+    ("https://x.com/user/status/1234567890", ["yt-dlp", "gallery-dl"]),
+    ("https://www.deviantart.com/artist/art/Title-123456", ["gallery-dl"]),
+    ("https://www.artstation.com/artwork/abc", ["gallery-dl"]),
+    ("https://vimeo.com/76979871", ["yt-dlp"]),
+])
+def test_resolve_source_engine_order(url, engines):
+    assert app.resolve_source(url)["engines"] == engines
+
+
+def test_resolve_source_ignores_gallery_catch_alls():
+    with pytest.raises(ValueError, match="doesn't support"):
+        app.resolve_source("https://i.pinimg.com/originals/aa/bb/cc.jpg")
+
+
+def test_gallery_cmd_cookie_args(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    cmd = app.gallery_cmd({"cookies_mode": "browser", "cookies_browser": "firefox"}, "g1")
+    assert cmd[cmd.index("--cookies-from-browser") + 1] == "firefox"
+    assert "--config-ignore" in cmd and "--no-input" in cmd
+    cmd = app.gallery_cmd({"cookies_mode": "upload", "cookies_text": "AAA"}, "g2")
+    assert cmd[cmd.index("--cookies") + 1] == str(tmp_path / "job-g2.cookies.txt")
+    assert "--cookies" not in app.gallery_cmd({"cookies_mode": "none"}, "g3")
+
+
+@pytest.mark.parametrize("payload, args", [
+    ({"playlist_mode": "single", "playlist_items": "1-3"}, []),
+    ({"playlist_mode": "playlist"}, []),
+    ({"playlist_mode": "playlist", "playlist_items": "1-5;7"}, ["--range", "1-5,7"]),
+    ({"playlist_mode": "playlist", "playlist_start": "3"}, ["--range", "3-"]),
+    ({"playlist_mode": "playlist", "playlist_end": "10"}, ["--range", "1-10"]),
+])
+def test_gallery_range_args(payload, args):
+    assert app.gallery_range_args(payload) == args
+
+
+def test_inspect_gallery_lists_files_skips_text(fake_gallery):
+    src = {"id": "pinterest", "label": "Pinterest"}
+    info = app.inspect_gallery("https://www.pinterest.com/ann/moodboard/", {}, src, "i1")
+    assert info["type"] == "gallery" and info["count"] == 2
+    assert info["media"] == "mixed"
+    assert info["title"] == "Moodboard" and info["uploader"] == "Ann"
+    assert info["entries"][0]["thumbnail"] == "https://i.pinimg.com/originals/a.jpg"
+    assert info["entries"][1]["thumbnail"] == "https://i.pinimg.com/b.jpg"  # video: poster, not m3u8
+
+
+def test_inspect_gallery_surfaces_error(fake_gallery):
+    with pytest.raises(RuntimeError, match="could not be found"):
+        app.inspect_gallery("https://www.pinterest.com/pin/1/?missing", {}, {"label": "Pinterest"}, "i2")
+
+
+def _gallery_job(jid):
+    app.jobs[jid] = {"id": jid, "status": "starting", "progress": 0,
+                     "detail": "", "log": [], "files": []}
+    return app.jobs[jid]
+
+
+def test_run_gallery_collects_saved_and_existing(tmp_path, monkeypatch, fake_gallery):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("g-ok")
+    try:
+        files = app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/")
+        assert files == ["pinterest_1.jpg", "pinterest_0.jpg"]
+        assert "proc" not in job
+    finally:
+        app.jobs.clear()
+
+
+def test_run_gallery_partial_keeps_files_and_warns(tmp_path, monkeypatch, fake_gallery):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("g-partial")
+    try:
+        assert app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?partial")
+        assert any("1 item(s) failed" in ln for ln in job["log"])
+    finally:
+        app.jobs.clear()
+
+
+def test_run_gallery_nothing_saved_raises_last_error(tmp_path, monkeypatch, fake_gallery):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("g-fail")
+    try:
+        with pytest.raises(app.DownloadError, match="could not be found"):
+            app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?fail")
+    finally:
+        app.jobs.clear()
+
+
+def test_run_download_falls_back_to_gallery_for_photo_posts(tmp_path, monkeypatch, fake_gallery):
+    from types import SimpleNamespace
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
+    (tmp_path / "cookies").mkdir()
+
+    class DL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def download(self, urls):
+            raise app.DownloadError("ERROR: [twitter] 1: No video could be found in this tweet")
+
+    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
+    job = _gallery_job("x-photos")
+    try:
+        app.run_download("x-photos", {"url": "https://x.com/user/status/1234567890"})
+        assert job["status"] == "done", job["detail"]
+        assert job["files"] == ["pinterest_1.jpg", "pinterest_0.jpg"]
+        assert any("trying gallery-dl" in ln for ln in job["log"])
+    finally:
+        app.jobs.clear()
