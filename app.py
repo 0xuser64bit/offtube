@@ -93,6 +93,20 @@ def is_terminal(job: dict) -> bool:
     return job.get("status") in TERMINAL_STATUSES
 
 
+def disk_low_locked(job: dict) -> bool:
+    """Throttled free-space probe for a running job. A whole profile or
+    board can outgrow the disk long after the enqueue-time check passed.
+    Call with jobs_lock held."""
+    now = time.monotonic()
+    if now - job.get("disk_checked_at", 0.0) < DISK_CHECK_EVERY:
+        return False
+    job["disk_checked_at"] = now
+    try:
+        return shutil.disk_usage(DOWNLOAD_DIR).free < MIN_DISK_FREE
+    except OSError:
+        return False
+
+
 def active_job_count_locked() -> int:
     return sum(1 for j in jobs.values() if not is_terminal(j))
 
@@ -136,6 +150,8 @@ MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; one site's rows surviving the t
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
+DISK_CHECK_EVERY = 5.0  # seconds between free-space probes per running job
+DISK_FULL_MSG = "Stopped: the disk is almost full (<200 MB free). Free space and retry."
 
 # Origins that may read JSON responses (extension + the local web UI).
 # Never reflect * — that lets any website fetch /api/jobs and /api/files
@@ -1112,7 +1128,12 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
                     job["log"] = job["log"][-200:]
                     if "][error]" in line:
                         errors.append(line.split("][error]", 1)[1].strip())
+                # ponytail: checked per output line, so one huge file can
+                # overshoot; poll on a timer if that ever bites.
                 if job.get("cancel_requested"):
+                    proc.terminate()
+                elif disk_low_locked(job):
+                    job["disk_full"] = True
                     proc.terminate()
         proc.wait()
     finally:
@@ -1122,6 +1143,8 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
             job.pop("proc", None)
     if job.get("cancel_requested"):
         raise DownloadError("Cancelled by user.")
+    if job.get("disk_full"):
+        raise DownloadError(DISK_FULL_MSG)
     if not files:
         raise DownloadError(errors[-1] if errors else
                             f"gallery-dl saved nothing (exit {proc.returncode}).")
@@ -1251,6 +1274,9 @@ def progress_hook(job_id: str, d: dict):
         # Cooperative cancel: run_download's hooks raise to abort yt-dlp.
         if job.get("cancel_requested"):
             raise DownloadError("Cancelled by user.")
+        if status == "downloading" and disk_low_locked(job):
+            job["disk_full"] = True
+            raise DownloadError(DISK_FULL_MSG)
         fn = d.get("filename")
         info_dict = d.get("info_dict") or {}
         if fn:
@@ -1377,7 +1403,7 @@ def run_download(job_id: str, payload: dict):
                     run_ytdlp(job, payload, url, src)
                 break
             except DownloadError as exc:
-                if job.get("cancel_requested") or i == len(engines) - 1:
+                if job.get("cancel_requested") or job.get("disk_full") or i == len(engines) - 1:
                     raise
                 # e.g. an image-only tweet: yt-dlp finds no video, gallery-dl
                 # takes the photos. Logged so a double failure reads clearly.

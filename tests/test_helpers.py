@@ -1021,3 +1021,36 @@ def test_run_download_falls_back_to_gallery_for_photo_posts(tmp_path, monkeypatc
         assert any("trying gallery-dl" in ln for ln in job["log"])
     finally:
         app.jobs.clear()
+
+
+# --- in-flight disk guard ----------------------------------------------------------
+def _low_disk(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(app.shutil, "disk_usage",
+                        lambda *a, **k: SimpleNamespace(free=app.MIN_DISK_FREE - 1))
+
+
+def test_progress_hook_stops_when_disk_runs_low(monkeypatch):
+    _low_disk(monkeypatch)
+    app.jobs["d1"] = {"id": "d1", "status": "downloading", "log": []}
+    try:
+        with pytest.raises(app.DownloadError, match="disk is almost full"):
+            app.progress_hook("d1", {"status": "downloading", "downloaded_bytes": 1})
+        assert app.jobs["d1"]["disk_full"] is True
+        # throttled: the next hook inside DISK_CHECK_EVERY doesn't re-probe
+        assert app.disk_low_locked(app.jobs["d1"]) is False
+    finally:
+        app.jobs.clear()
+
+
+def test_run_download_disk_full_is_error_not_engine_fallback(tmp_path, monkeypatch, fake_gallery):
+    _low_disk(monkeypatch)
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("d2")
+    try:
+        app.run_download("d2", {"url": "https://www.pinterest.com/pin/664281013778109217/"})
+        assert job["status"] == "error"
+        assert "disk is almost full" in job["detail"]
+        assert not any("trying yt-dlp" in ln for ln in job["log"])
+    finally:
+        app.jobs.clear()
