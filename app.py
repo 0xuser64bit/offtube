@@ -124,7 +124,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 MAX_JSON_BODY = 2 * 1024 * 1024  # full-browser cookie pastes can be MBs; trimmed after parse
 MAX_URL_LEN = 2000
-MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; YouTube-only rows surviving the trim are KBs
+MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; one site's rows surviving the trim are KBs
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
@@ -503,11 +503,11 @@ def cleanup_job_temps(job: dict | None) -> None:
         pass
 
 
-# Cookie domains yt-dlp needs for YouTube auth. Full-browser exports carry
-# MBs of unrelated sites (and used to trip the body cap), so pastes are
-# trimmed to these suffixes before being written to disk.
-COOKIE_KEEP_SUFFIXES = (".youtube.com", ".youtu.be", ".googlevideo.com",
-                        ".google.com", ".youtube-nocookie.com")
+# Full-browser exports carry MBs of unrelated sites (bank, mail, ...), so a
+# paste is trimmed to the target link's site before it touches disk. Some
+# sites sign in on a sibling domain too: YouTube rides Google's session,
+# Threads rides Instagram's.
+COOKIE_SIBLINGS = {"youtube": ("google", "googlevideo"), "threads": ("instagram",)}
 
 NETSCAPE_MAGIC = "# Netscape HTTP Cookie File"
 
@@ -550,11 +550,11 @@ def _cookie_domain_from_row(line: str) -> str | None:
     return fields[0].strip().lower().lstrip(".")
 
 
-def _cookie_domain_kept(domain: str) -> bool:
+def _cookie_domain_kept(domain: str, site: str) -> bool:
     if domain == "":
         return True
-    return any(domain == sfx.lstrip(".") or domain.endswith(sfx)
-               for sfx in COOKIE_KEEP_SUFFIXES)
+    sid = site_id(domain)
+    return sid == site or sid in COOKIE_SIBLINGS.get(site, ())
 
 
 def looks_like_cookie_export(text: str) -> bool:
@@ -565,14 +565,14 @@ def looks_like_cookie_export(text: str) -> bool:
         return False
 
 
-def filter_cookies_text(text: str) -> str:
-    """Trim a cookies.txt paste to YouTube-relevant domains.
+def filter_cookies_text(text: str, site: str) -> str:
+    """Trim a cookies.txt paste to one site's domains (site_id, e.g. 'x').
 
-    Keeps real comment lines, blank lines, and YouTube/Google cookie rows
-    (including #HttpOnly_ rows). Drops other sites' cookies — including
-    their HttpOnly rows, which used to sneak through as comments. Prepends
-    the Netscape magic header when rows exist but it's missing. Non-exports
-    pass through byte-identical.
+    Keeps real comment lines, blank lines, and that site's cookie rows
+    (including #HttpOnly_ rows and COOKIE_SIBLINGS). Drops other sites'
+    cookies — including their HttpOnly rows, which used to sneak through as
+    comments. Prepends the Netscape magic header when rows exist but it's
+    missing. Non-exports pass through byte-identical.
     """
     if not looks_like_cookie_export(text):
         return text
@@ -589,7 +589,7 @@ def filter_cookies_text(text: str) -> str:
                 has_magic = True
             kept.append(line)
             continue
-        if _cookie_domain_kept(domain):
+        if _cookie_domain_kept(domain, site):
             kept.append(line)
     if not has_magic:
         kept.insert(0, NETSCAPE_MAGIC)
@@ -639,13 +639,18 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
     if mode in ("upload", "text", "file"):
         text = payload.get("cookies_text") or ""
         if len(text) > MAX_COOKIES_TEXT:
-            raise ValueError("Cookies paste is too large (max ~1 MB). Export YouTube-only cookies instead of your whole browser.")
+            raise ValueError("Cookies paste is too large (max ~1 MB). Export just this site's cookies instead of your whole browser.")
+        try:
+            site = url_site(validate_url(payload.get("url")))
+        except ValueError:
+            site = ""  # no link yet: nothing to trim against
         if text:
-            if looks_like_cookie_export(text):
-                text = filter_cookies_text(text)
+            if site and looks_like_cookie_export(text):
+                text = filter_cookies_text(text, site)
                 if not any(ln.strip() and not ln.strip().startswith("#")
                            for ln in text.splitlines()):
-                    raise ValueError("No YouTube cookies found in that file. Export while on youtube.com, logged in (single account), then retry.")
+                    label = SOURCE_LABELS.get(site, site)
+                    raise ValueError(f"No {label} cookies found in that file. Export while signed in to {label} (single account), then retry.")
             target = cookie_file_for(job_id)
             if persist:
                 target.write_text(text, encoding="utf-8")
@@ -1343,7 +1348,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     remaining -= len(chunk)
             except Exception:
                 pass
-            raise HttpError(413, "Request body too large (max ~2 MB). If pasting cookies, export YouTube-only cookies instead of your whole browser.")
+            raise HttpError(413, "Request body too large (max ~2 MB). If pasting cookies, export just this site's cookies instead of your whole browser.")
         raw = self.rfile.read(length)
         try:
             data = json.loads(raw.decode("utf-8"))

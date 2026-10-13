@@ -295,7 +295,7 @@ def test_filter_cookies_keeps_youtube_drops_foreign():
         HTTPONLY_ROW, YOUTUBE_ROW, GOOGLE_ROW, FOREIGN_ROW, HTTPONLY_FOREIGN,
         "not-a-cookie-row",
     ])
-    out = app.filter_cookies_text(raw)
+    out = app.filter_cookies_text(raw, "youtube")
     assert "SID" in out and "LOGIN_INFO" in out and "APISID" in out
     assert "facebook" not in out and "c_user" not in out
     assert "not-a-cookie-row" in out  # non-rows pass through untouched
@@ -303,29 +303,49 @@ def test_filter_cookies_keeps_youtube_drops_foreign():
 
 def test_filter_cookies_drops_httponly_foreign_only_export():
     raw = "\n".join(["# Netscape HTTP Cookie File", HTTPONLY_FOREIGN, HTTPONLY_ROW])
-    out = app.filter_cookies_text(raw)
+    out = app.filter_cookies_text(raw, "youtube")
     assert "SID" in out
     assert "facebook" not in out and "c_user" not in out
 
 
 def test_filter_cookies_adds_magic_header_when_missing():
-    out = app.filter_cookies_text(YOUTUBE_ROW + "\n")
+    out = app.filter_cookies_text(YOUTUBE_ROW + "\n", "youtube")
     assert out.startswith("# Netscape HTTP Cookie File")
     assert "LOGIN_INFO" in out
 
 
 def test_filter_cookies_leaves_non_export_byte_identical():
-    assert app.filter_cookies_text("AAA") == "AAA"
-    assert app.filter_cookies_text("") == ""
+    assert app.filter_cookies_text("AAA", "youtube") == "AAA"
+    assert app.filter_cookies_text("", "youtube") == ""
 
 
 def test_resolve_cookies_trims_export_to_youtube(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
     monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
     raw = "# Netscape HTTP Cookie File\n" + YOUTUBE_ROW + "\n" + FOREIGN_ROW + "\n"
-    app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw}, job_id="trim1")
+    app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw,
+                         "url": "https://youtu.be/dQw4w9WgXcQ"}, job_id="trim1")
     written = (tmp_path / "job-trim1.cookies.txt").read_text()
     assert "LOGIN_INFO" in written and "facebook" not in written
+
+
+X_ROW = ".x.com\tTRUE\t/\tTRUE\t9999999999\tauth_token\tt"
+TWITTER_ROW = ".twitter.com\tTRUE\t/\tTRUE\t9999999999\tct0\tc"
+
+
+def test_filter_cookies_trims_to_target_site():
+    raw = "\n".join(["# Netscape HTTP Cookie File", X_ROW, TWITTER_ROW, YOUTUBE_ROW, GOOGLE_ROW])
+    out = app.filter_cookies_text(raw, "x")
+    assert "auth_token" in out and "ct0" in out  # twitter.com folds into x
+    assert "LOGIN_INFO" not in out and "APISID" not in out  # google is YouTube's sibling only
+
+
+def test_resolve_cookies_names_the_site_when_export_misses_it(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    raw = "# Netscape HTTP Cookie File\n" + YOUTUBE_ROW + "\n"
+    with pytest.raises(ValueError, match="No TikTok cookies"):
+        app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw,
+                             "url": "https://www.tiktok.com/@a/video/6718335390845095173"})
 
 
 def test_resolve_cookies_rejects_export_without_youtube(tmp_path, monkeypatch):
@@ -333,7 +353,8 @@ def test_resolve_cookies_rejects_export_without_youtube(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "session.txt")
     raw = "# Netscape HTTP Cookie File\n" + FOREIGN_ROW + "\n"
     with pytest.raises(ValueError, match="No YouTube cookies"):
-        app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw})
+        app.resolve_cookies({"cookies_mode": "upload", "cookies_text": raw,
+                             "url": "https://youtu.be/dQw4w9WgXcQ"})
 
 
 def _clear_runtime_cache():
@@ -731,7 +752,7 @@ def test_quality_to_format_numeric_height():
 # --- filter_cookies_text foreign-only export ------------------------------------
 def test_filter_cookies_text_foreign_only_returns_rows():
     raw = "# Netscape HTTP Cookie File\n" + FOREIGN_ROW + "\n"
-    out = app.filter_cookies_text(raw)
+    out = app.filter_cookies_text(raw, "youtube")
     assert "facebook" not in out and "c_user" not in out
     assert out.startswith("# Netscape HTTP Cookie File")
 

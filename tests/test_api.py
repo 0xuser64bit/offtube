@@ -228,7 +228,7 @@ def test_body_too_large_rejected(server):
     status, body, _ = api(server, "POST", "/api/info",
                            raw_body=b'{"url":"x", "pad":"' + b"y" * 2_600_000 + b'"}')
     assert status == 413
-    assert "YouTube-only" in body.get("error", "")
+    assert "just this site" in body.get("error", "")
 
 
 def test_invalid_json_rejected(server):
