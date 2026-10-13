@@ -13,3 +13,5 @@ __pycache__/
 # local agent tooling — not part of the product
 .agents/
 skills-lock.json
+# design-tool scratch (decision pages)
+.impeccable/questions/

@@ -1,50 +1,116 @@
-/* offtube frontend — no build step, plain JS. */
+/* offtube web app — contact sheet. Plain JS, no build step.
+ *
+ * A pasted link becomes a print: black film rebate, edge-printed with the
+ * site and kind. Collections become a sheet whose prints you circle. While
+ * a file downloads its print develops from negative to positive; when it
+ * lands, a pencil tick. Marks are an overlay and never touch the print.
+ */
 "use strict";
 
 const $ = (id) => document.getElementById(id);
 const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
-
-const DEFAULT_VIDEO = [
-  { id: "best", label: "Best available", sub: "highest stream · merges to MP4", tag: "auto" },
-  { id: "2160", label: "2160p", sub: "4K ceiling" },
-  { id: "1440", label: "1440p", sub: "QHD ceiling" },
-  { id: "1080", label: "1080p", sub: "Full HD ceiling" },
-  { id: "720", label: "720p", sub: "HD ceiling" },
-  { id: "480", label: "480p", sub: "small file" },
-  { id: "360", label: "360p", sub: "smallest" },
-];
-const DEFAULT_AUDIO = [
-  { id: "audio_mp3", label: "MP3", sub: "192 kbps · widest support", tag: "audio" },
-  { id: "audio_m4a", label: "M4A", sub: "192 kbps · Apple-friendly", tag: "audio" },
-];
-
-let fetchedQualities = null; // raw ladder from /api/info (video type)
-let fetchToken = 0;
-let pollTimer = null;
-let queueTimer = null;
-let allFiles = [];
-let activeJobId = null;
-let lastInfo = null;
-
-// Errors that mean "give the site a signed-in session" — open Access.
-const NEEDS_ACCESS = /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership/i;
-const MEDIA_WORD = { image: "Image", video: "Video", audio: "Audio", mixed: "Post" };
-
-const escapeHtml = (s) =>
+const esc = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pad2 = (n) => String(n).padStart(2, "0");
+const checked = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
 
-/* ---------------- payload ---------------- */
-function outputType() {
-  return document.querySelector('input[name="otype"]:checked')?.value || "video";
+// Errors that mean "give the site a signed-in session".
+const NEEDS_ACCESS = /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership|login/i;
+const MEDIA_WORD = { image: "Image", video: "Video", audio: "Audio", mixed: "Post" };
+const ACTIVE = ["queued", "starting", "downloading", "processing"];
+const STATE_WORD = {
+  queued: "Waiting", starting: "Starting", downloading: "Developing", processing: "Fixing",
+  done: "Kept", error: "Failed", cancelled: "Cancelled",
+};
+
+// Grease-pencil strokes in a 100×100 box, stretched over whatever they mark.
+const MARKS = {
+  circle: "M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15",
+  tick: "M12 56C21 62 29 71 37 84C49 59 66 33 91 10",
+  strike: "M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86",
+};
+const markSvg = (kind) =>
+  `<svg class="mark mark-${kind}" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${MARKS[kind]}"/></svg>`;
+
+const VIDEO_LADDER = [
+  { id: "best", name: "Best available", sub: "highest stream" },
+  { id: "2160", name: "2160p", sub: "4K" },
+  { id: "1440", name: "1440p", sub: "QHD" },
+  { id: "1080", name: "1080p", sub: "Full HD" },
+  { id: "720", name: "720p", sub: "HD" },
+  { id: "480", name: "480p", sub: "small" },
+  { id: "360", name: "360p", sub: "smallest" },
+];
+const AUDIO_LADDER = [
+  { id: "audio_mp3", name: "MP3", sub: "192 kbps · plays anywhere" },
+  { id: "audio_m4a", name: "M4A", sub: "192 kbps · Apple-friendly" },
+];
+
+const state = {
+  info: null,          // last successful inspect
+  infoUrl: "",         // the field value that produced it
+  marks: new Set(),    // circled item numbers on a collection sheet
+  fetchToken: 0,
+  activeJobId: null,   // job shown on the deck
+  printJobId: null,    // job started from the current print (develops it)
+  pollTimer: null,
+  files: [],
+  shownFiles: 60,
+  diskFree: "",
+};
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
 }
-function selectedQuality() {
-  return document.querySelector('input[name="q"]:checked')?.value || (outputType() === "audio" ? "audio_mp3" : "best");
+const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
+
+/* ================= what the next Keep will send ================= */
+
+function outputType() { return checked("otype") || "video"; }
+function selectedQuality() { return checked("q") || (outputType() === "audio" ? "audio_mp3" : "best"); }
+function cookiesMode() { return checked("cmode") || "none"; }
+
+function accessFields() {
+  const mode = cookiesMode();
+  return {
+    cookies_mode: mode,
+    cookies_text: mode === "upload" ? $("cookieText").value : "",
+    cookies_browser: $("cookieBrowserName").value,
+  };
 }
-function cookiesMode() {
-  return document.querySelector('input[name="cmode"]:checked')?.value || "none";
+
+// 1,2,3,5,7,8 → "1-3,5,7-8"
+function ranges(nums) {
+  const s = [...nums].sort((a, b) => a - b);
+  const out = [];
+  for (let i = 0; i < s.length; i++) {
+    let j = i;
+    while (j + 1 < s.length && s[j + 1] === s[j] + 1) j++;
+    out.push(j > i ? `${s[i]}-${s[j]}` : String(s[i]));
+    i = j;
+  }
+  return out.join(",");
 }
+
+function scopeFields() {
+  if (state.marks.size) return { playlist_mode: "playlist", playlist_items: ranges(state.marks) };
+  return {
+    playlist_mode: checked("plmode") || "single",
+    playlist_start: $("plStart").value.trim(),
+    playlist_end: $("plEnd").value.trim(),
+    playlist_items: $("plItems").value.trim(),
+  };
+}
+
+function currentInfo() {
+  return state.info && state.infoUrl === $("url").value.trim() ? state.info : null;
+}
+
 function payload() {
-  const pl = document.querySelector('input[name="plmode"]:checked');
+  const info = currentInfo();
   return {
     url: $("url").value.trim(),
     quality: selectedQuality(),
@@ -53,298 +119,285 @@ function payload() {
     sub_lang: ($("subLang").value.trim() || "en").slice(0, 20),
     clip_from: $("clipFrom").value.trim(),
     clip_to: $("clipTo").value.trim(),
-    playlist_mode: pl ? pl.value : "single",
-    playlist_start: $("plStart").value.trim(),
-    playlist_end: $("plEnd").value.trim(),
-    playlist_items: $("plItems").value.trim(),
-    cookies_mode: cookiesMode(),
-    cookies_text: $("cookieText") ? $("cookieText").value : "",
-    cookies_browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
-  };
-}
-function infoPayload() {
-  // Inspect needs only URL + access method; don't send clip/playlist/quality.
-  return {
-    url: $("url").value.trim(),
-    cookies_mode: cookiesMode(),
-    cookies_text: $("cookieText") ? $("cookieText").value : "",
-    cookies_browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
+    ...scopeFields(),
+    ...accessFields(),
+    title: info ? info.title || "" : "",
+    thumbnail: info ? info.thumbnail || "" : "",
   };
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
-  return data;
+/* ================= formats ================= */
+
+function formatOptions() {
+  const info = currentInfo();
+  if (info && info.type === "gallery") {
+    return [{ id: "best", name: "Original files", sub: "as posted" }];
+  }
+  if (outputType() === "audio") return AUDIO_LADDER;
+  const ladder = info && info.qualities ? info.qualities.filter((q) => q.id === "best" || /^\d{3,4}$/.test(q.id)) : [];
+  if (!ladder.length) return VIDEO_LADDER;
+  return ladder.map((q) => q.id === "best"
+    ? { id: "best", name: "Best available", sub: "highest stream" }
+    : { id: q.id, name: `${q.id}p`, sub: q.filesize_str ? `~${q.filesize_str}` : "", size: q.filesize_str });
 }
 
-/* ---------------- quality ladder ---------------- */
-function videoOptions() {
-  if (fetchedQualities && fetchedQualities.length) {
-    return fetchedQualities
-      .filter((q) => q.id === "best" || /^\d{3,4}$/.test(q.id))
-      .map((q) => ({
-        id: q.id,
-        label: q.id === "best" ? "Best available" : `${q.id}p`,
-        sub:
-          q.id === "best"
-            ? "highest detected stream"
-            : q.filesize_str
-              ? `~${q.filesize_str}`
-              : "ceiling",
-        tag: q.id === "best" ? "auto" : undefined,
-      }));
-  }
-  return DEFAULT_VIDEO;
-}
-function audioOptions() {
-  if (fetchedQualities && fetchedQualities.length) {
-    const aud = fetchedQualities.filter((q) => String(q.id).startsWith("audio"));
-    if (aud.length) {
-      return aud.map((q) => ({
-        id: q.id,
-        label: q.id === "audio_mp3" ? "MP3" : q.id === "audio_m4a" ? "M4A" : q.label,
-        sub: q.id === "audio_mp3" ? "192 kbps · widest support" : "192 kbps · Apple-friendly",
-        tag: "audio",
-      }));
-    }
-  }
-  return DEFAULT_AUDIO;
-}
-
-function renderQualities() {
-  const box = $("qualities");
-  if (lastInfo && lastInfo.type === "gallery") {
-    // gallery-dl keeps files exactly as served; there is nothing to pick.
-    box.innerHTML = `<label class="q-opt">
-        <input type="radio" name="q" value="best" checked />
-        <span class="q-row"><span class="q-radio" aria-hidden="true"></span><span class="q-name">Original files</span><span class="q-tag">as posted</span><span class="q-sub">no re-encode</span></span>
-      </label>`;
-    $("qualityNote").textContent = "Images and clips are saved exactly as the site serves them, full size.";
-    return;
-  }
+function renderFormats() {
   const keep = selectedQuality();
-  const list = outputType() === "audio" ? audioOptions() : videoOptions();
-  const ids = new Set(list.map((q) => q.id));
-  const sel = ids.has(keep) ? keep : list[0].id;
-  box.innerHTML = list
-    .map(
-      (q) => `<label class="q-opt">
-        <input type="radio" name="q" value="${escapeHtml(q.id)}"${q.id === sel ? " checked" : ""} />
-        <span class="q-row">
-          <span class="q-radio" aria-hidden="true"></span>
-          <span class="q-name">${escapeHtml(q.label)}</span>
-          ${q.tag ? `<span class="q-tag">${escapeHtml(q.tag)}</span>` : ""}
-          <span class="q-sub">${escapeHtml(q.sub || "")}</span>
-        </span>
-      </label>`
-    )
-    .join("");
+  const list = formatOptions();
+  const sel = list.some((q) => q.id === keep) ? keep : list[0].id;
+  $("qualities").innerHTML = list.map((q) => `<label class="fmt">
+      <input type="radio" name="q" value="${esc(q.id)}"${q.id === sel ? " checked" : ""} />
+      <span class="fmt-name">${esc(q.name)}${markSvg("circle")}</span>
+      <span class="fmt-sub">${esc(q.sub || "")}</span>
+    </label>`).join("");
+  const info = currentInfo();
   $("qualityNote").textContent =
-    outputType() === "audio"
-      ? "Audio is extracted with ffmpeg after download."
-      : fetchedQualities
-        ? "Ceilings come from the inspected video — unavailable heights fall back gracefully."
-        : "“Best” keeps the highest available stream and merges to MP4.";
+    info && info.type === "gallery" ? "Every image and clip is saved exactly as the site serves it, full size."
+      : outputType() === "audio" ? "Converted with ffmpeg once the download lands."
+        : info && info.qualities ? "Sizes are the site’s estimates. A height it doesn’t have falls back to the next best."
+          : "Best keeps the highest stream and saves MP4.";
+  syncTally();
 }
 
-$$('input[name="otype"]').forEach((r) => r.addEventListener("change", renderQualities));
+/* ================= option notes ================= */
 
-/* ---------------- option states ---------------- */
-function syncStates() {
-  const trimOn = $("clipFrom").value.trim() !== "" || $("clipTo").value.trim() !== "";
-  $("trimState").textContent = trimOn ? "on" : "off";
-  $("trimState").classList.toggle("is-on", trimOn);
+function syncNotes() {
+  const from = $("clipFrom").value.trim(), to = $("clipTo").value.trim();
+  setNote("trimState", from || to ? `${from || "start"} → ${to || "end"}` : "Whole video", Boolean(from || to));
 
-  const isPl = document.querySelector('input[name="plmode"]:checked')?.value === "playlist";
-  $("plState").textContent = isPl ? "on" : "off";
-  $("plState").classList.toggle("is-on", isPl);
-  const bits = [];
-  if (isPl) {
+  const mode = checked("plmode");
+  let pl = "This item";
+  if (state.marks.size) pl = `${state.marks.size} circled`;
+  else if (mode === "playlist") {
     const s = $("plStart").value.trim(), e = $("plEnd").value.trim(), it = $("plItems").value.trim();
-    bits.push(it ? `items ${it}` : s || e ? `#${s || "1"}–${e || "end"}` : "whole collection");
+    pl = it ? `Items ${it}` : s || e ? `#${s || 1}–${e || "last"}` : "Whole collection";
   }
-  $("plSummary").textContent = isPl ? bits.join("") || "collection" : "single item";
-  $("plRangeRow").style.opacity = isPl ? "1" : "0.45";
+  setNote("plState", pl, Boolean(state.marks.size) || mode === "playlist");
+  $("plRangeRow").classList.toggle("is-off", mode !== "playlist");
+
+  const subs = $("subs").checked;
+  setNote("subsState", subs ? ($("subLang").value.trim() || "en") : "Off", subs);
 
   const cm = cookiesMode();
-  $("accessState").textContent = cm === "none" ? "off" : "on";
-  $("accessState").classList.toggle("is-on", cm !== "none");
-  $("accessSummary").textContent =
-    cm === "none" ? "public — no login" : cm === "upload" ? "cookies file" : `browser — ${$("cookieBrowserName").value}`;
+  const browserName = $("cookieBrowserName").selectedOptions[0]?.textContent || "Browser";
+  setNote("accessState", cm === "browser" ? `${browserName} cookies` : cm === "upload" ? "Cookies file" : "Not needed", cm !== "none");
   $("cookieNone").classList.toggle("hidden", cm !== "none");
-  $("cookieUpload").classList.toggle("hidden", cm !== "upload");
   $("cookieBrowser").classList.toggle("hidden", cm !== "browser");
+  $("cookieUpload").classList.toggle("hidden", cm !== "upload");
+  syncTally();
 }
-["clipFrom", "clipTo", "plStart", "plEnd", "plItems"].forEach((id) => $(id).addEventListener("input", syncStates));
-$$('input[name="plmode"]').forEach((r) => r.addEventListener("change", syncStates));
-$$('input[name="cmode"]').forEach((r) => r.addEventListener("change", syncStates));
-$("cookieBrowserName").addEventListener("change", syncStates);
 
-$("clearClip").addEventListener("click", () => {
-  $("clipFrom").value = "";
-  $("clipTo").value = "";
-  $("trimError").classList.add("hidden");
-  syncStates();
-  $("clipFrom").focus();
-});
+function setNote(id, text, on) {
+  const el = $(id);
+  el.textContent = text;
+  el.classList.toggle("is-on", on);
+}
 
-$("cookieFile").addEventListener("change", async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  $("cookieText").value = await f.text();
-  $("cookieFileName").textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
-});
+// The j-card's discipline: always say what this Keep adds up to.
+function syncTally() {
+  const info = currentInfo();
+  const free = state.diskFree ? `${esc(state.diskFree)} free on this disk` : "";
+  let what = "";
+  if (info) {
+    const many = info.type === "playlist" || (info.type === "gallery" && info.count > 1);
+    if (state.marks.size) what = `<b>${state.marks.size} circled item${state.marks.size === 1 ? "" : "s"}</b>`;
+    else if (many && (checked("plmode") === "playlist")) what = `<b>${info.count || "All"}${info.more ? "+" : ""} items</b>`;
+    else if (info.type === "gallery") what = `<b>${info.count > 1 ? `${info.count} files` : "1 file"}</b>`;
+    else {
+      const size = (formatOptions().find((q) => q.id === selectedQuality()) || {}).size;
+      what = `<b>1 ${outputType() === "audio" ? "audio file" : "video"}</b>${size ? ` · ~${esc(size)}` : ""}`;
+    }
+  }
+  $("tally").innerHTML = [what, free].filter(Boolean).join(" · ");
+}
 
-/* ---------------- inspect ---------------- */
+/* ================= the print ================= */
+
 function looksLikeUrl(v) {
-  // Any host.tld/path; the server decides whether the site is supported.
   return /^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+\/\S/i.test(v.trim());
 }
 
-let debounce = null;
-$("url").addEventListener("input", () => {
-  clearTimeout(debounce);
-  debounce = setTimeout(() => {
-    if (looksLikeUrl($("url").value)) fetchInfo();
-  }, 700);
-});
-$("url").addEventListener("paste", () => {
-  clearTimeout(debounce);
-  debounce = setTimeout(() => fetchInfo(), 250);
-});
-$("url").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") { e.preventDefault(); fetchInfo(); }
-});
-$("fetchBtn").addEventListener("click", fetchInfo);
+function showProblem(msg) {
+  $("infoErrorText").textContent = msg;
+  $("infoErrorFix").classList.toggle("hidden", !NEEDS_ACCESS.test(msg));
+  const box = $("infoError");
+  box.classList.remove("hidden");
+  // restart the strike
+  const svg = box.querySelector(".mark");
+  svg.replaceWith(svg.cloneNode(true));
+}
+function hideProblem() { $("infoError").classList.add("hidden"); }
 
-function previewLoading() {
-  const box = $("infoBox");
-  box.classList.remove("is-empty");
-  box.innerHTML = `<div class="preview-loading" aria-label="Inspecting link">
-    <div class="thumb-skel"></div>
-    <div class="lines-skel"><i style="width:82%"></i><i style="width:60%"></i><i></i></div>
-  </div>`;
+function showBlank() {
+  $("blank").classList.remove("hidden");
+  $("print").classList.add("hidden");
+  document.body.dataset.kind = "";
+  document.body.dataset.media = "";
 }
 
-async function fetchInfo() {
-  const url = $("url").value.trim();
-  const err = $("infoError");
-  err.classList.add("hidden");
-  if (!url) {
-    err.textContent = "Paste a link first.";
-    err.classList.remove("hidden");
+function renderExposing(url) {
+  $("blank").classList.add("hidden");
+  const host = (url.replace(/^https?:\/\//, "").split("/")[0] || "").replace(/^www\./, "");
+  $("print").innerHTML = `<figure class="print is-exposing">
+      <div class="rebate">
+        <div class="edge-row"><span class="edge">${esc(host)}</span><span class="edge edge-amber">Exposing…</span></div>
+        <div class="frame"><div class="frame-empty"><span class="edge edge-dim">Reading the link</span></div></div>
+        <div class="edge-row"><span class="edge edge-dim">01</span><span class="edge edge-dim">offtube</span></div>
+      </div>
+      <figcaption class="print-cap"><h2 class="print-title">Reading the link…</h2><p class="print-meta">Nothing is kept until you press Keep.</p></figcaption>
+    </figure>`;
+  $("print").classList.remove("hidden");
+}
+
+function developHtml(src, extra = "") {
+  return `<span class="develop"><img class="pos" src="${esc(src)}" alt="" />` +
+    `<img class="neg" src="${esc(src)}" alt="" /><span class="mark-slot">${extra}</span></span>`;
+}
+
+function renderPrint(info) {
+  state.info = info;
+  state.infoUrl = $("url").value.trim();
+  state.marks.clear();
+  state.printJobId = null;
+  document.body.dataset.kind = info.type === "gallery" ? "gallery" : "";
+  document.body.dataset.media = info.media || "";
+  const site = (info.source && info.source.label) || "Link";
+  const many = info.type === "playlist" || (info.type === "gallery" && info.count > 1);
+  const box = $("print");
+  $("blank").classList.add("hidden");
+
+  if (many) {
+    const entries = info.entries || [];
+    const count = info.count || entries.length;
+    const label = info.type === "playlist" ? "Playlist" : "Collection";
+    box.innerHTML = `<figure class="print sheet" id="printFig">
+      <div class="rebate">
+        <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? "+" : ""} items</span></div>
+        <ol class="contact">${entries.map((e, i) => `<li>
+          <button type="button" class="cell" aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ""}">
+            <span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}${e.is_video ? `<span class="cell-tag edge">Video</span>` : ""}</span>
+            ${markSvg("circle")}
+            <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>
+          </button></li>`).join("")}</ol>
+        <div class="edge-row"><span class="edge edge-dim">Circle prints to keep only those</span><span class="edge" id="sheetCount"></span></div>
+      </div>
+      <figcaption class="print-cap">
+        <h2 class="print-title">${esc(info.title || `${site} ${label.toLowerCase()}`)}</h2>
+        ${info.uploader ? `<p class="print-meta">${esc(info.uploader)}</p>` : ""}
+        <p class="print-tools"><span class="count" id="markCount"></span><button class="text-btn" type="button" id="markAll">Circle all shown</button><button class="text-btn" type="button" id="markNone">Clear circles</button></p>
+        ${info.more || count > entries.length ? `<p class="print-note">The sheet shows the first ${entries.length}. Keep takes the whole collection unless you circle prints or set a range under Collection.</p>` : ""}
+      </figcaption>
+    </figure>`;
+    document.querySelector('input[name="plmode"][value="playlist"]').checked = true;
+    syncMarks();
+  } else {
+    const kind = info.type === "gallery" ? MEDIA_WORD[info.media] || "Post" : MEDIA_WORD[info.media] || "Video";
+    const right = info.is_live ? "Live" : info.duration_str && info.duration_str !== "-" ? info.duration_str : "";
+    const top = (info.qualities || []).find((q) => /^\d+$/.test(q.id));
+    const bottom = info.type === "gallery" ? "Original file" : top ? `Up to ${top.id}p` : info.media === "audio" ? "Audio" : "";
+    const meta = [info.uploader, info.type === "video" && right && !info.is_live ? right : ""].filter(Boolean).map(esc).join(" · ");
+    const notes = [
+      info.is_live ? "Live stream: keeping records from now on, and trim doesn’t apply." : "",
+      info.part_of_playlist ? "Part of a playlist. Only this one is kept unless you choose Collection." : "",
+    ].filter(Boolean).map((n) => `<p class="print-note">${esc(n)}</p>`).join("");
+    box.innerHTML = `<figure class="print" id="printFig">
+      <div class="rebate">
+        <div class="edge-row"><span class="edge">${esc(site)} · ${esc(kind)}</span><span class="edge edge-dim">${esc(right)}</span></div>
+        <div class="frame">${info.thumbnail ? developHtml(info.thumbnail) : `<div class="frame-empty"><span class="edge">${esc(site)}</span><span class="mark-slot"></span></div>`}</div>
+        <div class="edge-row"><span class="edge edge-dim">01A</span><span class="edge" id="printEdge">${esc(bottom)}</span></div>
+      </div>
+      <figcaption class="print-cap">
+        <h2 class="print-title">${esc(info.title || "Untitled")}</h2>
+        ${meta ? `<p class="print-meta">${meta}</p>` : ""}
+        ${notes}
+      </figcaption>
+    </figure>`;
+    document.querySelector('input[name="plmode"][value="single"]').checked = true;
+  }
+  if (info.media === "audio") document.querySelector('input[name="otype"][value="audio"]').checked = true;
+  box.classList.remove("hidden");
+  renderFormats();
+  syncNotes();
+}
+
+function syncMarks() {
+  const info = currentInfo();
+  if (!info) return;
+  const n = state.marks.size;
+  const count = info.count || 0;
+  const all = `${count}${info.more ? "+" : ""}`;
+  if ($("markCount")) $("markCount").textContent = n ? `${n} circled — only these are kept` : `Keeping all ${all}`;
+  if ($("sheetCount")) $("sheetCount").textContent = n ? `${n} circled` : `All ${all}`;
+  syncNotes();
+}
+
+$("print").addEventListener("click", (e) => {
+  const cell = e.target.closest(".cell");
+  if (cell) {
+    const i = Number(cell.dataset.i);
+    const on = cell.getAttribute("aria-pressed") !== "true";
+    cell.setAttribute("aria-pressed", String(on));
+    if (on) state.marks.add(i); else state.marks.delete(i);
+    syncMarks();
     return;
   }
-  const my = ++fetchToken;
+  if (e.target.closest("#markAll")) {
+    $$(".cell").forEach((c) => { c.setAttribute("aria-pressed", "true"); state.marks.add(Number(c.dataset.i)); });
+    syncMarks();
+  } else if (e.target.closest("#markNone")) {
+    $$(".cell").forEach((c) => c.setAttribute("aria-pressed", "false"));
+    state.marks.clear();
+    syncMarks();
+  }
+});
+
+/* ================= inspect ================= */
+
+async function inspect() {
+  const url = $("url").value.trim();
+  hideProblem();
+  if (!url) { showProblem("Paste a link first."); $("url").focus(); return; }
+  const my = ++state.fetchToken;
   const btn = $("fetchBtn");
   btn.disabled = true;
-  btn.textContent = "Inspecting…";
-  previewLoading();
+  btn.textContent = "Reading…";
+  renderExposing(url);
   try {
-    const { info } = await api("/api/info", { method: "POST", body: JSON.stringify(infoPayload()) });
-    if (my !== fetchToken) return; // superseded by a newer paste
-    renderPreview(info);
-  } catch (e) {
-    if (my !== fetchToken) return;
-    lastInfo = null;
-    fetchedQualities = null;
-    document.body.dataset.kind = "";
-    $("infoBox").classList.add("is-empty");
-    $("infoBox").innerHTML = `<div class="preview-empty">
-      <p class="preview-empty-title">Couldn’t inspect that link</p>
-      <p class="preview-empty-sub">Nothing was queued. Fix the address or access method and try again.</p>
-    </div>`;
-    err.textContent = e.message;
-    err.classList.remove("hidden");
-    if (NEEDS_ACCESS.test(e.message)) $("discAccess").open = true;
+    const { info } = await post("/api/info", { url, ...accessFields() });
+    if (my !== state.fetchToken) return;
+    renderPrint(info);
+  } catch (err) {
+    if (my !== state.fetchToken) return;
+    state.info = null;
+    state.marks.clear();
+    showBlank();
+    renderFormats();
+    syncNotes();
+    showProblem(err.message);
+    if (NEEDS_ACCESS.test(err.message)) $("discAccess").open = true;
   } finally {
-    if (my === fetchToken) { btn.disabled = false; btn.textContent = "Inspect"; }
+    if (my === state.fetchToken) { btn.disabled = false; btn.textContent = "Preview"; }
   }
 }
 
-function setCollection(on) {
-  document.querySelector(`input[name="plmode"][value="${on ? "playlist" : "single"}"]`).checked = true;
-  if (on) $("discPlaylist").open = true;
-}
+let debounce = null;
+$("pasteForm").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(debounce); inspect(); });
+$("url").addEventListener("paste", () => { clearTimeout(debounce); debounce = setTimeout(inspect, 200); });
+$("url").addEventListener("input", () => {
+  clearTimeout(debounce);
+  const v = $("url").value.trim();
+  if (!v) { state.info = null; showBlank(); hideProblem(); renderFormats(); syncNotes(); return; }
+  debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, 700);
+});
+$("infoErrorFix").addEventListener("click", () => {
+  const d = $("discAccess");
+  d.open = true;
+  d.scrollIntoView({ behavior: "smooth", block: "center" });
+  d.querySelector('input[value="browser"]').focus();
+});
 
-function renderPreview(info) {
-  lastInfo = info;
-  const box = $("infoBox");
-  box.classList.remove("is-empty");
-  document.body.dataset.kind = info.type === "gallery" ? "gallery" : "";
-  const site = info.source && info.source.label ? `<b>${escapeHtml(info.source.label)}</b> · ` : "";
-  if (info.type === "gallery") {
-    const count = info.count || (info.entries || []).length;
-    const many = count > 1;
-    const tiles = (info.entries || []).slice(0, 12);
-    const what = many ? `${count}${info.more ? "+" : ""} items` : MEDIA_WORD[info.media] || "Post";
-    const hero = !many && info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : "";
-    const grid = many
-      ? `<ul class="preview-grid">${tiles.map((e) => `<li>${e.thumbnail ? `<img src="${escapeHtml(e.thumbnail)}" alt="" loading="lazy" />` : ""}${e.is_video ? "<em>video</em>" : ""}</li>`).join("")}</ul>`
-      : "";
-    const more = info.more
-      ? `<div class="preview-meta">Listing stops at ${count}; the download takes the whole collection unless you set a range.</div>`
-      : "";
-    box.innerHTML = `<div class="preview-full">
-      ${hero}
-      <div style="min-width:0;flex:1">
-        <span class="preview-kind">${site}${escapeHtml(what)}</span>
-        <h3>${escapeHtml(info.title || "Untitled")}</h3>
-        <div class="preview-meta">${escapeHtml(info.uploader || "")}</div>
-        ${grid}${more}
-      </div>
-    </div>`;
-    setCollection(many);
-    fetchedQualities = null;
-  } else if (info.type === "playlist") {
-    const total = info.count || (info.entries || []).length;
-    const entries = (info.entries || []).slice(0, 8);
-    const more = total > entries.length ? `<div class="preview-meta">Showing first ${entries.length} of ${escapeHtml(String(total))} — use Collection / range to narrow it.</div>` : "";
-    box.innerHTML = `<div class="preview-full">
-      ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
-      <div style="min-width:0;flex:1">
-        <span class="preview-kind">${site}Playlist · ${escapeHtml(String(total))} items</span>
-        <h3>${escapeHtml(info.title || "Playlist")}</h3>
-        <div class="preview-meta">${escapeHtml(info.uploader || "")}</div>
-        <ul class="preview-entries">
-          ${entries.map((e, i) => `<li><span class="n">${String(i + 1).padStart(2, "0")}</span><span class="t">${escapeHtml(e.title || "Untitled")}</span><span class="d">${escapeHtml(e.duration_str || "")}</span></li>`).join("")}
-        </ul>
-        ${more}
-      </div>
-    </div>`;
-    setCollection(true);
-    fetchedQualities = null;
-  } else {
-    fetchedQualities = info.qualities || null;
-    const quals = (info.qualities || []).map((q) => escapeHtml(q.label)).join(" · ");
-    const liveNote = info.is_live
-      ? `<div class="preview-meta">Live stream — download records from now on; trim ranges don't apply.</div>`
-      : "";
-    const plNote = info.part_of_playlist
-      ? `<div class="preview-meta">This video is part of a playlist. Options → Collection if you want more than this one.</div>`
-      : "";
-    if (info.media === "audio") {
-      // SoundCloud, Bandcamp, podcasts: there is no picture to keep.
-      document.querySelector('input[name="otype"][value="audio"]').checked = true;
-    }
-    box.innerHTML = `<div class="preview-full">
-      ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
-      <div style="min-width:0;flex:1">
-        <span class="preview-kind">${site}${MEDIA_WORD[info.media] || "Video"}${info.is_live ? " · live" : ""}</span>
-        <h3>${escapeHtml(info.title || "Video")}</h3>
-        <div class="preview-meta">${escapeHtml(info.uploader || "")}${info.duration_str ? ` · <span class="mono">${escapeHtml(info.duration_str)}</span>` : ""}</div>
-        <div class="preview-meta"><span class="mono">${quals}</span></div>
-        ${liveNote}${plNote}
-      </div>
-    </div>`;
-  }
-  renderQualities();
-  syncStates();
-}
+/* ================= keep ================= */
 
-/* ---------------- download ---------------- */
 function parseTime(s) {
   s = String(s || "").trim();
   if (!s) return null;
@@ -356,377 +409,407 @@ function parseTime(s) {
   return nums.reduce((a, n) => a * 60 + n, 0);
 }
 
-const DL_LABEL = `<svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> Download`;
-
-function setCancelVisible(on) {
-  $("cancelBtn").classList.toggle("hidden", !on);
+function trimProblem(p) {
+  const f = p.clip_from ? parseTime(p.clip_from) : null;
+  const t = p.clip_to ? parseTime(p.clip_to) : null;
+  if ((p.clip_from && f === null) || (p.clip_to && t === null)) return "Those times don’t read. Use seconds or m:ss, like 1:30 → 2:45.";
+  if (f !== null && t !== null && t <= f) return "“To” has to come after “From”.";
+  const info = currentInfo();
+  if (info && info.is_live && (p.clip_from || p.clip_to)) return "Trim doesn’t apply to a live stream. Clear it, or wait for the stream to end.";
+  return "";
 }
 
 $("dlBtn").addEventListener("click", async () => {
-  const btn = $("dlBtn");
   const p = payload();
   $("trimError").classList.add("hidden");
-  if (!p.url) {
-    setDeck("Paste a link first — step 01.", "error");
-    $("url").focus();
-    return;
-  }
-  const f = p.clip_from ? parseTime(p.clip_from) : null;
-  const t = p.clip_to ? parseTime(p.clip_to) : null;
-  if ((p.clip_from && f === null) || (p.clip_to && t === null)) {
-    $("trimError").textContent = "Those times don’t parse. Use MM:SS, e.g. 01:30 → 02:45.";
+  if (!p.url) { showProblem("Paste a link first."); $("url").focus(); return; }
+  const bad = trimProblem(p);
+  if (bad) {
+    $("trimError").textContent = bad;
     $("trimError").classList.remove("hidden");
     $("discTrim").open = true;
     return;
   }
-  if (f !== null && t !== null && t <= f) {
-    $("trimError").textContent = "“To” must be after “From”.";
-    $("trimError").classList.remove("hidden");
-    $("discTrim").open = true;
-    return;
-  }
-  if (lastInfo && lastInfo.is_live && (p.clip_from || p.clip_to)) {
-    $("trimError").textContent = "Trim ranges don’t apply to live streams. Clear them or wait until the stream ends.";
-    $("trimError").classList.remove("hidden");
-    $("discTrim").open = true;
-    return;
-  }
+  const btn = $("dlBtn");
   btn.disabled = true;
-  btn.classList.add("is-busy");
-  setDeck("Starting…", "busy");
-  setProgress(0, null);
+  $("dlLabel").textContent = "Starting…";
+  setDeck("Starting…", "busy", 0);
   try {
-    const { job_id } = await api("/api/download", { method: "POST", body: JSON.stringify(p) });
-    activeJobId = job_id;
-    setCancelVisible(true);
+    const { job_id } = await post("/api/download", p);
+    state.activeJobId = job_id;
+    state.printJobId = currentInfo() ? job_id : null;
+    $("cancelBtn").classList.remove("hidden");
+    developPrint(0);
     pollJob(job_id);
     refreshQueue();
-  } catch (e) {
-    setDeck("Error: " + e.message, "error");
-    if (NEEDS_ACCESS.test(e.message)) $("discAccess").open = true;
+  } catch (err) {
+    setDeck(err.message, "error", 0);
+    if (NEEDS_ACCESS.test(err.message)) $("discAccess").open = true;
   } finally {
     btn.disabled = false;
-    btn.classList.remove("is-busy");
-    btn.innerHTML = DL_LABEL;
+    $("dlLabel").textContent = "Keep";
   }
 });
 
 $("cancelBtn").addEventListener("click", async () => {
-  if (!activeJobId) return;
-  const btn = $("cancelBtn");
-  btn.disabled = true;
+  if (!state.activeJobId) return;
+  $("cancelBtn").disabled = true;
   try {
-    await api("/api/cancel", { method: "POST", body: JSON.stringify({ job_id: activeJobId }) });
-    setDeck("Cancelling…", "busy");
+    await post("/api/cancel", { job_id: state.activeJobId });
+    setDeck("Stopping…", "busy");
   } catch (err) {
-    setDeck("Cancel failed: " + err.message, "error");
+    setDeck(`Couldn’t cancel: ${err.message}`, "error");
   } finally {
-    btn.disabled = false;
+    $("cancelBtn").disabled = false;
     refreshQueue();
   }
 });
 
-function setDeck(text, state) {
-  const line = $("jobStatus");
-  line.textContent = text;
-  line.classList.toggle("is-error", state === "error");
-  line.classList.toggle("is-done", state === "done");
-  $("meter").classList.toggle("is-error", state === "error");
-  $("meter").classList.toggle("is-done", state === "done");
-  $("jobPct").classList.toggle("is-active", state !== "idle");
-  if (state === "done") $("dlLede").textContent = "Saved. Grab it from the library.";
-  else if (state === "error") $("dlLede").textContent = "That failed — details below.";
-  else if (state === "busy") $("dlLede").textContent = "Working — you can queue another.";
-  else if (state === "cancelled") $("dlLede").textContent = "Ready when you are.";
+function setDeck(text, mode, pct) {
+  const line = $("jobStatus").parentElement;
+  $("jobStatus").textContent = text;
+  line.classList.toggle("is-error", mode === "error");
+  line.classList.toggle("is-done", mode === "done");
+  $("meter").classList.toggle("is-error", mode === "error");
+  $("meter").classList.toggle("is-done", mode === "done");
+  if (typeof pct === "number") {
+    $("meter").style.setProperty("--p", String(Math.max(0, Math.min(100, pct)) / 100));
+    $("meter").setAttribute("aria-valuenow", String(Math.round(pct)));
+    $("jobPct").textContent = mode === "busy" && pct > 0 ? `${Math.round(pct)}%` : "";
+  }
 }
 
-function setProgress(pct, job) {
-  $("bar").style.width = `${pct}%`;
-  $("meter").setAttribute("aria-valuenow", String(Math.round(pct)));
-  $("jobPct").textContent = pct > 0 ? `${pct}%` : "—";
+// The print in the stage develops while its own job runs.
+function developPrint(pct) {
+  const fig = $("printFig");
+  if (!fig) return;
+  fig.classList.add("is-developing");
+  fig.style.setProperty("--p", String(pct / 100));
+  const edge = $("printEdge");
+  if (edge) { edge.textContent = `Developing ${Math.round(pct)}%`; edge.classList.add("edge-amber"); }
+}
+function finishPrint(kind, label) {
+  const fig = $("printFig");
+  if (!fig) return;
+  fig.classList.remove("is-developing");
+  const slot = fig.querySelector(".mark-slot");
+  if (slot && kind) slot.innerHTML = markSvg(kind);
+  const edge = $("printEdge");
+  if (edge) { edge.textContent = label; edge.classList.remove("edge-amber"); }
 }
 
-async function pollJob(job_id) {
-  clearInterval(pollTimer);
-  setCancelVisible(true);
+function showJob(job, live) {
+  const pct = job.progress || 0;
+  $("jobLog").textContent = (job.log || []).slice(-40).join("\n");
+  const isPrint = state.printJobId === job.id;
+  if (job.status === "done") {
+    const files = job.files || [];
+    setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || "the file"}.`, "done", 100);
+    if (isPrint) finishPrint("tick", "Kept");
+  } else if (job.status === "error") {
+    setDeck(job.detail || "That didn’t work.", "error", pct);
+    if (isPrint) finishPrint("strike", "Failed");
+    if (NEEDS_ACCESS.test(job.detail || "")) $("discAccess").open = true;
+  } else if (job.status === "cancelled") {
+    setDeck("Cancelled.", "idle", 0);
+    if (isPrint) finishPrint("", "Cancelled");
+  } else {
+    let extra = "";
+    if (job.speed) extra += ` · ${(job.speed / 1e6).toFixed(1)} MB/s`;
+    if (job.eta) extra += ` · ${job.eta}s left`;
+    setDeck((job.detail || STATE_WORD[job.status] || job.status) + extra, "busy", pct);
+    if (isPrint && live) developPrint(pct);
+  }
+  const running = ACTIVE.includes(job.status);
+  $("cancelBtn").classList.toggle("hidden", !(running && live));
+}
+
+function pollJob(jobId) {
+  clearInterval(state.pollTimer);
   let inFlight = false;
-  pollTimer = setInterval(async () => {
+  state.pollTimer = setInterval(async () => {
     if (inFlight) return;
     inFlight = true;
     try {
-      const job = await api(`/api/job?id=${encodeURIComponent(job_id)}`);
-      if (job.status === "done") loadFiles();
-      if (activeJobId !== job_id) return; // a newer download owns the deck
-      const pct = job.progress || 0;
-      setProgress(pct, job);
-      let extra = "";
-      if (job.speed) extra += ` · ${(job.speed / 1e6).toFixed(1)} MB/s`;
-      if (job.eta) extra += ` · ETA ${job.eta}s`;
-      if (job.status === "done") {
-        clearInterval(pollTimer);
-        setDeck(`Done — ${(job.files || []).join(", ") || "saved to downloads/"}`, "done");
-        $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
-        activeJobId = null;
-        setCancelVisible(false);
-        loadFiles();
+      const job = await api(`/api/job?id=${encodeURIComponent(jobId)}`);
+      if (state.activeJobId !== jobId) return;
+      showJob(job, true);
+      if (!ACTIVE.includes(job.status)) {
+        clearInterval(state.pollTimer);
+        state.activeJobId = null;
+        if (job.status === "done") loadFiles();
         refreshQueue();
-      } else if (job.status === "error") {
-        clearInterval(pollTimer);
-        setDeck(job.detail || "Download failed.", "error");
-        $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
-        activeJobId = null;
-        setCancelVisible(false);
-        if (NEEDS_ACCESS.test(job.detail || "")) $("discAccess").open = true;
-        refreshQueue();
-      } else if (job.status === "cancelled") {
-        clearInterval(pollTimer);
-        setDeck("Cancelled.", "cancelled");
-        setProgress(0, null);
-        activeJobId = null;
-        setCancelVisible(false);
-        refreshQueue();
-      } else {
-        setDeck((job.detail || job.status) + extra, "busy");
-        $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
-        refreshQueue(true);
       }
     } catch {
-      if (activeJobId === job_id) setDeck("Lost connection to the server — retrying…", "busy");
+      if (state.activeJobId === jobId) setDeck("Lost the server — retrying…", "busy");
     } finally {
       inFlight = false;
     }
-  }, 800);
+  }, 700);
 }
 
-/* ---------------- queue ---------------- */
-async function refreshQueue(silent) {
+async function viewJob(jobId) {
+  try {
+    const job = await api(`/api/job?id=${encodeURIComponent(jobId)}`);
+    clearInterval(state.pollTimer);
+    state.activeJobId = ACTIVE.includes(job.status) ? jobId : null;
+    showJob(job, Boolean(state.activeJobId));
+    if (state.activeJobId) pollJob(jobId);
+    $("logBox").open = job.status === "error";
+    $$(".strip-frame").forEach((li) => li.setAttribute("aria-current", String(li.dataset.jid === jobId)));
+  } catch (err) {
+    setDeck(`Couldn’t open that job: ${err.message}`, "error");
+  }
+}
+
+/* ================= this session: a strip that never reflows ================= */
+
+function stripFrame(jid) {
+  const li = document.createElement("li");
+  li.className = "strip-frame";
+  li.dataset.jid = jid;
+  li.tabIndex = 0;
+  li.innerHTML = `<div class="edge-row"><span class="edge edge-dim js-no"></span><span class="edge js-state"></span></div>
+    <div class="frame js-frame"></div>
+    <p class="strip-title js-title"></p>
+    <div class="edge-row"><span class="edge edge-dim js-meta"></span></div>
+    <div class="strip-actions"><button type="button" class="text-btn js-cancel">Cancel</button><button type="button" class="text-btn js-retry">Retry</button></div>`;
+  return li;
+}
+
+function updateFrame(li, job, no) {
+  const pct = Math.round(job.progress || 0);
+  const active = ACTIVE.includes(job.status);
+  li.querySelector(".js-no").textContent = pad2(no);
+  const st = li.querySelector(".js-state");
+  st.textContent = job.status === "downloading" && pct ? `${STATE_WORD.downloading} ${pct}%` : STATE_WORD[job.status] || job.status;
+  st.classList.toggle("edge-amber", active);
+  const frame = li.querySelector(".js-frame");
+  if (frame.dataset.thumb !== (job.thumbnail || "")) {
+    frame.dataset.thumb = job.thumbnail || "";
+    frame.innerHTML = job.thumbnail ? developHtml(job.thumbnail)
+      : `<div class="frame-empty"><span class="edge">${esc(job.source || "offtube")}</span><span class="mark-slot"></span></div>`;
+    frame.dataset.mark = "";
+  }
+  li.classList.toggle("is-developing", active);
+  li.style.setProperty("--p", String(active ? pct / 100 : 1));
+  const markKind = job.status === "done" ? "tick" : job.status === "error" ? "strike" : "";
+  if (frame.dataset.mark !== markKind) {
+    frame.dataset.mark = markKind;
+    const slot = frame.querySelector(".mark-slot");
+    if (slot) slot.innerHTML = markKind ? markSvg(markKind) : "";
+  }
+  const title = job.title || (job.url || "").replace(/^https?:\/\/(www\.)?/, "");
+  li.querySelector(".js-title").textContent = title;
+  li.querySelector(".js-meta").textContent = [job.source, job.quality && job.quality !== "best" ? job.quality.replace("audio_", "") : ""].filter(Boolean).join(" · ");
+  li.setAttribute("aria-label", `${title}: ${st.textContent}`);
+  li.querySelector(".js-cancel").classList.toggle("hidden", !active);
+  li.querySelector(".js-retry").classList.toggle("hidden", job.status !== "error" && job.status !== "cancelled");
+}
+
+async function refreshQueue() {
   try {
     const { jobs } = await api("/api/jobs");
-    const list = (jobs || []).slice(-5).reverse();
-    const active = (jobs || []).filter((j) => !["done", "error", "cancelled"].includes(j.status)).length;
-    $("queueCount").textContent = String(active);
-    if (!list.length) {
-      if (!silent) $("queue").innerHTML = `<p class="empty">No downloads yet this session.</p>`;
-      return;
-    }
-    $("queue").innerHTML = list
-      .map((j) => {
-        const pct = Math.round(j.progress || 0);
-        const short = (j.source ? `${j.source} · ` : "") + (j.url || "").replace(/^https?:\/\/(www\.)?/, "").slice(0, 42);
-        const cancellable = ["queued", "starting", "downloading", "processing"].includes(j.status);
-        const retryable = j.status === "error";
-        const cancel = cancellable
-          ? `<button class="job-cancel" data-cancel="${escapeHtml(j.id)}" type="button" aria-label="Cancel job">Cancel</button>`
-          : "";
-        const retry = retryable
-          ? `<button class="job-cancel" data-retry="${escapeHtml(j.id)}" type="button" aria-label="Retry job">Retry</button>`
-          : "";
-        return `<div class="job" data-state="${escapeHtml(j.status)}" data-jid="${escapeHtml(j.id)}">
-          <div class="job-top"><span class="badge" data-s="${escapeHtml(j.status)}">${escapeHtml(j.status)}</span><span class="job-pct">${pct}%</span></div>
-          <div class="job-detail" title="${escapeHtml(j.url || "")}">${escapeHtml(short)}</div>
-          <div class="job-bar"><i style="width:${pct}%"></i></div>
-          <div class="job-actions">${cancel}${retry}</div>
-        </div>`;
-      })
-      .join("");
-  } catch { /* ignore */ }
+    const all = jobs || [];
+    const shown = all.slice(-12).reverse();
+    const ol = $("queue");
+    const keep = new Set(shown.map((j) => j.id));
+    $$(".strip-frame", ol).forEach((li) => { if (!keep.has(li.dataset.jid)) li.remove(); });
+    shown.forEach((job, i) => {
+      let li = ol.querySelector(`[data-jid="${CSS.escape(job.id)}"]`);
+      if (!li) li = stripFrame(job.id);
+      updateFrame(li, job, all.indexOf(job) + 1);
+      if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
+    });
+    const active = all.filter((j) => ACTIVE.includes(j.status)).length;
+    $("queueCount").textContent = all.length ? `${active ? `${active} developing · ` : ""}${all.length} this session` : "";
+    $("queueEmpty").classList.toggle("hidden", all.length > 0);
+    $("clearQueue").classList.toggle("hidden", !all.some((j) => !ACTIVE.includes(j.status)));
+  } catch { /* the health line already says the server is down */ }
 }
 
 $("queue").addEventListener("click", async (e) => {
-  const cancelBtn = e.target.closest("[data-cancel]");
-  const retryBtn = e.target.closest("[data-retry]");
-  if (cancelBtn) {
-    cancelBtn.disabled = true;
-    try {
-      await api("/api/cancel", { method: "POST", body: JSON.stringify({ job_id: cancelBtn.dataset.cancel }) });
-    } catch (err) {
-      setDeck("Cancel failed: " + err.message, "error");
-    }
+  const li = e.target.closest(".strip-frame");
+  if (!li) return;
+  const jid = li.dataset.jid;
+  if (e.target.closest(".js-cancel")) {
+    e.target.disabled = true;
+    try { await post("/api/cancel", { job_id: jid }); } catch (err) { setDeck(`Couldn’t cancel: ${err.message}`, "error"); }
     refreshQueue();
-    return;
-  }
-  if (retryBtn) {
-    retryBtn.disabled = true;
+  } else if (e.target.closest(".js-retry")) {
+    e.target.disabled = true;
     try {
-      await api("/api/retry", { method: "POST", body: JSON.stringify({ job_id: retryBtn.dataset.retry }) });
-    } catch (err) {
-      setDeck("Retry failed: " + err.message, "error");
-    }
+      const { job_id } = await post("/api/retry", { job_id: jid });
+      state.activeJobId = job_id;
+      pollJob(job_id);
+    } catch (err) { setDeck(`Couldn’t retry: ${err.message}`, "error"); }
     refreshQueue();
+  } else {
+    viewJob(jid);
   }
 });
-
+$("queue").addEventListener("keydown", (e) => {
+  const li = e.target.closest(".strip-frame");
+  if (li && e.target === li && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); viewJob(li.dataset.jid); }
+});
 $("clearQueue").addEventListener("click", async () => {
-  try {
-    await api("/api/jobs/clear", { method: "POST", body: "{}" });
-  } catch (err) {
-    setDeck("Clear failed: " + err.message, "error");
-  }
+  try { await post("/api/jobs/clear", {}); } catch (err) { setDeck(`Couldn’t clear: ${err.message}`, "error"); }
   refreshQueue();
 });
 
-$("queue").addEventListener("click", (e) => {
-  const jobEl = e.target.closest(".job");
-  if (!jobEl || e.target.closest("button")) return;
-  viewJob(jobEl.dataset.jid);
-});
+/* ================= kept: the library sheet ================= */
 
-async function viewJob(job_id) {
-  if (!job_id) return;
-  clearInterval(pollTimer);
-  activeJobId = null;
-  setCancelVisible(false);
-  try {
-    const job = await api(`/api/job?id=${encodeURIComponent(job_id)}`);
-    const pct = job.progress || 0;
-    setProgress(pct, job);
-    $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
-    if (job.status === "done") {
-      setDeck(`Done — ${(job.files || []).join(", ") || "saved to downloads/"}`, "done");
-    } else if (job.status === "error") {
-      setDeck(job.detail || "Download failed.", "error");
-    } else if (job.status === "cancelled") {
-      setDeck("Cancelled.", "cancelled");
-    } else {
-      setDeck((job.detail || job.status), "busy");
-      activeJobId = job_id;
-      setCancelVisible(true);
-      pollJob(job_id);
-    }
-  } catch (err) {
-    setDeck("Could not load job: " + err.message, "error");
-  }
+const dateFmt = new Intl.DateTimeFormat(undefined, { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+
+const lazyVideos = "IntersectionObserver" in window ? new IntersectionObserver((entries) => {
+  entries.forEach((en) => {
+    if (!en.isIntersecting) return;
+    const v = en.target;
+    v.src = v.dataset.src;
+    lazyVideos.unobserve(v);
+  });
+}, { rootMargin: "200px" }) : null;
+
+function keptThumb(f) {
+  const ext = (f.name.split(".").pop() || "").toUpperCase();
+  if (f.kind === "image") return `<img src="${esc(f.url)}" alt="" loading="lazy" />`;
+  if (f.kind === "video") return `<video data-src="${esc(f.url)}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`;
+  return `<span class="edge">${esc(ext || "File")}</span>`;
 }
 
-/* ---------------- files ---------------- */
-let diskFreeStr = "";
 function renderFiles() {
   const q = $("fileSearch").value.trim().toLowerCase();
-  const box = $("files");
-  const list = allFiles.filter((f) => !q || f.name.toLowerCase().includes(q));
-  $("footFiles").textContent = allFiles.length
-    ? `${allFiles.length} file${allFiles.length === 1 ? "" : "s"} · downloads/${diskFreeStr ? ` · ${diskFreeStr} free` : ""}`
+  const kind = checked("kind") || "all";
+  const list = state.files.filter((f) => (kind === "all" || f.kind === kind) && (!q || f.name.toLowerCase().includes(q)));
+  const shown = list.slice(0, state.shownFiles);
+  $("footFiles").textContent = state.files.length
+    ? `${state.files.length} file${state.files.length === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
     : "";
-  if (!list.length) {
-    box.innerHTML = allFiles.length
-      ? `<p class="empty">No files match “${escapeHtml(q)}”.</p>`
-      : `<p class="empty">Nothing saved yet.</p>`;
-    return;
-  }
-  box.innerHTML = list
-    .map((f) => `<div class="file">
-      <div class="file-info">
-        <span class="file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
-        <span class="file-sub">${escapeHtml(f.size_str)} · ${escapeHtml((f.modified || "").replace("T", " "))}</span>
+  $("filesEmpty").textContent = state.files.length ? "Nothing matches." : "Nothing kept yet. Files you keep land in downloads/.";
+  $("filesEmpty").classList.toggle("hidden", list.length > 0);
+  $("files").innerHTML = shown.map((f, i) => {
+    const ext = (f.name.split(".").pop() || "").toUpperCase();
+    const when = f.modified ? dateFmt.format(new Date(f.modified)) : "";
+    return `<li class="kept-cell">
+      <div class="kept-print">
+        <div class="kept-thumb">${keptThumb(f)}</div>
+        <div class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}</span><span class="edge">${esc(ext)} · ${esc(f.size_str)}</span></div>
       </div>
-      <a class="file-link" href="${escapeHtml(f.url)}" download>Save</a>
-      <button class="file-del" data-del="${escapeHtml(f.name)}" type="button" aria-label="Delete ${escapeHtml(f.name)}">Delete</button>
-    </div>`)
-    .join("");
+      <p class="kept-name" title="${esc(f.name)}">${esc(f.name)}</p>
+      <p class="kept-meta">${esc(when)}</p>
+      <div class="kept-actions"><a href="${esc(f.url)}" download>Save</a><button class="text-btn" type="button" data-del="${esc(f.name)}">Delete</button></div>
+    </li>`;
+  }).join("") + (list.length > shown.length
+    ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(60, list.length - shown.length)} more</button></li>` : "");
+  $$("video[data-src]", $("files")).forEach((v) => { if (lazyVideos) lazyVideos.observe(v); else v.src = v.dataset.src; });
 }
 
 async function loadFiles() {
   try {
     const { files, disk_free_str } = await api("/api/files");
-    allFiles = files || [];
-    diskFreeStr = disk_free_str || "";
+    state.files = files || [];
+    state.diskFree = disk_free_str || "";
     renderFiles();
-  } catch { /* ignore */ }
+    syncTally();
+  } catch { /* server down */ }
 }
-$("refreshFiles").addEventListener("click", loadFiles);
-$("fileSearch").addEventListener("input", renderFiles);
 
+$("refreshFiles").addEventListener("click", loadFiles);
+$("fileSearch").addEventListener("input", () => { state.shownFiles = 60; renderFiles(); });
+$$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => { state.shownFiles = 60; renderFiles(); }));
 $("files").addEventListener("click", async (e) => {
+  if (e.target.closest("#moreFiles")) { state.shownFiles += 60; renderFiles(); return; }
   const btn = e.target.closest("[data-del]");
   if (!btn) return;
   const name = btn.dataset.del;
-  if (!window.confirm(`Delete “${name}” from downloads/?`)) return;
+  if (!window.confirm(`Delete “${name}” from downloads/? This can’t be undone.`)) return;
   btn.disabled = true;
   try {
-    await api("/api/files/delete", { method: "POST", body: JSON.stringify({ name }) });
+    await post("/api/files/delete", { name });
     loadFiles();
   } catch (err) {
-    setDeck("Delete failed: " + err.message, "error");
+    setDeck(`Couldn’t delete: ${err.message}`, "error");
     btn.disabled = false;
   }
 });
 
-/* ---------------- health ---------------- */
+/* ================= health ================= */
+
 async function checkHealth() {
+  const el = $("health");
   try {
     const { checks } = await api("/api/health");
-    const el = $("health");
     const problems = [];
     if (!checks.ffmpeg) problems.push("ffmpeg missing");
     if (checks.yt_dlp === "missing") problems.push("yt-dlp missing");
-    if (!checks.js_runtime_ok) problems.push("no JS runtime (Deno or Node ≥ 23.5)");
-    if (checks.gallery_dl === "missing") problems.push("gallery-dl missing (image sites off)");
-    if (problems.length) {
-      el.className = "status is-bad";
-      $("healthText").textContent = problems.join(" · ");
-    } else {
-      el.className = "status is-ok";
-      const rt = checks.js_runtime && checks.js_runtime !== "none" ? ` · ${checks.js_runtime}` : "";
-      $("healthText").textContent = `ready · yt-dlp ${checks.yt_dlp} · ffmpeg ok${rt}`;
-    }
-    $("envLine").textContent = `env · yt-dlp ${checks.yt_dlp} · gallery-dl ${checks.gallery_dl || "?"} · ${(checks.ffmpeg_version || "ffmpeg ?").slice(0, 42)} · js ${checks.js_runtime || "?"}`;
+    if (checks.gallery_dl === "missing") problems.push("gallery-dl missing");
+    if (!checks.js_runtime_ok) problems.push("no JS runtime");
+    el.className = problems.length ? "health is-bad" : "health is-ok";
+    $("healthText").textContent = problems.length ? problems.join(" · ") : "Ready";
+    const env = `yt-dlp ${checks.yt_dlp} · gallery-dl ${checks.gallery_dl || "?"} · ${(checks.ffmpeg_version || "ffmpeg ?").split(" Copyright")[0]} · JS ${checks.js_runtime || "none"}`;
+    el.title = env;
+    $("envLine").textContent = env;
   } catch {
-    $("health").className = "status is-bad";
-    $("healthText").textContent = "server unreachable — start ./run.sh";
+    el.className = "health is-bad";
+    $("healthText").textContent = "Server off — run ./run.sh";
+    el.title = "";
   }
 }
 
-/* ---------------- prefs (local only, never cookies) ---------------- */
+/* ================= prefs (local only; never cookies) ================= */
+
+const PREFS = "offtube.prefs";
 function savePrefs() {
   try {
-    localStorage.setItem("offtube.prefs", JSON.stringify({
-      otype: outputType(),
-      quality: selectedQuality(),
-      cmode: cookiesMode(),
-      browser: $("cookieBrowserName") ? $("cookieBrowserName").value : "chrome",
-      subLang: $("subLang") ? $("subLang").value : "en",
-      subs: $("subs") ? $("subs").checked : false,
+    localStorage.setItem(PREFS, JSON.stringify({
+      otype: outputType(), quality: selectedQuality(), cmode: cookiesMode(),
+      browser: $("cookieBrowserName").value, subLang: $("subLang").value, subs: $("subs").checked,
     }));
-  } catch { /* private mode etc. */ }
+  } catch { /* private mode */ }
 }
 function restorePrefs() {
   let p = {};
-  try { p = JSON.parse(localStorage.getItem("offtube.prefs") || "{}"); } catch { p = {}; }
-  if (p.otype) {
-    const r = document.querySelector(`input[name="otype"][value="${p.otype}"]`);
-    if (r) r.checked = true;
-  }
-  if (p.cmode) {
-    const r = document.querySelector(`input[name="cmode"][value="${p.cmode}"]`);
-    if (r) r.checked = true;
-  }
-  if (p.browser && $("cookieBrowserName")) $("cookieBrowserName").value = p.browser;
-  if (p.subLang && $("subLang")) $("subLang").value = p.subLang;
-  if (typeof p.subs === "boolean" && $("subs")) $("subs").checked = p.subs;
-  // Quality depends on ladder; stash and apply after first render.
-  if (p.quality) {
-    const r = document.querySelector(`input[name="q"][value="${p.quality}"]`);
-    if (r) r.checked = true;
-  }
+  try { p = JSON.parse(localStorage.getItem(PREFS) || "{}"); } catch { p = {}; }
+  const pick = (name, v) => { const r = v && document.querySelector(`input[name="${name}"][value="${CSS.escape(v)}"]`); if (r) r.checked = true; };
+  pick("otype", p.otype);
+  pick("cmode", p.cmode);
+  if (p.browser) $("cookieBrowserName").value = p.browser;
+  if (p.subLang) $("subLang").value = p.subLang;
+  if (typeof p.subs === "boolean") $("subs").checked = p.subs;
+  renderFormats();
+  pick("q", p.quality);
 }
+
+/* ================= wiring ================= */
+
+$$('input[name="otype"]').forEach((r) => r.addEventListener("change", renderFormats));
+$("qualities").addEventListener("change", () => { syncTally(); savePrefs(); });
+["clipFrom", "clipTo", "plStart", "plEnd", "plItems", "subLang"].forEach((id) => $(id).addEventListener("input", syncNotes));
+$$('input[name="plmode"], input[name="cmode"]').forEach((r) => r.addEventListener("change", syncNotes));
+$("subs").addEventListener("change", syncNotes);
+$("cookieBrowserName").addEventListener("change", syncNotes);
+$("clearClip").addEventListener("click", () => {
+  $("clipFrom").value = "";
+  $("clipTo").value = "";
+  $("trimError").classList.add("hidden");
+  syncNotes();
+  $("clipFrom").focus();
+});
+$("cookieFile").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  $("cookieText").value = await f.text();
+  $("cookieFileName").textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
+});
 document.addEventListener("change", (e) => {
-  if (e.target.matches('input[name="otype"], input[name="q"], input[name="cmode"], #cookieBrowserName, #subs')) savePrefs();
+  if (e.target.matches('input[name="otype"], input[name="cmode"], #cookieBrowserName, #subs')) savePrefs();
 });
 $("subLang").addEventListener("input", savePrefs);
 
-/* ---------------- init ---------------- */
 restorePrefs();
-renderQualities();
-// Re-apply saved quality after ladder render (ids may differ pre-inspect).
-try {
-  const p = JSON.parse(localStorage.getItem("offtube.prefs") || "{}");
-  if (p.quality) {
-    const r = document.querySelector(`input[name="q"][value="${p.quality}"]`);
-    if (r) r.checked = true;
-  }
-} catch { /* ignore */ }
-syncStates();
+syncNotes();
 checkHealth();
 loadFiles();
 refreshQueue();
-queueTimer = setInterval(() => refreshQueue(true), 5000);
+setInterval(() => refreshQueue(), 4000);
+setInterval(checkHealth, 30000);

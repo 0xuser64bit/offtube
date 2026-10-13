@@ -3,244 +3,209 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>offtube — keep media locally</title>
+<title>offtube — keep it on your own disk</title>
 <meta name="description" content="Paste a link from YouTube, TikTok, Instagram, Pinterest, X and 2,000+ sites, pick a format, keep the file. Local-only downloader powered by yt-dlp and gallery-dl." />
 <meta name="referrer" content="no-referrer" />
-<meta name="color-scheme" content="light" />
-<meta name="theme-color" content="#faf8f3" />
+<meta name="color-scheme" content="light dark" />
+<meta name="theme-color" content="#f3f3f0" media="(prefers-color-scheme: light)" />
+<meta name="theme-color" content="#121211" media="(prefers-color-scheme: dark)" />
 <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+<link rel="preload" href="/fonts/archivo.woff2" as="font" type="font/woff2" crossorigin />
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-<a class="skip" href="#main">Skip to download form</a>
+<a class="skip" href="#url">Skip to the link field</a>
+<svg class="defs" aria-hidden="true" focusable="false"><filter id="wax" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="1.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 
-<header class="topbar">
-  <div class="topbar-inner">
-    <div class="brand">
-      <span class="mark" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-      <span class="brand-name">offtube</span>
-      <span class="brand-tag">personal archive</span>
-    </div>
-    <div class="topbar-right">
-      <span id="health" class="status" role="status">
-        <span class="status-dot" aria-hidden="true"></span><span id="healthText">checking environment…</span>
-      </span>
-    </div>
-  </div>
+<header class="bar">
+  <a class="brand" href="/" aria-label="offtube, start over">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" class="brand-rebate"/><rect x="4" y="7" width="24" height="18" class="brand-window"/><path d="M8.5 16.5c1.6 1.2 3 2.8 4.3 4.6 3-4.6 6.4-8.6 11-12.2" class="brand-tick"/></svg>
+    <span class="brand-name">offtube</span>
+  </a>
+
+  <form class="paste" id="pasteForm" autocomplete="off">
+    <label class="visually-hidden" for="url">Link to keep</label>
+    <input id="url" name="url" type="url" inputmode="url" spellcheck="false" autocomplete="off"
+           placeholder="Paste a link — a video, post, pin, board, track or playlist" />
+    <button id="fetchBtn" class="paste-go" type="submit">Preview</button>
+  </form>
+
+  <p id="health" class="health" role="status"><i aria-hidden="true"></i><span id="healthText">Checking…</span></p>
 </header>
 
-<main id="main" class="layout">
-  <div class="primary">
-    <header class="workbench-head">
-      <p class="eyebrow">Transfer desk <span aria-hidden="true">/</span> local session</p>
-      <h1>Keep the version you mean to keep.</h1>
-      <p class="workbench-copy">Inspect a video, post, pin, board or track from almost any site, choose the file, and send it straight to your machine. Nothing is uploaded or tracked.</p>
-      <ol class="transfer-legend" aria-label="Transfer steps">
-        <li><b>01</b> Identify</li>
-        <li><b>02</b> Set output</li>
-        <li><b>03</b> Transfer</li>
-      </ol>
-    </header>
-
-    <!-- 01 SOURCE -->
-    <section class="panel panel-source" aria-labelledby="h-source">
-      <div class="panel-head">
-        <span class="step" aria-hidden="true">01</span>
-        <div>
-          <h2 id="h-source">Source</h2>
-          <p class="lede">Paste a link. Everything else follows from it.</p>
+<main class="desk" id="main">
+  <h1 class="visually-hidden">offtube — keep media on your own disk</h1>
+  <section class="stage" aria-label="Preview">
+    <div id="blank" class="print is-blank">
+      <div class="rebate">
+        <div class="edge-row"><span class="edge">offtube</span><span class="edge">unexposed</span></div>
+        <div class="blank-frames" aria-hidden="true">
+          <span class="edge">01</span><span class="edge">02</span><span class="edge">03</span>
+          <span class="edge">04</span><span class="edge">05</span><span class="edge">06</span>
+        </div>
+        <div class="edge-row"><span class="edge">Paste · preview · keep</span><span class="edge">This machine only</span></div>
+        <div class="blank-call">
+          <p class="blank-title">Paste a link to make a print.</p>
+          <p class="blank-sub">You see exactly what’s there before anything is kept.</p>
         </div>
       </div>
-
-      <label class="field-label" for="url">Link</label>
-      <div class="url-row">
-        <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-               placeholder="https://… a video, post, pin, board, track or playlist" aria-describedby="urlHint" />
-        <button id="fetchBtn" class="btn" type="button">Inspect</button>
-      </div>
-      <p id="urlHint" class="hint">Pastes are inspected automatically. Public links, plus private, members-only or sign-in-only ones your own account can see (Options → Access).</p>
       <p class="sources" aria-label="Works with">YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
+    </div>
 
-      <div id="infoBox" class="preview is-empty" aria-live="polite">
-        <div class="preview-empty">
-          <p class="preview-empty-title">Nothing inspected yet</p>
-          <p class="preview-empty-sub">Paste a link above — the site, title and available formats appear here.</p>
-        </div>
+    <div id="print" class="hidden" aria-live="polite"></div>
+
+    <div id="infoError" class="problem hidden" role="alert">
+      <svg class="mark mark-strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86"/></svg>
+      <div>
+        <p class="problem-text" id="infoErrorText"></p>
+        <button class="text-btn hidden" id="infoErrorFix" type="button">Set up sign-in</button>
       </div>
-      <p id="infoError" class="inline-error hidden" role="alert"></p>
-    </section>
+    </div>
+  </section>
 
-    <!-- 02 FORMAT -->
-    <section class="panel" aria-labelledby="h-format">
-      <div class="panel-head">
-        <span class="step" aria-hidden="true">02</span>
-        <div>
-          <h2 id="h-format">Format</h2>
-          <p class="lede">What file do you want to keep?</p>
-        </div>
-      </div>
+  <aside class="keep" aria-labelledby="keepHeading">
+    <h2 id="keepHeading" class="visually-hidden">Keep options</h2>
 
-      <div class="seg video-only" role="radiogroup" aria-label="Output type">
-        <label class="seg-opt"><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
-        <label class="seg-opt"><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
-      </div>
+    <div class="seg video-only video-only-strict" id="otypeSeg" role="radiogroup" aria-label="What to keep">
+      <label><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
+      <label><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
+    </div>
 
-      <fieldset class="quality-field">
-        <legend class="field-label">Quality ceiling</legend>
-        <div class="qualities" id="qualities"></div>
-        <p class="hint" id="qualityNote">“Best” keeps the highest available stream and merges to MP4.</p>
-      </fieldset>
+    <fieldset class="formats">
+      <legend class="label">Format</legend>
+      <div id="qualities" class="format-list"></div>
+      <p class="hint" id="qualityNote"></p>
+    </fieldset>
 
-      <div class="row-check video-only">
-        <input type="checkbox" id="subs" />
-        <label for="subs" class="row-check-main"><strong>Keep subtitles</strong><em>SRT sidecar next to the file.</em></label>
-        <input id="subLang" class="mono sub-lang" value="en" maxlength="20" autocomplete="off" spellcheck="false"
-               aria-label="Subtitle languages" title="Subtitle languages, e.g. en or en,de" />
-      </div>
-    </section>
-
-    <!-- 03 OPTIONS -->
-    <section class="panel" aria-labelledby="h-options">
-      <div class="panel-head">
-        <span class="step" aria-hidden="true">03</span>
-        <div>
-          <h2 id="h-options">Options</h2>
-          <p class="lede">Only when you need them. Defaults keep the whole item, no login.</p>
-        </div>
-      </div>
-
-      <details class="disclosure video-only" id="discTrim">
-        <summary><span>Clip <em>trim to a from–to range</em></span><span class="disc-state" id="trimState">off</span></summary>
-        <div class="disc-body">
-          <div class="trim-row">
-            <div class="field"><label for="clipFrom">From</label><input id="clipFrom" class="mono" placeholder="01:30" autocomplete="off" spellcheck="false" /></div>
-            <span class="trim-dash" aria-hidden="true">→</span>
-            <div class="field"><label for="clipTo">To</label><input id="clipTo" class="mono" placeholder="02:45" autocomplete="off" spellcheck="false" /></div>
-            <button id="clearClip" class="btn btn-quiet" type="button">Clear</button>
+    <div class="notes">
+      <details class="note video-only" id="discTrim">
+        <summary><span class="note-name">Trim</span><span class="note-state" id="trimState">Whole video</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+        <div class="note-body">
+          <div class="pair">
+            <label class="field"><span class="label">From</span><input id="clipFrom" class="num" inputmode="numeric" placeholder="1:30" autocomplete="off" spellcheck="false" /></label>
+            <label class="field"><span class="label">To</span><input id="clipTo" class="num" inputmode="numeric" placeholder="2:45" autocomplete="off" spellcheck="false" /></label>
           </div>
-          <p class="hint">Accepts <code>90</code>, <code>1:30</code>, <code>1:02:03</code>. Requires ffmpeg. Leave empty for the full video.</p>
-          <p id="trimError" class="inline-error hidden" role="alert"></p>
+          <p class="hint">Seconds or m:ss / h:mm:ss. Empty keeps the whole video. <button class="text-btn" id="clearClip" type="button">Clear</button></p>
+          <p id="trimError" class="field-error hidden" role="alert"></p>
         </div>
       </details>
 
-      <details class="disclosure" id="discPlaylist">
-        <summary><span>Collection <em id="plSummary">single item</em></span><span class="disc-state" id="plState">off</span></summary>
-        <div class="disc-body">
-          <div class="seg seg-small" role="radiogroup" aria-label="Collection scope">
-            <label class="seg-opt"><input type="radio" name="plmode" value="single" checked /><span>This item only</span></label>
-            <label class="seg-opt"><input type="radio" name="plmode" value="playlist" /><span>Collection / range</span></label>
+      <details class="note" id="discPlaylist">
+        <summary><span class="note-name">Collection</span><span class="note-state" id="plState">This item</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+        <div class="note-body">
+          <div class="seg seg-small" role="radiogroup" aria-label="How much to keep">
+            <label><input type="radio" name="plmode" value="single" checked /><span>This item</span></label>
+            <label><input type="radio" name="plmode" value="playlist" /><span>Whole collection</span></label>
           </div>
-          <div class="trim-row" id="plRangeRow">
-            <div class="field field-narrow"><label for="plStart">Start #</label><input id="plStart" class="mono" type="number" min="1" placeholder="1" /></div>
-            <div class="field field-narrow"><label for="plEnd">End #</label><input id="plEnd" class="mono" type="number" min="1" placeholder="—" /></div>
-            <div class="field field-wide"><label for="plItems">Items <span class="label-note">overrides start / end</span></label><input id="plItems" class="mono" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></div>
+          <div class="pair" id="plRangeRow">
+            <label class="field"><span class="label">Start #</span><input id="plStart" class="num" type="number" min="1" placeholder="1" /></label>
+            <label class="field"><span class="label">End #</span><input id="plEnd" class="num" type="number" min="1" placeholder="last" /></label>
           </div>
-          <p class="hint">Playlists, boards, albums, profiles and multi-photo posts. Pasting a collection link switches this on.</p>
+          <label class="field"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
+          <p class="hint" id="plHint">Playlists, boards, albums, profiles and multi-photo posts. Circle prints on the sheet to keep only those.</p>
         </div>
       </details>
 
-      <details class="disclosure" id="discAccess">
-        <summary><span>Access <em id="accessSummary">public — no login</em></span><span class="disc-state" id="accessState">off</span></summary>
-        <div class="disc-body">
-          <div class="seg seg-small seg-three" role="radiogroup" aria-label="Access method">
-            <label class="seg-opt"><input type="radio" name="cmode" value="none" checked /><span>Public</span></label>
-            <label class="seg-opt"><input type="radio" name="cmode" value="upload" /><span>Cookies file</span></label>
-            <label class="seg-opt"><input type="radio" name="cmode" value="browser" /><span>Browser</span></label>
+      <details class="note video-only video-only-strict" id="discSubs">
+        <summary><span class="note-name">Subtitles</span><span class="note-state" id="subsState">Off</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+        <div class="note-body">
+          <label class="check"><input type="checkbox" id="subs" /><span>Save subtitles as .srt next to the video</span></label>
+          <label class="field"><span class="label">Languages</span><input id="subLang" class="num" value="en" maxlength="20" autocomplete="off" spellcheck="false" /></label>
+        </div>
+      </details>
+
+      <details class="note" id="discAccess">
+        <summary><span class="note-name">Sign-in</span><span class="note-state" id="accessState">Not needed</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
+        <div class="note-body">
+          <div class="seg seg-small seg-three" role="radiogroup" aria-label="How to sign in">
+            <label><input type="radio" name="cmode" value="none" checked /><span>None</span></label>
+            <label><input type="radio" name="cmode" value="browser" /><span>Browser</span></label>
+            <label><input type="radio" name="cmode" value="upload" /><span>Cookies file</span></label>
           </div>
-          <div id="cookieNone" class="cpane">
-            <p class="hint">For anything you can see logged out. If the site wants you signed in (private, members-only, age-gated, most Instagram and X posts), use a cookies file or your browser.</p>
-          </div>
-          <div id="cookieUpload" class="cpane hidden">
-            <div class="file-row">
-              <label for="cookieFile" class="btn btn-quiet">Choose cookies.txt</label>
-              <input id="cookieFile" type="file" accept=".txt" class="visually-hidden" />
-              <span id="cookieFileName" class="mono muted">no file chosen</span>
-            </div>
-            <label class="field-label" for="cookieText">Or paste file contents</label>
-            <textarea id="cookieText" rows="3" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
-            <p class="hint">Export with “Get cookies.txt Locally” while signed in to the site, as the account that can see the post. Only that site’s cookies are kept — the rest are trimmed automatically. Cookies expire — re-export when downloads fail. This file never leaves your machine.</p>
-          </div>
-          <div id="cookieBrowser" class="cpane hidden">
-            <div class="field field-wide">
-              <label for="cookieBrowserName">Read cookies from</label>
+          <p class="hint" id="cookieNone">Public posts need nothing. Private, members-only, age-gated, and most Instagram or X posts need your signed-in session.</p>
+          <div id="cookieBrowser" class="hidden">
+            <label class="field"><span class="label">Use cookies from</span>
               <select id="cookieBrowserName">
                 <option value="chrome">Chrome</option>
-                <option value="chromium">Chromium</option>
                 <option value="brave">Brave</option>
                 <option value="edge">Edge</option>
                 <option value="firefox">Firefox</option>
                 <option value="safari">Safari</option>
+                <option value="chromium">Chromium</option>
                 <option value="opera">Opera</option>
                 <option value="vivaldi">Vivaldi</option>
               </select>
+            </label>
+            <p class="hint">Read straight from that browser on this machine. Not available when offtube runs in Docker — use a cookies file there.</p>
+          </div>
+          <div id="cookieUpload" class="hidden">
+            <div class="file-pick">
+              <label for="cookieFile" class="btn btn-quiet">Choose cookies.txt</label>
+              <input id="cookieFile" type="file" accept=".txt" class="visually-hidden" />
+              <span id="cookieFileName" class="hint">No file chosen</span>
             </div>
-            <p class="hint">Reads directly from the browser on this machine. Quit the browser first on some systems.</p>
+            <label class="field"><span class="label">Or paste it</span><textarea id="cookieText" rows="3" class="num" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea></label>
+            <p class="hint">Export with “Get cookies.txt Locally” while signed in to the site. Only that site’s cookies are kept; the rest are dropped before anything touches disk.</p>
           </div>
         </div>
       </details>
-    </section>
+    </div>
 
-    <!-- 04 DOWNLOAD -->
-    <section class="panel panel-dark" aria-labelledby="h-dl">
-      <div class="panel-head">
-        <span class="step step-inv" aria-hidden="true">04</span>
-        <div>
-          <h2 id="h-dl">Download</h2>
-          <p class="lede lede-inv" id="dlLede">Ready when you are.</p>
-        </div>
-        <div class="pct mono" id="jobPct" aria-hidden="true">—</div>
-      </div>
-      <div class="dl-actions">
-        <button id="dlBtn" class="btn btn-ink" type="button">
-          <svg width="14" height="14" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M6 1v7.2M2.8 5.6 6 8.8l3.2-3.2M2 10.5h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          Download
-        </button>
-        <button id="cancelBtn" class="btn btn-ghost hidden" type="button">Cancel</button>
-      </div>
-      <div class="deck" id="progressWrap" aria-live="polite">
-        <div class="deck-line"><span id="jobStatus">Idle. Files land in <span class="mono">downloads/</span>.</span></div>
-        <div class="meter" role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="meter"><div id="bar"></div></div>
-        <pre id="jobLog" class="deck-log" tabindex="0" aria-label="Download log"></pre>
-      </div>
-    </section>
-  </div>
+    <p class="tally num" id="tally"></p>
 
-  <aside class="side">
-    <section class="panel panel-side" aria-labelledby="h-queue">
-      <div class="side-head">
-        <h2 id="h-queue">Queue</h2>
-        <div class="side-head-actions">
-          <span class="count mono" id="queueCount">0</span>
-          <button id="clearQueue" class="btn btn-quiet btn-small" type="button" title="Remove finished jobs from the list">Clear</button>
-        </div>
-      </div>
-      <div id="queue" class="queue">
-        <p class="empty">No downloads yet this session.</p>
-      </div>
-    </section>
+    <div class="keep-actions">
+      <button id="dlBtn" class="keep-btn" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M2.5 13.5h11"/></svg>
+        <span id="dlLabel">Keep</span>
+      </button>
+      <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
+    </div>
 
-    <section class="panel panel-side" aria-labelledby="h-lib">
-      <div class="side-head">
-        <h2 id="h-lib">Library</h2>
-        <button id="refreshFiles" class="btn btn-quiet btn-small" type="button">Refresh</button>
-      </div>
-      <input id="fileSearch" type="search" placeholder="Filter files…" aria-label="Filter downloaded files" autocomplete="off" />
-      <div id="files" class="files">
-        <p class="empty">Nothing saved yet.</p>
-      </div>
-    </section>
-
-    <section class="panel panel-side panel-note" aria-label="About this tool">
-      <h2 class="note-title">Local only</h2>
-      <p>Files never leave this machine. Only keep content you own or are allowed to archive. Private and members-only posts need <strong>your own</strong> access — this tool can’t bypass paywalls or DRM.</p>
-      <p class="mono micro" id="envLine">env —</p>
-    </section>
+    <div class="deck" aria-live="polite">
+      <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bar"></i></div>
+      <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
+      <details class="log" id="logBox">
+        <summary>Log</summary>
+        <pre id="jobLog" tabindex="0" aria-label="Transfer log"></pre>
+      </details>
+    </div>
   </aside>
 </main>
 
+<section class="session" aria-labelledby="sessionTitle">
+  <header class="row-head">
+    <h2 id="sessionTitle">This session</h2>
+    <span class="count num" id="queueCount"></span>
+    <button id="clearQueue" class="text-btn" type="button">Clear finished</button>
+  </header>
+  <ol id="queue" class="strip" aria-label="Downloads this session"></ol>
+  <p class="empty" id="queueEmpty">Prints you keep develop here.</p>
+</section>
+
+<section class="kept" aria-labelledby="keptTitle">
+  <header class="row-head">
+    <h2 id="keptTitle">Kept</h2>
+    <span class="count num" id="footFiles"></span>
+    <div class="kept-tools">
+      <div class="seg seg-small" role="radiogroup" aria-label="Show">
+        <label><input type="radio" name="kind" value="all" checked /><span>All</span></label>
+        <label><input type="radio" name="kind" value="video" /><span>Video</span></label>
+        <label><input type="radio" name="kind" value="audio" /><span>Audio</span></label>
+        <label><input type="radio" name="kind" value="image" /><span>Images</span></label>
+      </div>
+      <input id="fileSearch" type="search" placeholder="Find a file" aria-label="Find a kept file" autocomplete="off" />
+      <button id="refreshFiles" class="icon-btn" type="button" aria-label="Refresh the list" title="Refresh">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5V5h-2.5"/></svg>
+      </button>
+    </div>
+  </header>
+  <ul id="files" class="sheet-grid" aria-label="Kept files"></ul>
+  <p class="empty hidden" id="filesEmpty">Nothing kept yet.</p>
+</section>
+
 <footer class="foot">
-  <span>offtube · stdlib server + yt-dlp &amp; gallery-dl engines</span>
-  <span class="mono" id="footFiles"></span>
+  <p>offtube runs on this machine and files never leave it. Keep only what you own or may archive; private posts need your own access, and nothing here gets past paywalls or DRM.</p>
+  <p class="foot-env num" id="envLine"></p>
 </footer>
 
 <script src="/app.js"></script>
