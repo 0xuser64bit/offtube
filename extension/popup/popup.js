@@ -7,23 +7,8 @@
 
 const $ = (id) => document.getElementById(id);
 
+const { getSettings, setError } = OFFTUBE;
 let savedBrowser = 'chrome';
-
-async function getSettings() {
-  const stored = await chrome.storage.local.get(['serverUrl', 'quality', 'access', 'cookies_browser']);
-  let serverUrl = OFFTUBE.DEFAULT_SERVER;
-  try {
-    serverUrl = OFFTUBE.normalizeServerUrl(stored.serverUrl);
-  } catch {
-    serverUrl = OFFTUBE.DEFAULT_SERVER;
-  }
-  return {
-    serverUrl,
-    quality: stored.quality || '1080',
-    access: stored.access || 'none',
-    cookiesBrowser: stored.cookies_browser || 'chrome',
-  };
-}
 
 function accessPayload() {
   const mode = $('access').value;
@@ -41,34 +26,9 @@ async function getActiveTabUrl() {
   return { url: tab?.url || '', title: tab?.title || '' };
 }
 
-function setError(msg) {
-  const el = $('error');
-  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
-  el.textContent = msg;
-  el.classList.remove('hidden');
-}
-
 function setStatus(msg, pct) {
   $('status').textContent = msg;
   if (typeof pct === 'number') $('bar').style.width = `${Math.max(0, Math.min(100, pct))}%`;
-}
-
-async function checkHealth(server) {
-  const badge = $('health');
-  try {
-    const { checks } = await OFFTUBE.apiGet(server, '/api/health');
-    const problems = OFFTUBE.healthProblems(checks);
-    if (problems.length) {
-      badge.className = 'status bad';
-      $('healthText').textContent = problems.join(' · ');
-    } else {
-      badge.className = 'status ok';
-      $('healthText').textContent = `ready · ${checks.yt_dlp || ''}`;
-    }
-  } catch {
-    badge.className = 'status bad';
-    $('healthText').textContent = 'server unreachable — start ./run.sh';
-  }
 }
 
 function renderPreview(info) {
@@ -184,7 +144,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('access').value = access;
   syncAccess();
   await fillFromTab();
-  await checkHealth(serverUrl);
+  await OFFTUBE.showHealth(serverUrl);
   if (OFFTUBE.isYouTubeUrl($('url').value)) inspect();
 });
 
@@ -205,19 +165,14 @@ $('access').addEventListener('change', async () => {
   await chrome.storage.local.set({ access: $('access').value });
 });
 
-$('cookieFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  $('cookieText').value = await f.text();
-  $('cookieFileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
-});
+OFFTUBE.wireCookieFile();
 
 $('server').addEventListener('change', async () => {
   try {
     const v = OFFTUBE.normalizeServerUrl($('server').value);
     $('server').value = v;
     await chrome.storage.local.set({ serverUrl: v });
-    await checkHealth(v);
+    await OFFTUBE.showHealth(v);
   } catch (err) {
     setError(err.message);
     $('server').value = OFFTUBE.DEFAULT_SERVER;

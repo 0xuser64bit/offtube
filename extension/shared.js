@@ -60,6 +60,55 @@ OFFTUBE.apiGet = async function apiGet(server, path) {
   return data;
 };
 
+OFFTUBE.getSettings = async function getSettings() {
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser']);
+  let serverUrl = OFFTUBE.DEFAULT_SERVER;
+  try {
+    serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
+  } catch {
+    serverUrl = OFFTUBE.DEFAULT_SERVER;
+  }
+  return {
+    serverUrl,
+    quality: s.quality || '1080',
+    otype: s.otype || 'video',
+    access: s.access || 'none',
+    cookiesBrowser: s.cookies_browser || 'chrome',
+  };
+};
+
+/* DOM helpers below assume the ids popup.html and sidepanel.html share:
+ * #health/#healthText, #error, #cookieFile/#cookieText/#cookieFileName. */
+
+OFFTUBE.setError = function setError(msg) {
+  const el = document.getElementById('error');
+  el.textContent = msg || '';
+  el.classList.toggle('hidden', !msg);
+};
+
+OFFTUBE.showHealth = async function showHealth(server) {
+  const badge = document.getElementById('health');
+  const text = document.getElementById('healthText');
+  try {
+    const { checks } = await OFFTUBE.apiGet(server, '/api/health');
+    const problems = OFFTUBE.healthProblems(checks);
+    badge.className = problems.length ? 'status bad' : 'status ok';
+    text.textContent = problems.length ? problems.join(' · ') : `ready · ${checks.yt_dlp || ''}`;
+  } catch {
+    badge.className = 'status bad';
+    text.textContent = 'server unreachable — start ./run.sh';
+  }
+};
+
+OFFTUBE.wireCookieFile = function wireCookieFile() {
+  document.getElementById('cookieFile').addEventListener('change', async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    document.getElementById('cookieText').value = await f.text();
+    document.getElementById('cookieFileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
+  });
+};
+
 OFFTUBE.healthProblems = function healthProblems(checks) {
   const problems = [];
   if (!checks?.ffmpeg) problems.push('ffmpeg missing');

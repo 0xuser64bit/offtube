@@ -9,33 +9,11 @@ let lastTabUrl = '';
 let lastInspected = '';
 let activeJobId = null;
 
-async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser']);
-  let serverUrl = OFFTUBE.DEFAULT_SERVER;
-  try {
-    serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
-  } catch {
-    serverUrl = OFFTUBE.DEFAULT_SERVER;
-  }
-  return {
-    serverUrl,
-    quality: s.quality || '1080',
-    otype: s.otype || 'video',
-    access: s.access || 'none',
-    cookiesBrowser: s.cookies_browser || 'chrome',
-  };
-}
+const { getSettings, setError } = OFFTUBE;
 
 function syncAccess() {
   $('cookieUpload').classList.toggle('hidden', $('access').value !== 'upload');
   $('cookieBrowserPane').classList.toggle('hidden', $('access').value !== 'browser');
-}
-
-function setError(msg) {
-  const el = $('error');
-  if (!msg) { el.classList.add('hidden'); el.textContent = ''; return; }
-  el.textContent = msg;
-  el.classList.remove('hidden');
 }
 
 function otype() {
@@ -67,23 +45,6 @@ function payload() {
     playlist_mode: document.querySelector('input[name="plmode"]:checked')?.value || 'single',
     ...accessFields(),
   };
-}
-
-async function checkHealth(server) {
-  try {
-    const { checks } = await OFFTUBE.apiGet(server, '/api/health');
-    const problems = OFFTUBE.healthProblems(checks);
-    if (problems.length) {
-      $('health').className = 'status bad';
-      $('healthText').textContent = problems.join(' · ');
-    } else {
-      $('health').className = 'status ok';
-      $('healthText').textContent = `ready · ${checks.yt_dlp || ''}`;
-    }
-  } catch {
-    $('health').className = 'status bad';
-    $('healthText').textContent = 'server unreachable — start ./run.sh';
-  }
 }
 
 async function fillFromTab(force) {
@@ -198,7 +159,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     await fillFromTab(false);
   }
-  await checkHealth(serverUrl);
+  await OFFTUBE.showHealth(serverUrl);
   refreshQueue(serverUrl);
   refreshFiles(serverUrl);
   if (OFFTUBE.isYouTubeUrl($('url').value)) inspect();
@@ -279,12 +240,7 @@ $('cookieBrowserName').addEventListener('change', async () => {
   await chrome.storage.local.set({ cookies_browser: $('cookieBrowserName').value });
 });
 
-$('cookieFile').addEventListener('change', async (e) => {
-  const f = e.target.files[0];
-  if (!f) return;
-  $('cookieText').value = await f.text();
-  $('cookieFileName').textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
-});
+OFFTUBE.wireCookieFile();
 
 $('openLib').addEventListener('click', async () => {
   const { serverUrl } = await getSettings();
@@ -296,7 +252,7 @@ $('server').addEventListener('change', async () => {
     const v = OFFTUBE.normalizeServerUrl($('server').value);
     $('server').value = v;
     await chrome.storage.local.set({ serverUrl: v });
-    await checkHealth(v);
+    await OFFTUBE.showHealth(v);
     refreshQueue(v);
     refreshFiles(v);
   } catch (err) {
