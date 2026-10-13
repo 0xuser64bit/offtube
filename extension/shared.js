@@ -5,11 +5,56 @@
 
 const OFFTUBE = {
   DEFAULT_SERVER: 'http://127.0.0.1:8000',
-  YT_RE: /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\//i,
+  MEDIA_WORD: { image: 'Image', video: 'Video', audio: 'Audio', mixed: 'Post' },
 };
 
-OFFTUBE.isYouTubeUrl = function isYouTubeUrl(v) {
-  return OFFTUBE.YT_RE.test(String(v || '').trim());
+OFFTUBE.isWebUrl = function isWebUrl(v) {
+  return /^https?:\/\//i.test(String(v || '').trim());
+};
+
+/* Which site is this URL on, if offtube supports it? The server matches it
+ * against yt-dlp + gallery-dl extractors locally (no network), so asking on
+ * every tab is cheap. null = unsupported; throws if the server is down. */
+OFFTUBE.sourceOf = async function sourceOf(server, url) {
+  if (!OFFTUBE.isWebUrl(url)) return null;
+  const r = await OFFTUBE.apiGet(server, `/api/source?url=${encodeURIComponent(url)}`);
+  return r.supported ? r.source : null;
+};
+
+/* Preview markup shared by popup and side panel: site · kind, title,
+ * uploader, then a thumbnail grid for collections or one hero image. */
+OFFTUBE.previewHtml = function previewHtml(info) {
+  const e = OFFTUBE.escapeHtml;
+  const many = (info.count || 0) > 1;
+  let kind;
+  if (info.type === 'playlist') kind = `Playlist · ${info.count || '?'} items`;
+  else if (info.type === 'gallery') kind = many ? `${info.count}${info.more ? '+' : ''} items` : OFFTUBE.MEDIA_WORD[info.media] || 'Post';
+  else kind = (OFFTUBE.MEDIA_WORD[info.media] || 'Video') + (info.is_live ? ' · live' : '');
+  const site = info.source && info.source.label ? `<b>${e(info.source.label)}</b> · ` : '';
+  const grid = info.type === 'gallery' && many
+    ? `<ul class="grid">${(info.entries || []).slice(0, 8).map((x) => `<li>${x.thumbnail ? `<img src="${e(x.thumbnail)}" alt="" loading="lazy" />` : ''}</li>`).join('')}</ul>`
+    : '';
+  const hero = !grid && info.thumbnail ? `<img src="${e(info.thumbnail)}" alt="" />` : '';
+  const sub = [info.uploader, info.duration_str && info.duration_str !== '-' ? info.duration_str : '']
+    .filter(Boolean).map(e).join(' · ');
+  const quals = (info.qualities || []).map((q) => e(q.label)).join(' · ');
+  const note = info.part_of_playlist ? '<p>Part of a playlist — only this one is kept.</p>' : '';
+  return `${hero}<div><p class="kind">${site}${e(kind)}</p><h3>${e(info.title || 'Untitled')}</h3>`
+    + `${sub ? `<p>${sub}</p>` : ''}${quals ? `<p>${quals}</p>` : ''}${note}${grid}</div>`;
+};
+
+/* Fit the controls to what was inspected: galleries keep originals, so
+ * body[data-kind=gallery] hides .video-only controls; audio-only sources
+ * default to MP3; heights the video doesn't have are disabled. */
+OFFTUBE.fitControls = function fitControls(info) {
+  document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
+  const sel = document.getElementById('quality');
+  if (info.media === 'audio' && !sel.value.startsWith('audio')) sel.value = 'audio_mp3';
+  const ladder = (info.qualities || []).map((q) => q.id);
+  for (const opt of sel.options) {
+    opt.disabled = ladder.length > 0 && opt.value !== 'best'
+      && !opt.value.startsWith('audio') && !ladder.includes(opt.value);
+  }
 };
 
 OFFTUBE.escapeHtml = function escapeHtml(s) {
@@ -114,5 +159,6 @@ OFFTUBE.healthProblems = function healthProblems(checks) {
   if (!checks?.ffmpeg) problems.push('ffmpeg missing');
   if (checks?.yt_dlp === 'missing') problems.push('yt-dlp missing');
   if (!checks?.js_runtime_ok) problems.push('no JS runtime');
+  if (checks?.gallery_dl === 'missing') problems.push('gallery-dl missing');
   return problems;
 };

@@ -15,9 +15,9 @@
   <main>
     <p id="tabLine" class="tab-line">Reading current tab…</p>
 
-    <label class="label" for="url">YouTube link <span class="muted">(auto-filled from tab, editable)</span></label>
+    <label class="label" for="url">Link <span class="muted">(auto-filled from tab, editable)</span></label>
     <div class="row">
-      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" />
+      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://… a video, post, pin or track" />
       <button id="useTab" class="btn quiet" type="button" title="Re-read URL from current tab">Tab</button>
     </div>
 
@@ -27,7 +27,7 @@
     <p id="error" class="error hidden" role="alert"></p>
 
     <div class="row2">
-      <div class="field">
+      <div class="field video-only">
         <label class="label" for="quality">Quality</label>
         <select id="quality">
           <option value="best">Best available</option>
@@ -61,7 +61,7 @@
       </div>
       <label class="label" for="cookieText">Or paste file contents</label>
       <textarea id="cookieText" rows="3" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
-      <p class="hint">Bot-checks + members-only need this. Docker mode must use the file — the container can't read your browser.</p>
+      <p class="hint">Sign-in-only posts (private, members-only, most Instagram/X) and YouTube bot-checks need this. Docker mode must use the file — the container can't read your browser.</p>
     </div>
 
     <div class="actions">

@@ -5,27 +5,19 @@
 
 importScripts('shared.js');
 
-const YT_PATTERNS = [
-  '*://*.youtube.com/*',
-  '*://youtube.com/*',
-  '*://youtu.be/*',
-  '*://*.youtu.be/*',
-  '*://*.youtube-nocookie.com/*',
-];
-
+// No URL patterns: the server knows 2,000+ sites (yt-dlp + gallery-dl), a
+// static list here would always lag it. It decides; the badge says '!'.
 async function ensureMenus() {
   await chrome.contextMenus.removeAll();
   await chrome.contextMenus.create({
     id: 'offtube-keep-link',
-    title: 'Keep with offtube',
+    title: 'Keep link with offtube',
     contexts: ['link'],
-    targetUrlPatterns: YT_PATTERNS,
   });
   await chrome.contextMenus.create({
     id: 'offtube-keep-page',
-    title: 'Keep this video with offtube',
-    contexts: ['page', 'video'],
-    documentUrlPatterns: YT_PATTERNS,
+    title: 'Keep this page with offtube',
+    contexts: ['page', 'image', 'video', 'audio'],
   });
 }
 
@@ -47,7 +39,7 @@ async function setBadge(text, color) {
 }
 
 async function keepUrl(url) {
-  if (!OFFTUBE.isYouTubeUrl(url)) {
+  if (!OFFTUBE.isWebUrl(url)) {
     await setBadge('!', '#bc3d1e');
     return;
   }
@@ -72,8 +64,12 @@ async function keepUrl(url) {
 }
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  const url = info.linkUrl || info.srcUrl || info.pageUrl || (tab && tab.url) || '';
-  await keepUrl(url);
+  // The page, never srcUrl: a media element's src is a blob: or a bare CDN
+  // file, while the page (pin, post, watch URL) is what the engines read.
+  const url = info.menuItemId === 'offtube-keep-link'
+    ? info.linkUrl
+    : info.pageUrl || (tab && tab.url);
+  await keepUrl(url || '');
 });
 
 chrome.commands.onCommand.addListener(async (command) => {

@@ -16,8 +16,8 @@
     <section class="panel">
       <h2>01 · Source <span class="muted">auto-filled from tab</span></h2>
       <p id="tabLine" class="tab-line">Reading current tab…</p>
-      <label class="label" for="url">YouTube link (editable override)</label>
-      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://www.youtube.com/watch?v=…" />
+      <label class="label" for="url">Link (editable override)</label>
+      <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://… a video, post, pin, board or track" />
       <div class="row">
         <button id="useTab" class="btn quiet" type="button">Use current tab</button>
         <button id="inspect" class="btn quiet" type="button">Inspect</button>
@@ -28,12 +28,13 @@
 
     <section class="panel">
       <h2>02 · Format</h2>
-      <div class="seg" role="radiogroup" aria-label="Output type">
+      <p class="hint gallery-only">Kept as posted — original files, full size, no re-encode.</p>
+      <div class="seg video-only" role="radiogroup" aria-label="Output type">
         <label><input type="radio" name="otype" value="video" checked /> Video</label>
         <label><input type="radio" name="otype" value="audio" /> Audio</label>
       </div>
-      <label class="label" for="quality">Quality ceiling</label>
-      <select id="quality">
+      <label class="label video-only" for="quality">Quality ceiling</label>
+      <select id="quality" class="video-only">
         <option value="best">Best available</option>
         <option value="2160">2160p</option>
         <option value="1440">1440p</option>
@@ -44,18 +45,18 @@
         <option value="audio_mp3">Audio MP3</option>
         <option value="audio_m4a">Audio M4A</option>
       </select>
-      <label class="check"><input type="checkbox" id="subs" /> Keep subtitles (SRT)</label>
+      <label class="check video-only"><input type="checkbox" id="subs" /> Keep subtitles (SRT)</label>
     </section>
 
     <section class="panel">
       <h2>03 · Options</h2>
-      <div class="row2">
+      <div class="row2 video-only">
         <div><label class="label" for="clipFrom">From</label><input id="clipFrom" class="mono" placeholder="01:30" autocomplete="off" /></div>
         <div><label class="label" for="clipTo">To</label><input id="clipTo" class="mono" placeholder="02:45" autocomplete="off" /></div>
       </div>
-      <div class="seg" role="radiogroup" aria-label="Playlist scope">
-        <label><input type="radio" name="plmode" value="single" checked /> This video</label>
-        <label><input type="radio" name="plmode" value="playlist" /> Playlist</label>
+      <div class="seg" role="radiogroup" aria-label="Collection scope">
+        <label><input type="radio" name="plmode" value="single" checked /> This item</label>
+        <label><input type="radio" name="plmode" value="playlist" /> Whole collection</label>
       </div>
       <label class="label" for="access">Access</label>
       <select id="access">
@@ -85,7 +86,7 @@
         <label class="label" for="cookieText">Or paste file contents</label>
         <textarea id="cookieText" rows="4" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
       </div>
-      <p class="hint">Bot-checks + members-only / private videos need cookies. Docker mode must use the file — the container can't read your host browser. Nothing here is stored; the file stays on your machine.</p>
+      <p class="hint">Sign-in-only posts (private, members-only, most Instagram/X) and YouTube bot-checks need cookies. Docker mode must use the file — the container can't read your host browser. Nothing here is stored; the file stays on your machine.</p>
     </section>
 
     <section class="panel dark">

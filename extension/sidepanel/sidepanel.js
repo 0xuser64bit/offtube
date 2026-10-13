@@ -50,43 +50,47 @@ function payload() {
 async function fillFromTab(force) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url || '';
-  if (url && OFFTUBE.isYouTubeUrl(url)) {
-    const current = $('url').value.trim();
-    if (force || !current || current === lastTabUrl) {
-      $('url').value = url;
-      lastTabUrl = url;
-    }
-    $('tabLine').textContent = `Tab: ${(tab.title || url)}`.slice(0, 100);
-    $('tabLine').title = url;
-    return true;
+  $('tabLine').title = url;
+  if (!url) {
+    $('tabLine').textContent = 'Could not read tab URL. Paste a link below.';
+    return false;
   }
-  $('tabLine').textContent = url
-    ? 'Current tab is not YouTube — paste a link below.'
-    : 'Could not read tab URL. Paste a link below.';
-  return false;
+  let source;
+  try {
+    source = await OFFTUBE.sourceOf((await getSettings()).serverUrl, url);
+  } catch {
+    $('tabLine').textContent = 'Server unreachable — start ./run.sh.';
+    return false;
+  }
+  if (!source) {
+    $('tabLine').textContent = 'Nothing offtube can keep on this tab — paste a link below.';
+    return false;
+  }
+  const current = $('url').value.trim();
+  if (force || !current || current === lastTabUrl) {
+    $('url').value = url;
+    lastTabUrl = url;
+  }
+  $('tabLine').textContent = `${source.label} · ${tab.title || url}`.slice(0, 100);
+  return true;
 }
 
 async function inspect() {
   setError('');
   const { serverUrl } = await getSettings();
   const url = $('url').value.trim();
-  if (!url || !OFFTUBE.isYouTubeUrl(url)) {
-    setError('Only youtube.com / youtu.be links are supported.');
+  if (!url) {
+    setError('Paste a link first.');
     return;
   }
   try {
     lastInspected = url;
     const { info } = await OFFTUBE.api(serverUrl, '/api/info', { url, ...accessFields() });
-    if (info.type === 'playlist') {
-      $('preview').innerHTML = `<div><strong>${OFFTUBE.escapeHtml(info.title || 'Playlist')}</strong><br /><span class="muted">Playlist · ${OFFTUBE.escapeHtml(String(info.count || ''))} videos</span></div>`;
-      document.querySelector('input[name="plmode"][value="playlist"]').checked = true;
-    } else {
-      const quals = (info.qualities || []).map((q) => OFFTUBE.escapeHtml(q.label)).join(' · ');
-      const plNote = info.part_of_playlist
-        ? '<br /><span class="muted">Part of a playlist — switch Playlist below if you want more than this video.</span>'
-        : '';
-      $('preview').innerHTML = `${info.thumbnail ? `<img src="${OFFTUBE.escapeHtml(info.thumbnail)}" alt="" />` : ''}<div><strong>${OFFTUBE.escapeHtml(info.title || 'Video')}</strong><br /><span class="muted">${OFFTUBE.escapeHtml(info.uploader || '')} ${OFFTUBE.escapeHtml(info.duration_str || '')}<br />${quals}</span>${plNote}</div>`;
-    }
+    $('preview').innerHTML = OFFTUBE.previewHtml(info);
+    const collection = info.type === 'playlist' || (info.type === 'gallery' && info.count > 1);
+    document.querySelector(`input[name="plmode"][value="${collection ? 'playlist' : 'single'}"]`).checked = true;
+    if (info.media === 'audio') document.querySelector('input[name="otype"][value="audio"]').checked = true;
+    OFFTUBE.fitControls(info);
   } catch (err) {
     setError(err.message);
   }
@@ -101,7 +105,8 @@ async function refreshQueue(server) {
       const cancel = cancellable
         ? `<button class="btn quiet small" data-cancel="${OFFTUBE.escapeHtml(j.id)}" type="button">Cancel</button>`
         : '';
-      return `<div class="job"><strong>${OFFTUBE.escapeHtml(j.status)}</strong> · ${Math.round(j.progress || 0)}%<br /><span class="muted">${OFFTUBE.escapeHtml((j.url || '').slice(0, 60))}</span>${cancel}</div>`;
+      const what = (j.source ? `${j.source} · ` : '') + (j.url || '').replace(/^https?:\/\/(www\.)?/, '').slice(0, 60);
+      return `<div class="job"><strong>${OFFTUBE.escapeHtml(j.status)}</strong> · ${Math.round(j.progress || 0)}%<br /><span class="muted">${OFFTUBE.escapeHtml(what)}</span>${cancel}</div>`;
     }).join('') || '<p class="muted">No downloads yet.</p>';
   } catch { /* server down — health badge already shows it */ }
 }
@@ -162,7 +167,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await OFFTUBE.showHealth(serverUrl);
   refreshQueue(serverUrl);
   refreshFiles(serverUrl);
-  if (OFFTUBE.isYouTubeUrl($('url').value)) inspect();
+  if ($('url').value.trim()) inspect();
 });
 
 async function followTabIfNeeded() {

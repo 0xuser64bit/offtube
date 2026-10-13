@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "offtube — keep YouTube locally",
-  "version": "0.2.0",
-  "description": "Detects the YouTube video in your current tab and sends it to your local offtube server (127.0.0.1) to keep. Right-click a YouTube link to queue a download. Manual link override supported.",
+  "name": "offtube — keep video, audio & images locally",
+  "version": "0.3.0",
+  "description": "Sends the video, post, pin, board or track in your tab to your local offtube server (127.0.0.1): YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ sites.",
   "minimum_chrome_version": "114",
   "icons": {
     "16": "icons/icon-16.png",

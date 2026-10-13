@@ -32,39 +32,20 @@ function setStatus(msg, pct) {
 }
 
 function renderPreview(info) {
-  const box = $('preview');
-  if (info.type === 'playlist') {
-    box.innerHTML = `<div><h3>${OFFTUBE.escapeHtml(info.title || 'Playlist')}</h3><p>Playlist · ${OFFTUBE.escapeHtml(String(info.count || ''))} videos</p></div>`;
-    return;
-  }
-  const quals = (info.qualities || []).map((q) => OFFTUBE.escapeHtml(q.label)).join(' · ');
-  const plNote = info.part_of_playlist
-    ? '<p>Part of a playlist — open the side panel to grab more than this video.</p>'
-    : '';
-  box.innerHTML = `${info.thumbnail ? `<img src="${OFFTUBE.escapeHtml(info.thumbnail)}" alt="" />` : ''}`
-    + `<div><h3>${OFFTUBE.escapeHtml(info.title || 'Video')}</h3><p>${OFFTUBE.escapeHtml(info.uploader || '')}${info.duration_str ? ` · ${OFFTUBE.escapeHtml(info.duration_str)}` : ''}</p><p>${quals}</p>${plNote}</div>`;
-  const ladder = (info.qualities || []).map((q) => q.id);
-  const sel = $('quality');
-  for (const opt of sel.options) {
-    if (ladder.length && opt.value !== 'best' && !opt.value.startsWith('audio') && !ladder.includes(opt.value)) {
-      opt.disabled = true;
-    } else {
-      opt.disabled = false;
-    }
-  }
+  $('preview').innerHTML = OFFTUBE.previewHtml(info);
+  OFFTUBE.fitControls(info);
 }
 
 async function inspect() {
   setError('');
   const { serverUrl } = await getSettings();
   const url = $('url').value.trim();
-  if (!url) { setError('Paste a link or open a YouTube tab first.'); return; }
-  if (!OFFTUBE.isYouTubeUrl(url)) { setError('Only youtube.com / youtu.be links are supported.'); return; }
+  if (!url) { setError('Paste a link first.'); return; }
   $('inspect').disabled = true;
   try {
     const { info } = await OFFTUBE.api(serverUrl, '/api/info', { url, ...accessPayload() });
     renderPreview(info);
-    setStatus('Inspected. Pick quality and hit Download.');
+    setStatus(info.type === 'gallery' ? 'Inspected. Files are kept as posted.' : 'Inspected. Pick quality and hit Download.');
   } catch (err) {
     setError(err.message);
   } finally {
@@ -120,19 +101,27 @@ async function download() {
   }
 }
 
-async function fillFromTab() {
+async function fillFromTab(serverUrl) {
   const { url, title } = await getActiveTabUrl();
   const line = $('tabLine');
-  if (url && OFFTUBE.isYouTubeUrl(url)) {
-    if (!$('url').value.trim()) $('url').value = url;
-    line.textContent = `Tab: ${title || url}`.slice(0, 90);
-    line.title = url;
-  } else if (url) {
-    line.textContent = 'Current tab is not YouTube — paste a link below.';
-    line.title = url;
-  } else {
+  line.title = url;
+  if (!url) {
     line.textContent = 'Could not read tab URL (need “tabs” permission). Paste a link below.';
+    return;
   }
+  let source;
+  try {
+    source = await OFFTUBE.sourceOf(serverUrl, url);
+  } catch {
+    line.textContent = 'Server unreachable — start ./run.sh, then reopen.';
+    return;
+  }
+  if (!source) {
+    line.textContent = 'Nothing offtube can keep on this tab — paste a link below.';
+    return;
+  }
+  if (!$('url').value.trim()) $('url').value = url;
+  line.textContent = `${source.label} · ${title || url}`.slice(0, 90);
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -143,9 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('quality').value = quality;
   $('access').value = access;
   syncAccess();
-  await fillFromTab();
+  await fillFromTab(serverUrl);
   await OFFTUBE.showHealth(serverUrl);
-  if (OFFTUBE.isYouTubeUrl($('url').value)) inspect();
+  if ($('url').value.trim()) inspect();
 });
 
 $('useTab').addEventListener('click', async () => {
