@@ -275,8 +275,7 @@ function renderPrint(info) {
         <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? "+" : ""} items</span></div>
         <ol class="contact">${entries.map((e, i) => `<li>
           <button type="button" class="cell" aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ""}">
-            <span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>
-            ${markSvg("circle")}
+            <span class="cell-frame"><span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>${markSvg("circle")}</span>
             <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}${e.is_video ? " · Video" : ""}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>
           </button></li>`).join("")}</ol>
         <div class="edge-row"><span class="edge edge-dim">Circle prints to keep only those</span><span class="edge" id="sheetCount"></span></div>

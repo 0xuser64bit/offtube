@@ -149,7 +149,9 @@ main { padding: 14px; }
 /* contact sheet */
 .contact { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px 8px; margin: 0; padding: 4px 0 2px; list-style: none; }
 .panel .contact { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
-.cell { position: relative; display: grid; gap: 4px; width: 100%; padding: 0; border: 0; background: none; text-align: left; }
+.cell { position: relative; display: grid; gap: 9px; width: 100%; padding: 0; border: 0; background: none; text-align: left; }
+.cell-frame { position: relative; display: block; }
+.cell .mark { inset: -6% -6% auto -6%; width: 112%; height: 110%; }
 .cell-img { position: relative; display: grid; place-items: center; aspect-ratio: 1; background: var(--rebate-2); overflow: hidden; }
 .cell-img img { width: 100%; height: 100%; object-fit: cover; }
 .cell-img .edge { white-space: normal; padding: 6px; text-align: center; color: var(--edge-2); font-size: 9.5px; }
