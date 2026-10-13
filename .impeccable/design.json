@@ -1,0 +1,470 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-13T19:58:42+00:00",
+  "title": "Design System: offtube",
+  "extensions": {
+    "colorMeta": {
+      "paper": {
+        "role": "neutral",
+        "displayName": "Photo Paper",
+        "canonical": "#f3f3f0",
+        "dark": "#121211",
+        "tonalRamp": [
+          "#121211",
+          "#525251",
+          "#939390",
+          "#d3d3d0",
+          "#f4f4f1",
+          "#f5f5f3",
+          "#f7f7f4",
+          "#f8f8f6"
+        ]
+      },
+      "paper-hi": {
+        "role": "neutral",
+        "displayName": "Paper Highlight",
+        "canonical": "#fbfbf9",
+        "dark": "#1b1b19",
+        "tonalRamp": [
+          "#121211",
+          "#555553",
+          "#979796",
+          "#dadad8",
+          "#fbfbf9",
+          "#fafaf8",
+          "#f9f9f7",
+          "#f8f8f6"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#141413",
+        "dark": "#ecebe5",
+        "tonalRamp": [
+          "#121211",
+          "#131312",
+          "#131312",
+          "#141413",
+          "#353533",
+          "#767674",
+          "#b7b7b5",
+          "#f8f8f6"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "#474743",
+        "dark": "#bdbcb4",
+        "tonalRamp": [
+          "#121211",
+          "#21211f",
+          "#30302e",
+          "#3f3f3c",
+          "#60605d",
+          "#939390",
+          "#c5c5c3",
+          "#f8f8f6"
+        ]
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink 3",
+        "canonical": "#64645e",
+        "dark": "#a19d92",
+        "tonalRamp": [
+          "#121211",
+          "#292927",
+          "#41413d",
+          "#585853",
+          "#797974",
+          "#a3a39f",
+          "#cececb",
+          "#f8f8f6"
+        ]
+      },
+      "ink-hover": {
+        "role": "neutral",
+        "displayName": "Ink Hover",
+        "canonical": "#000000",
+        "dark": "#ffffff",
+        "tonalRamp": [
+          "#121211",
+          "#0d0d0c",
+          "#080807",
+          "#030302",
+          "#232323",
+          "#6a6a69",
+          "#b1b1b0",
+          "#f8f8f6"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#d6d6cf",
+        "dark": "#2d2d2a",
+        "tonalRamp": [
+          "#121211",
+          "#4a4a47",
+          "#82827e",
+          "#babab4",
+          "#dbdbd5",
+          "#e5e5e0",
+          "#eeeeeb",
+          "#f8f8f6"
+        ]
+      },
+      "rule-2": {
+        "role": "neutral",
+        "displayName": "Rule 2",
+        "canonical": "#a9a9a1",
+        "dark": "#4a4a45",
+        "tonalRamp": [
+          "#121211",
+          "#3d3d3a",
+          "#686863",
+          "#93938c",
+          "#b4b4ad",
+          "#cbcbc5",
+          "#e1e1de",
+          "#f8f8f6"
+        ]
+      },
+      "rebate": {
+        "role": "neutral",
+        "displayName": "Film Rebate",
+        "canonical": "#0f0f0e",
+        "dark": "#000000",
+        "tonalRamp": [
+          "#121211",
+          "#111110",
+          "#10100f",
+          "#0f0f0e",
+          "#30302f",
+          "#737371",
+          "#b5b5b4",
+          "#f8f8f6"
+        ]
+      },
+      "rebate-2": {
+        "role": "neutral",
+        "displayName": "Frame Black",
+        "canonical": "#20201e",
+        "dark": "#1a1a18",
+        "tonalRamp": [
+          "#121211",
+          "#161615",
+          "#1a1a18",
+          "#1e1e1c",
+          "#3f3f3d",
+          "#7d7d7b",
+          "#babab8",
+          "#f8f8f6"
+        ]
+      },
+      "edge": {
+        "role": "neutral",
+        "displayName": "Edge Print",
+        "canonical": "#ebe7dc",
+        "dark": "#ebe7dc",
+        "tonalRamp": [
+          "#121211",
+          "#504f4b",
+          "#8e8c85",
+          "#ccc9bf",
+          "#ede9e0",
+          "#f1eee7",
+          "#f4f3ef",
+          "#f8f8f6"
+        ]
+      },
+      "edge-2": {
+        "role": "neutral",
+        "displayName": "Dim Edge",
+        "canonical": "#a19d92",
+        "dark": "#a19d92",
+        "tonalRamp": [
+          "#121211",
+          "#3b3a36",
+          "#64615b",
+          "#8d8980",
+          "#adaaa0",
+          "#c6c4bd",
+          "#dfded9",
+          "#f8f8f6"
+        ]
+      },
+      "pencil": {
+        "role": "primary",
+        "displayName": "China-Marker Crimson",
+        "canonical": "#d0103a",
+        "dark": "#ff4766",
+        "tonalRamp": [
+          "#121211",
+          "#48111d",
+          "#7f1128",
+          "#b51034",
+          "#d63155",
+          "#e1738b",
+          "#edb6c0",
+          "#f8f8f6"
+        ]
+      },
+      "pencil-ink": {
+        "role": "primary",
+        "displayName": "Crimson Ink",
+        "canonical": "#b00d31",
+        "dark": "#ff6f86",
+        "tonalRamp": [
+          "#121211",
+          "#3f111a",
+          "#6c0f23",
+          "#990e2c",
+          "#ba2f4d",
+          "#cf7285",
+          "#e3b5be",
+          "#f8f8f6"
+        ]
+      },
+      "on-pencil": {
+        "role": "neutral",
+        "displayName": "On Pencil",
+        "canonical": "#ffffff",
+        "dark": "#121211",
+        "tonalRamp": [
+          "#121211",
+          "#565655",
+          "#999999",
+          "#dddddd",
+          "#fefefe",
+          "#fcfcfb",
+          "#fafaf9",
+          "#f8f8f6"
+        ]
+      },
+      "safelight": {
+        "role": "secondary",
+        "displayName": "Safelight Amber",
+        "canonical": "#f0962a",
+        "dark": "#f0962a",
+        "tonalRamp": [
+          "#121211",
+          "#513818",
+          "#915d1f",
+          "#d08326",
+          "#f1a447",
+          "#f3c081",
+          "#f6dcbc",
+          "#f8f8f6"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "Blank-sheet call over the film only."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Print title under the rebate."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Section heads opened by a 2px ink rule."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "All UI copy; extension 14px/1.45."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Form field labels and legends, directly above their control."
+      },
+      "edge": {
+        "displayName": "Edge Print",
+        "purpose": "Film edge lettering on rebate only."
+      },
+      "code": {
+        "displayName": "Code",
+        "purpose": "Transfer log and cookie textarea only."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease",
+        "value": "cubic-bezier(.16, 1, .3, 1)",
+        "purpose": "Mark draw-in, meter fill, chevron and Keep arrow."
+      },
+      {
+        "name": "mark-draw",
+        "value": ".5s clip-path wipe left to right",
+        "purpose": "Pencil marks drawn in; instant under reduced motion."
+      },
+      {
+        "name": "develop",
+        "value": "opacity .5s linear driven by --p",
+        "purpose": "Negative and amber wash fade to positive with progress."
+      },
+      {
+        "name": "safelight-pulse",
+        "value": "1.6s ease-in-out infinite alternate, opacity .08 to .22",
+        "purpose": "Frame being exposed (inspected)."
+      },
+      {
+        "name": "meter",
+        "value": "transform scaleX .4s var(--ease)",
+        "purpose": "Progress without reflow."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "stack",
+        "value": "960px"
+      },
+      {
+        "name": "compact",
+        "value": "720px"
+      },
+      {
+        "name": "popup",
+        "value": "380px fixed"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Keep Bar",
+      "kind": "button",
+      "refersTo": "keep-button",
+      "description": "The single primary action on every surface: a full-width black bar.",
+      "html": "<button class=\"ds-keep\"><svg viewBox=\"0 0 20 20\" width=\"19\" height=\"19\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><path d=\"M10 3v10M5.5 8.5 10 13l4.5-4.5M4 17h12\"/></svg>Keep</button>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-keep{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:60px;border:0;border-radius:0;background:var(--ink);color:var(--paper);font:760 19px var(--face);font-stretch:86%;cursor:pointer;transition:background .2s} .ds-keep svg{transition:transform .25s var(--ease)} .ds-keep:hover{background:var(--ink-hover)} .ds-keep:hover svg{transform:translateY(2px)} .ds-keep:active{transform:translateY(1px)} .ds-keep:focus-visible{outline:2px solid var(--pencil);outline-offset:2px}"
+    },
+    {
+      "name": "Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Secondary solid control; the quiet variant is outlined.",
+      "html": "<div style=\"display:flex;gap:10px\"><button class=\"ds-btn\">Retry</button><button class=\"ds-btn ds-btn-quiet\">Cancel</button></div>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-btn{display:inline-flex;align-items:center;min-height:42px;padding:0 16px;border:1.5px solid var(--ink);border-radius:0;background:var(--ink);color:var(--paper);font:650 14px var(--face);cursor:pointer} .ds-btn-quiet{background:transparent;color:var(--ink)} .ds-btn-quiet:hover{background:var(--paper-hi)} .ds-btn:focus-visible{outline:2px solid var(--pencil);outline-offset:2px}"
+    },
+    {
+      "name": "Text Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Underlined secondary actions: Circle all shown, Clear finished, Save, Delete.",
+      "html": "<button class=\"ds-text-btn\">Clear finished</button>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-text-btn{padding:0;border:0;background:none;font:650 14px var(--face);color:var(--ink);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px;cursor:pointer} .ds-text-btn:hover{text-decoration-thickness:2px} .ds-text-btn:focus-visible{outline:2px solid var(--pencil);outline-offset:2px}"
+    },
+    {
+      "name": "Paste Rail",
+      "kind": "input",
+      "refersTo": "paste-rail",
+      "description": "The link input across the top bar with its attached Preview button.",
+      "html": "<form class=\"ds-paste\"><input placeholder=\"Paste a link\" aria-label=\"Link\"><button type=\"button\">Preview</button></form>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-paste{display:flex;max-width:560px;background:var(--paper-hi);border:1.5px solid var(--ink)} .ds-paste:focus-within{outline:2px solid var(--pencil);outline-offset:2px} .ds-paste input{flex:1;min-width:0;height:50px;padding:0 18px;border:0;background:transparent;font:430 16px var(--face);color:var(--ink);caret-color:var(--pencil);outline:none} .ds-paste input::placeholder{color:var(--ink-3)} .ds-paste button{padding:0 24px;border:0;background:var(--ink);color:var(--paper);font:700 15px var(--face);cursor:pointer} .ds-paste button:hover{background:var(--ink-hover);text-decoration:underline;text-underline-offset:4px}"
+    },
+    {
+      "name": "Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Labelled option field inside a folded note.",
+      "html": "<label class=\"ds-field\"><span class=\"ds-label\">From</span><input placeholder=\"1:30\"></label>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-field{display:grid;gap:6px;max-width:200px} .ds-label{font:650 11px/1.2 var(--face);font-stretch:72%;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-3)} .ds-field input{min-height:42px;padding:9px 12px;border:1px solid var(--rule-2);border-radius:0;background:var(--paper-hi);font:430 15px var(--face);color:var(--ink);font-variant-numeric:tabular-nums} .ds-field input:focus-visible{outline:2px solid var(--pencil);outline-offset:1px;border-color:var(--ink)}"
+    },
+    {
+      "name": "Segmented Control",
+      "kind": "nav",
+      "refersTo": "segment-selected",
+      "description": "Mode and library filter; selected segment is solid ink.",
+      "html": "<div class=\"ds-seg\" role=\"radiogroup\"><label><input type=\"radio\" name=\"s\" checked><span>All</span></label><label><input type=\"radio\" name=\"s\"><span>Video</span></label><label><input type=\"radio\" name=\"s\"><span>Audio</span></label></div>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-seg{display:inline-grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:3px;padding:3px;border:1.5px solid var(--ink)} .ds-seg label{position:relative} .ds-seg input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer} .ds-seg span{display:block;padding:9px 16px;font:650 14px var(--face);color:var(--ink-2);text-align:center} .ds-seg input:checked+span{background:var(--ink);color:var(--paper)} .ds-seg label:hover input:not(:checked)+span{background:var(--paper-hi);color:var(--ink)} .ds-seg input:focus-visible+span{outline:2px solid var(--pencil);outline-offset:-5px}"
+    },
+    {
+      "name": "Format Row",
+      "kind": "chip",
+      "refersTo": "format-row-checked",
+      "description": "Format choice; the chosen row is circled in pencil, not recoloured.",
+      "html": "<div class=\"ds-fmts\"><label class=\"ds-fmt\"><input type=\"radio\" name=\"f\" checked><span class=\"ds-fmt-name\">Best<svg class=\"ds-mark \" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15\"/></svg></span><span class=\"ds-fmt-sub\">1.2 GB</span></label><label class=\"ds-fmt\"><input type=\"radio\" name=\"f\"><span class=\"ds-fmt-name\">1080p<svg class=\"ds-mark \" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15\"/></svg></span><span class=\"ds-fmt-sub\">640 MB</span></label></div>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-mark{position:absolute;pointer-events:none;overflow:visible;animation:ds-draw .5s var(--ease) both} .ds-mark path{fill:none;stroke:var(--pencil);stroke-width:4.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke} @keyframes ds-draw{from{clip-path:inset(-20% 100% -20% -20%)}to{clip-path:inset(-20% -20% -20% -20%)}} .ds-fmts{max-width:384px;border-top:1px solid var(--rule)} .ds-fmt{position:relative;display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;min-height:48px;padding:0 10px 0 14px;border-bottom:1px solid var(--rule);cursor:pointer;font-family:var(--face);color:var(--ink)} .ds-fmt input{position:absolute;inset:0;margin:0;opacity:0;cursor:pointer} .ds-fmt-name{position:relative;justify-self:start;padding:4px 9px;margin-left:-9px;font-size:15.5px;font-weight:680} .ds-fmt-sub{font-size:13px;color:var(--ink-3);font-variant-numeric:tabular-nums} .ds-fmt .ds-mark{display:none;inset:-5px -9px;width:calc(100% + 18px);height:calc(100% + 10px)} .ds-fmt input:checked~.ds-fmt-name .ds-mark{display:block} .ds-fmt:hover,.ds-fmt:has(input:checked){background:var(--paper-hi)} .ds-fmt:has(input:focus-visible){outline:2px solid var(--pencil);outline-offset:-2px}"
+    },
+    {
+      "name": "Print with Marks",
+      "kind": "custom",
+      "refersTo": "rebate",
+      "description": "Signature: media in a film rebate with edge print; circle, tick and strike overlay the image box only.",
+      "html": "<div class=\"ds-sheet\"><div class=\"ds-rebate\"><div class=\"ds-img\"><svg class=\"ds-mark ds-circle\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15\"/></svg></div><div class=\"ds-edge-row\"><span class=\"ds-edge\">01 \u00b7 VIDEO</span><span class=\"ds-edge\" style=\"color:var(--edge)\">CIRCLED</span></div></div><div class=\"ds-rebate\"><div class=\"ds-img\"><svg class=\"ds-mark ds-tick\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M12 56C21 62 29 71 37 84C49 59 66 33 91 10\"/></svg></div><div class=\"ds-edge-row\"><span class=\"ds-edge\">02 \u00b7 VIDEO</span><span class=\"ds-edge\" style=\"color:var(--edge)\">KEPT</span></div></div><div class=\"ds-rebate\"><div class=\"ds-img\"><svg class=\"ds-mark ds-strike\" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86\"/></svg></div><div class=\"ds-edge-row\"><span class=\"ds-edge\">03 \u00b7 VIDEO</span><span class=\"ds-edge\" style=\"color:var(--edge-2)\">FAILED</span></div></div><div class=\"ds-rebate\"><div class=\"ds-img\"><svg class=\"ds-mark \" viewBox=\"0 0 100 100\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><path d=\"\"/></svg></div><div class=\"ds-edge-row\"><span class=\"ds-edge\">04 \u00b7 VIDEO</span><span class=\"ds-edge\" style=\"color:var(--safelight)\">42%</span></div></div></div>",
+      "css": ":host{--paper:#f3f3f0;--paper-hi:#fbfbf9;--ink:#141413;--ink-2:#474743;--ink-3:#64645e;--ink-hover:#000;--rule:#d6d6cf;--rule-2:#a9a9a1;--rebate:#0f0f0e;--rebate-2:#20201e;--edge:#ebe7dc;--edge-2:#a19d92;--pencil:#d0103a;--pencil-ink:#b00d31;--safelight:#f0962a;--face:\"Archivo\",ui-sans-serif,system-ui,sans-serif;--ease:cubic-bezier(.16,1,.3,1)} .ds-mark{position:absolute;pointer-events:none;overflow:visible;animation:ds-draw .5s var(--ease) both} .ds-mark path{fill:none;stroke:var(--pencil);stroke-width:4.5;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke} @keyframes ds-draw{from{clip-path:inset(-20% 100% -20% -20%)}to{clip-path:inset(-20% -20% -20% -20%)}} .ds-edge{font:600 11px/1.2 var(--face);font-stretch:62%;letter-spacing:.12em;text-transform:uppercase;font-variant-numeric:tabular-nums;color:var(--edge);white-space:nowrap} .ds-edge-row{display:flex;justify-content:space-between;gap:16px} .ds-sheet{display:grid;grid-template-columns:repeat(4,120px);gap:14px} .ds-rebate{background:var(--rebate);padding:10px 10px 6px} .ds-img{position:relative;aspect-ratio:1;background:var(--rebate-2)} .ds-rebate .ds-edge-row{padding-top:6px} .ds-circle{inset:-6% -6% auto -6%;width:112%;height:110%} .ds-tick{inset:auto -5% -9% auto;width:32%;height:46%} .ds-strike{inset:6%;width:88%;height:88%} .ds-rebate:last-child .ds-img{background:var(--safelight);opacity:.35}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Contact Sheet",
+    "overview": "Every piece of media offtube finds is treated as a print on a darkroom contact sheet. The ground is bright neutral photo paper, never cream. Each image sits inside a black film-rebate band whose top and bottom edges carry small condensed edge printing: site, kind, frame number, size. The user marks what to keep the way a photographer marks a sheet, with a crimson china-marker: a circle means chosen, a tick means kept, a strike means failed. While a file downloads its print develops, from an amber-safelit negative to a positive.\n\nThe system is flat, square and ink-on-paper. It has no shadows, no gradients, no cards and no rounded corners. Black does the structural work: rebate bands, the Keep bar, 2px ink rules that open each section. Crimson and amber are rare because each one means something specific. Density is calm and operational. One print and one Keep action lead, and power options sit underneath as folded notes. The same world runs at three sizes: the web desk, the ~380px popup and the narrow side panel. They share tokens and differ only in scale.\n\nLight is the default scene. Dark follows the OS and keeps the same world under safelight: paper goes near-black, the rebate goes to pure black with a 1px outline, and the pencil brightens.",
+    "keyCharacteristics": [
+      "Paper ground, black film rebate, condensed uppercase edge printing on the film.",
+      "One crimson pencil, used for marks and a few accessibility affordances only.",
+      "Safelight amber appears only while something develops.",
+      "Square corners everywhere, with 1px and 2px ink or grey rules for structure.",
+      "Marks are an SVG overlay drawn in with a wipe, and they never recolour the print.",
+      "Live strips update in place without reflow."
+    ],
+    "rules": [
+      {
+        "name": "The Marks-Only Crimson Rule",
+        "body": "Crimson means one of three things: chosen (circle), kept (tick) or failed (strike). It is also used for failure text, focus rings, selection and caret. It is never a hover, never a link colour, and never decoration.",
+        "section": "colors"
+      },
+      {
+        "name": "The Safelight Rule",
+        "body": "Amber is on only while something is in the darkroom, being exposed or developing. When the work is done, amber goes away (the meter turns ink, the print turns positive).",
+        "section": "colors"
+      },
+      {
+        "name": "The Never-Cream Rule",
+        "body": "The paper is a cool neutral grey-white (#f3f3f0). Warmth belongs only to the edge print on black film.",
+        "section": "colors"
+      },
+      {
+        "name": "The Edge-Print-Lives-On-Film Rule",
+        "body": "Condensed tracked uppercase in edge colours appears only inside a rebate band or a film strip. Off the film, small uppercase is a form label above its own control, never a kicker above a heading.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Numbers Rule",
+        "body": "Frame numbers, sizes, percentages, counts and numeric inputs use tabular figures so live values don't jitter.",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Reflow Rule",
+        "body": "Live strips (session, progress, tally) update the existing nodes in place. Progress moves by `transform: scaleX` and opacity, and text sits in fixed slots. Nothing shifts as jobs advance.",
+        "section": "layout"
+      },
+      {
+        "name": "The Flat Film Rule",
+        "body": "Nothing floats. Separation uses rules, black bands or a paper-hi fill, never a shadow, glow or gradient.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** frame every piece of media in a black rebate band with condensed edge printing top and bottom.",
+      "**Do** express chosen, kept and failed only with pencil marks (circle, tick, strike) drawn as an overlay.",
+      "**Do** ring the image box only. A circle never encloses the edge print or caption.",
+      "**Do** use amber only while exposing or developing, and switch to ink once done.",
+      "**Do** keep corners square and separate with 1px rules, 2px ink section rules or a paper-hi fill.",
+      "**Do** update live strips in place with transform and opacity, using tabular numerals.",
+      "**Do** keep light as the default scheme and let `prefers-color-scheme: dark` remap the same tokens.",
+      "**Do** let one black Keep bar be the only primary action on a surface."
+    ],
+    "donts": [
+      "**Don't** use crimson for hovers, links, badges, headings or decoration.",
+      "**Don't** recolour, tint or filter a print to show a mark. The mark sits on top.",
+      "**Don't** use shadows, gradients, rounded cards or cream paper.",
+      "**Don't** use edge-print styling off the film, and don't put an uppercase kicker above a heading.",
+      "**Don't** let progress or new jobs shift surrounding layout.",
+      "**Don't** load fonts from a CDN or inline styles. Archivo is self-hosted and the CSP is `style-src 'self'`."
+    ]
+  }
+}
