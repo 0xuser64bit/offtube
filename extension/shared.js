@@ -202,7 +202,7 @@ OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {})
           <${circle ? 'button type="button"' : 'span'} class="cell"${circle ? ` aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ''}"` : ''}>
             <span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>
             ${circle ? OFFTUBE.markSvg('circle') : ''}
-            <span class="edge edge-dim cell-no">${pad2(i + 1)}</span>
+            <span class="edge edge-dim cell-no">${pad2(i + 1)}${e.is_video ? ' · Video' : ''}</span>
           </${circle ? 'button' : 'span'}></li>`).join('')}</ol>
         <div class="edge-row"><span class="edge edge-dim">${circle ? 'Circle prints to keep only those' : `${esc(site)}`}</span><span class="edge" id="sheetCount">All ${esc(count)}${info.more ? '+' : ''}</span></div>
       </div>
@@ -231,6 +231,25 @@ OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {})
       ${note ? `<p class="print-note">${esc(note)}</p>` : ''}
     </figcaption>
   </figure>`;
+};
+
+/* What a session frame shows. A job started without inspect (or a gallery
+ * post) has no thumbnail or title of its own: once kept, fall back to the
+ * saved file itself, and name it by site and kind, never by a raw URL. */
+OFFTUBE.jobDisplay = function jobDisplay(job, server) {
+  const file = (job.files || [])[0] || '';
+  const ext = (file.split('.').pop() || '').toLowerCase();
+  const kind = /^(jpe?g|png|gif|webp|avif|heic)$/.test(ext) ? 'image'
+    : /^(mp4|webm|mkv|mov|m4v)$/.test(ext) ? 'video' : /^(mp3|m4a|opus|ogg|flac|wav)$/.test(ext) ? 'audio' : '';
+  const fileUrl = file ? `${server}/files/${encodeURIComponent(file)}` : '';
+  const tail = ((job.url || '').replace(/[?#].*$/, '').split('/').filter(Boolean).pop() || '').slice(0, 24);
+  const word = { image: 'image', video: 'video', audio: 'track' }[kind] || 'post';
+  return {
+    thumb: job.thumbnail || (kind === 'image' ? fileUrl : ''),
+    video: !job.thumbnail && kind === 'video' ? fileUrl : '',
+    title: job.title || `${job.source || 'Saved'} ${word}`,
+    meta: job.title ? job.source || '' : [job.source, tail].filter(Boolean).join(' · '),
+  };
 };
 
 OFFTUBE.developPrint = function developPrint(pct) {

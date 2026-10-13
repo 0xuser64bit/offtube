@@ -275,9 +275,9 @@ function renderPrint(info) {
         <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? "+" : ""} items</span></div>
         <ol class="contact">${entries.map((e, i) => `<li>
           <button type="button" class="cell" aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ""}">
-            <span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}${e.is_video ? `<span class="cell-tag edge">Video</span>` : ""}</span>
+            <span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>
             ${markSvg("circle")}
-            <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>
+            <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}${e.is_video ? " · Video" : ""}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>
           </button></li>`).join("")}</ol>
         <div class="edge-row"><span class="edge edge-dim">Circle prints to keep only those</span><span class="edge" id="sheetCount"></span></div>
       </div>
@@ -577,6 +577,25 @@ function stripFrame(jid) {
   return li;
 }
 
+// What a session frame shows. A job started without inspect (or a gallery
+// post) has no thumbnail or title of its own: once kept, fall back to the
+// saved file itself, and name it by site and kind, never by a raw URL.
+function jobDisplay(job) {
+  const file = (job.files || [])[0] || "";
+  const ext = (file.split(".").pop() || "").toLowerCase();
+  const kind = /^(jpe?g|png|gif|webp|avif|heic)$/.test(ext) ? "image"
+    : /^(mp4|webm|mkv|mov|m4v)$/.test(ext) ? "video" : /^(mp3|m4a|opus|ogg|flac|wav)$/.test(ext) ? "audio" : "";
+  const fileUrl = file ? `/files/${encodeURIComponent(file)}` : "";
+  const tail = ((job.url || "").replace(/[?#].*$/, "").split("/").filter(Boolean).pop() || "").slice(0, 24);
+  const word = { image: "image", video: "video", audio: "track" }[kind] || "post";
+  return {
+    thumb: job.thumbnail || (kind === "image" ? fileUrl : ""),
+    video: !job.thumbnail && kind === "video" ? fileUrl : "",
+    title: job.title || `${job.source || "Saved"} ${word}`,
+    meta: [job.source, job.title ? (job.quality && job.quality !== "best" ? job.quality.replace("audio_", "") : "") : tail].filter(Boolean).join(" · "),
+  };
+}
+
 function updateFrame(li, job, no) {
   const pct = Math.round(job.progress || 0);
   const active = ACTIVE.includes(job.status);
@@ -585,10 +604,13 @@ function updateFrame(li, job, no) {
   st.textContent = job.status === "downloading" && pct ? `${STATE_WORD.downloading} ${pct}%` : STATE_WORD[job.status] || job.status;
   st.classList.toggle("edge-amber", active);
   const frame = li.querySelector(".js-frame");
-  if (frame.dataset.thumb !== (job.thumbnail || "")) {
-    frame.dataset.thumb = job.thumbnail || "";
-    frame.innerHTML = job.thumbnail ? developHtml(job.thumbnail)
-      : `<div class="frame-empty"><span class="edge">${esc(job.source || "offtube")}</span><span class="mark-slot"></span></div>`;
+  const show = jobDisplay(job);
+  const key = show.thumb || show.video;
+  if (frame.dataset.thumb !== key) {
+    frame.dataset.thumb = key;
+    frame.innerHTML = show.thumb ? developHtml(show.thumb)
+      : show.video ? `<span class="develop"><video class="pos" src="${esc(show.video)}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video><span class="mark-slot"></span></span>`
+        : `<div class="frame-empty"><span class="edge">${esc(job.source || "offtube")}</span><span class="mark-slot"></span></div>`;
     frame.dataset.mark = "";
   }
   li.classList.toggle("is-developing", active);
@@ -599,9 +621,9 @@ function updateFrame(li, job, no) {
     const slot = frame.querySelector(".mark-slot");
     if (slot) slot.innerHTML = markKind ? markSvg(markKind) : "";
   }
-  const title = job.title || (job.url || "").replace(/^https?:\/\/(www\.)?/, "");
+  const title = show.title;
   li.querySelector(".js-title").textContent = title;
-  li.querySelector(".js-meta").textContent = [job.source, job.quality && job.quality !== "best" ? job.quality.replace("audio_", "") : ""].filter(Boolean).join(" · ");
+  li.querySelector(".js-meta").textContent = show.meta;
   li.setAttribute("aria-label", `${title}: ${st.textContent}`);
   li.querySelector(".js-cancel").classList.toggle("hidden", !active);
   li.querySelector(".js-retry").classList.toggle("hidden", job.status !== "error" && job.status !== "cancelled");
@@ -622,7 +644,7 @@ async function refreshQueue() {
       if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
     });
     const active = all.filter((j) => ACTIVE.includes(j.status)).length;
-    $("queueCount").textContent = all.length ? `${active ? `${active} developing · ` : ""}${all.length} this session` : "";
+    $("queueCount").textContent = all.length ? `${active ? `${active} developing · ` : ""}${all.length} print${all.length === 1 ? "" : "s"}` : "";
     $("queueEmpty").classList.toggle("hidden", all.length > 0);
     $("clearQueue").classList.toggle("hidden", !all.some((j) => !ACTIVE.includes(j.status)));
   } catch { /* the health line already says the server is down */ }

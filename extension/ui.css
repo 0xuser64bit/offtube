@@ -27,6 +27,8 @@
   --pencil: #d0103a;
   --pencil-ink: #b00d31;
   --on-pencil: #fff;
+  --ink-hover: #000;
+  --perf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%232c2c29'/%3E%3C/svg%3E");
   --safelight: #f0962a;
   --face: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -46,6 +48,8 @@
     --pencil: #ff4766;
     --pencil-ink: #ff6f86;
     --on-pencil: #121211;
+    --ink-hover: #fff;
+    --perf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%2334342f'/%3E%3C/svg%3E");
   }
   .rebate { outline: 1px solid var(--rule-2); }
 }
@@ -87,6 +91,7 @@ figure { margin: 0; }
 .edge-dim { color: var(--edge-2); }
 .edge-amber { color: var(--safelight); }
 .edge-row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; min-width: 0; }
+.edge-row > :last-child:not(:first-child) { flex: none; }
 
 /* pencil marks: an overlay, drawn in with a wipe */
 .mark { position: absolute; inset: -7%; width: 114%; height: 114%; pointer-events: none; overflow: visible; animation: draw .5s var(--ease) both; }
@@ -158,11 +163,10 @@ button.cell:hover .cell-img { outline: 1px solid var(--edge-2); outline-offset: 
 /* controls */
 .label { display: block; font: 650 11px/1.2 var(--face); font-stretch: 72%; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .hint { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
-.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1.5px solid var(--ink); }
+.seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; padding: 3px; border: 1.5px solid var(--ink); }
 .seg label { position: relative; display: block; }
 .seg input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .seg span { display: block; padding: 7px 10px; font-size: 13px; font-weight: 650; text-align: center; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
-.seg label + label span { border-left: 1.5px solid var(--ink); }
 .seg input:checked + span { background: var(--ink); color: var(--paper); }
 .seg input:focus-visible + span { outline: 2px solid var(--pencil); outline-offset: -5px; }
 
@@ -184,13 +188,13 @@ button.cell:hover .cell-img { outline: 1px solid var(--edge-2); outline-offset: 
 .fmt:hover, .fmt:has(input:checked) { background: var(--paper-hi); }
 .fmt:has(input:focus-visible) { outline: 2px solid var(--pencil); outline-offset: -2px; }
 
-.notes { border-top: 1px solid var(--rule); }
-.note { border-bottom: 1px solid var(--rule); }
-.note summary { display: grid; grid-template-columns: auto minmax(0, 1fr) 12px; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; list-style: none; }
+.note:first-child { border-top: 1px solid var(--rule); }
+.note { padding: 3px 0; border-bottom: 1px solid var(--rule); }
+.note summary { display: grid; grid-template-columns: auto minmax(0, 1fr) 12px; align-items: center; gap: 10px; min-height: 38px; cursor: pointer; list-style: none; }
 .note summary::-webkit-details-marker { display: none; }
 .note-name { font-weight: 680; font-size: 14px; }
 .note-state { justify-self: end; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--ink-3); }
-.note-state.is-on { color: var(--pencil-ink); font-weight: 600; }
+.note-state.is-on { color: var(--ink); font-weight: 650; }
 .chev { width: 12px; height: 12px; fill: none; stroke: var(--ink-2); stroke-width: 1.6; transition: transform .25s var(--ease); }
 .note[open] .chev { transform: rotate(90deg); }
 .note-body { display: grid; gap: 12px; padding: 2px 0 16px; }
@@ -219,7 +223,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 .btn-quiet { background: transparent; color: var(--ink); }
 .btn-quiet:hover { background: var(--paper-hi); }
 .text-btn { padding: 0; border: 0; background: none; font-weight: 650; font-size: inherit; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; color: var(--ink); }
-.text-btn:hover { color: var(--pencil-ink); }
+.text-btn:hover { text-decoration-thickness: 2px; }
 
 .tally { margin: 12px 0 10px; font-size: 12.5px; color: var(--ink-2); }
 .tally b { color: var(--ink); font-weight: 680; }
@@ -227,7 +231,9 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 .keep-actions:has(#cancelBtn:not(.hidden)) { grid-template-columns: 1fr auto; }
 .keep-btn { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 52px; border: 0; background: var(--ink); color: var(--paper); font-size: 17px; font-weight: 760; font-stretch: 86%; transition: background .2s; }
 .keep-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.keep-btn:hover { background: var(--pencil-ink); color: var(--on-pencil); }
+.keep-btn:hover { background: var(--ink-hover); }
+.keep-btn svg { transition: transform .25s var(--ease); }
+.keep-btn:hover svg { transform: translateY(2px); }
 .keep-btn:active { transform: translateY(1px); }
 .keep-btn:disabled { cursor: default; opacity: .45; }
 .keep-btn:disabled:hover { background: var(--ink); color: var(--paper); }
@@ -276,7 +282,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
   list-style: none;
   /* the strip's perforations, left and right */
   background-color: var(--rebate);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%232a2a27'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%232a2a27'/%3E%3C/svg%3E");
+  background-image: var(--perf), var(--perf);
   background-position: 8px 0, calc(100% - 8px) 0;
   background-repeat: repeat-y;
 }
@@ -290,7 +296,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 .strip-title { margin: 0; font-size: 13px; font-weight: 600; line-height: 1.3; color: var(--edge); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
 .strip-actions { display: flex; gap: 12px; }
 .strip-actions .text-btn { color: var(--edge); font-size: 12px; }
-.strip-actions .text-btn:hover { color: var(--safelight); }
+.strip-actions .text-btn:hover { color: var(--edge); }
 .strip-frame:focus-visible { outline: none; }
 .strip-frame:focus-visible .frame { outline: 2px solid var(--pencil); outline-offset: 2px; }
 
@@ -305,7 +311,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 .kept-print .edge { font-size: 9.5px; }
 .kept-name { margin: 0; font-size: 12px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .kept-name a { text-decoration: none; }
-.kept-name a:hover { text-decoration: underline; color: var(--pencil-ink); }
+.kept-name a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 .empty { margin: 0; padding: 6px 0 2px; font-size: 13px; color: var(--ink-3); }
 
 /* the inspected media decides which controls exist */

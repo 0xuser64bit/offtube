@@ -19,12 +19,6 @@
   </header>
 
   <main>
-    <form class="link-edit" id="linkForm" autocomplete="off">
-      <label class="visually-hidden" for="url">Link to keep</label>
-      <input id="url" type="url" inputmode="url" spellcheck="false" placeholder="Paste a link, or open one in a tab" />
-      <button type="submit">Preview</button>
-    </form>
-    <p class="hint" id="tabLine">Follows the tab you’re on.</p>
 
     <div id="stage" aria-live="polite"></div>
     <p class="print-tools hidden" id="sheetTools"><span class="count" id="markCount"></span><button class="text-btn" type="button" id="markAll">Circle all shown</button><button class="text-btn" type="button" id="markNone">Clear circles</button></p>
@@ -38,16 +32,28 @@
     </div>
 
     <div class="keep-col">
-      <div class="seg video-only video-only-strict" role="radiogroup" aria-label="What to keep" id="otypeSeg">
-        <label><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
-        <label><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
+      <fieldset class="chips video-only" id="qualities" aria-label="Format"></fieldset>
+      <p class="tally num" id="tally"></p>
+
+      <div class="keep-actions">
+        <button id="dlBtn" class="keep-btn" type="button">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M2.5 13.5h11"/></svg>
+          <span id="dlLabel">Keep</span>
+        </button>
+        <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
       </div>
 
-      <fieldset class="formats">
-        <legend class="label">Format</legend>
-        <div id="qualities" class="format-list"></div>
-        <p class="hint" id="qualityNote"></p>
-      </fieldset>
+      <div class="deck" aria-live="polite">
+        <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+        <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
+        <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" aria-label="Transfer log"></pre></details>
+      </div>
+      <div class="link-row" id="linkRow"><span class="link-text" id="linkText"></span><button class="text-btn" type="button" id="changeLink">Change</button></div>
+      <form class="link-edit hidden" id="linkForm" autocomplete="off">
+        <label class="visually-hidden" for="url">Link to keep</label>
+        <input id="url" type="url" inputmode="url" spellcheck="false" placeholder="Paste a link" />
+        <button type="submit">Preview</button>
+      </form>
 
       <div class="notes">
         <details class="note video-only" id="discTrim">
@@ -122,21 +128,6 @@
         </details>
       </div>
 
-      <p class="tally num" id="tally"></p>
-
-      <div class="keep-actions">
-        <button id="dlBtn" class="keep-btn" type="button">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v7.5M4.5 6.5 8 10l3.5-3.5M2.5 13.5h11"/></svg>
-          <span id="dlLabel">Keep</span>
-        </button>
-        <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
-      </div>
-
-      <div class="deck" aria-live="polite">
-        <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
-        <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
-        <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" aria-label="Transfer log"></pre></details>
-      </div>
     </div>
 
     <section class="section" aria-labelledby="sessionTitle">

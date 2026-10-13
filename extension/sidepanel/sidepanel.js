@@ -19,9 +19,8 @@ let pollTimer = null;
 let inspectToken = 0;
 
 const url = () => $('url').value.trim();
-const otype = () => checked('otype') || 'video';
 const access = () => checked('access') || 'none';
-const quality = () => checked('q') || (otype() === 'audio' ? 'audio_mp3' : 'best');
+const quality = () => checked('q') || 'best';
 const current = () => (info && infoUrl === url() ? info : null);
 
 /* ---------------- payload ---------------- */
@@ -62,14 +61,24 @@ function payload() {
 
 /* ---------------- formats + notes ---------------- */
 
+// Format chips, as in the popup: video heights, then audio. Galleries hide
+// them (files are kept as posted); audio-only sources show only audio.
 function renderFormats(selected) {
   const i = current();
-  const list = OFFTUBE.formatOptions(i, otype());
-  $('qualities').innerHTML = OFFTUBE.formatsHtml(list, selected || quality());
-  $('qualityNote').textContent = i && i.type === 'gallery'
-    ? 'Every image and clip is saved exactly as the site serves it.'
-    : otype() === 'audio' || (i && i.media === 'audio') ? 'Converted with ffmpeg once the download lands.' : '';
+  const list = OFFTUBE.formatOptions(i, 'video').concat(
+    i && (i.media === 'audio' || i.type === 'gallery') ? [] : OFFTUBE.formatOptions(null, 'audio'),
+  );
+  let sel = selected || quality();
+  if (i && i.media === 'audio' && !String(sel).startsWith('audio')) sel = 'audio_mp3';
+  $('qualities').innerHTML = OFFTUBE.formatsHtml(list, sel, { chips: true });
   syncTally();
+}
+
+function setLink(value, { edit = false, label = '' } = {}) {
+  $('url').value = value;
+  $('linkText').textContent = label || value.replace(/^https?:\/\/(www\.)?/, '') || 'No link yet';
+  $('linkRow').classList.toggle('hidden', edit);
+  $('linkForm').classList.toggle('hidden', !edit);
 }
 
 function setNote(id, text, on) {
@@ -105,10 +114,10 @@ function syncTally() {
   let what;
   if (marks.size) what = `<b>${marks.size} circled</b>`;
   else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>`;
-  else if (i.type === 'gallery') what = '<b>1 file</b> · as posted';
+  else if (i.type === 'gallery') what = '<b>1 file</b> · kept as posted';
   else {
     const q = (i.qualities || []).find((x) => x.id === quality());
-    what = `<b>1 ${otype() === 'audio' || i.media === 'audio' ? 'audio file' : 'video'}</b>${q && q.filesize_str ? ` · ~${esc(q.filesize_str)}` : ''}`;
+    what = `<b>1 ${quality().startsWith('audio') ? 'audio file' : 'video'}</b>${q && q.filesize_str ? ` · ~${esc(q.filesize_str)}` : ''}`;
   }
   $('tally').innerHTML = what;
 }
@@ -125,27 +134,35 @@ function syncSheet() {
 
 /* ---------------- source + inspect ---------------- */
 
+// Follow the active tab. A tab with nothing to keep, or a stopped server,
+// is said on an empty print; the link field opens for a paste.
 async function fillFromTab(force) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const tabUrl = tab?.url || '';
-  if (!tabUrl) { $('tabLine').textContent = 'Can’t read this tab. Paste a link above.'; return false; }
-  let source;
+  const host = tabUrl.replace(/^\w+:\/\/(www\.)?/, '').split('/')[0] || 'this tab';
+  const idle = !url() || url() === lastTabUrl;
+  let source = null;
   try {
     source = await OFFTUBE.sourceOf(server, tabUrl);
   } catch {
-    $('tabLine').textContent = 'offtube isn’t running — start it with ./run.sh.';
+    $('stage').innerHTML = OFFTUBE.blankHtml('offtube', 'Server off', 'offtube isn’t running.', 'Start it with ./run.sh — this panel picks it up.');
     return false;
   }
   if (!source) {
-    $('tabLine').textContent = 'Nothing to keep on this tab. Paste a link above.';
+    if (idle || force) {
+      info = null;
+      document.body.dataset.kind = '';
+      $('sheetTools').classList.add('hidden');
+      $('stage').innerHTML = OFFTUBE.blankHtml(host, 'No print', 'Nothing to keep on this tab.', 'Open a video, post, pin or track — or paste a link below.');
+      setLink('', { edit: true });
+      lastTabUrl = '';
+    }
     return false;
   }
-  const cur = url();
-  if (force || !cur || cur === lastTabUrl) {
-    $('url').value = tabUrl;
+  if (force || idle) {
     lastTabUrl = tabUrl;
+    setLink(tabUrl, { label: `${source.label} · ${tab.title || host}` });
   }
-  $('tabLine').textContent = `Following ${source.label} · ${tab.title || tabUrl}`;
   return true;
 }
 
@@ -166,8 +183,8 @@ async function inspect() {
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     $('stage').innerHTML = OFFTUBE.printHtml(info);
+    setLink(u, { label: `${(info.source && info.source.label) || 'Link'} · ${u.replace(/^https?:\/\/(www\.)?/, '')}` });
     document.querySelector(`input[name="plmode"][value="${OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
-    if (info.media === 'audio') document.querySelector('input[name="otype"][value="audio"]').checked = true;
     renderFormats();
     syncSheet();
     syncNotes();
@@ -177,6 +194,7 @@ async function inspect() {
     document.body.dataset.kind = '';
     document.body.dataset.media = '';
     $('stage').innerHTML = OFFTUBE.blankHtml('offtube', 'No print', 'Couldn’t read this link.', 'Fix the link, or set up sign-in below.');
+    setLink(u, { edit: true });
     OFFTUBE.showProblem(err.message);
     if (OFFTUBE.NEEDS_ACCESS.test(err.message)) $('discAccess').open = true;
     renderFormats();
@@ -272,7 +290,7 @@ $('dlBtn').addEventListener('click', async () => {
   $('dlBtn').disabled = true;
   setDeck('Starting…', 'busy', 0);
   try {
-    await chrome.storage.local.set({ quality: quality(), otype: otype(), access: access() });
+    await chrome.storage.local.set({ quality: quality(), access: access() });
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', p);
     printJobId = current() ? id : null;
     OFFTUBE.developPrint(0);
@@ -314,10 +332,13 @@ function updateFrame(li, job, no) {
   st.textContent = job.status === 'downloading' && pct ? `Developing ${pct}%` : OFFTUBE.STATE_WORD[job.status] || job.status;
   st.classList.toggle('edge-amber', active);
   const frame = li.querySelector('.js-frame');
-  if (frame.dataset.thumb !== (job.thumbnail || '')) {
-    frame.dataset.thumb = job.thumbnail || '';
-    frame.innerHTML = job.thumbnail ? OFFTUBE.developHtml(job.thumbnail)
-      : `<div class="frame-empty"><span class="edge">${esc(job.source || 'offtube')}</span><span class="mark-slot"></span></div>`;
+  const show = OFFTUBE.jobDisplay(job, server);
+  const key = show.thumb || show.video;
+  if (frame.dataset.thumb !== key) {
+    frame.dataset.thumb = key;
+    frame.innerHTML = show.thumb ? OFFTUBE.developHtml(show.thumb)
+      : show.video ? `<span class="develop"><video class="pos" src="${esc(show.video)}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video><span class="mark-slot"></span></span>`
+        : `<div class="frame-empty"><span class="edge">${esc(job.source || 'offtube')}</span><span class="mark-slot"></span></div>`;
     frame.dataset.mark = '';
   }
   li.classList.toggle('is-developing', active);
@@ -328,8 +349,9 @@ function updateFrame(li, job, no) {
     const slot = frame.querySelector('.mark-slot');
     if (slot) slot.innerHTML = kind ? OFFTUBE.markSvg(kind) : '';
   }
-  const title = job.title || `${job.source ? `${job.source} · ` : ''}${(job.url || '').replace(/^https?:\/\/(www\.)?/, '')}`;
+  const title = show.title;
   li.querySelector('.js-title').textContent = title;
+  li.querySelector('.js-no').textContent = [String(no).padStart(2, '0'), show.meta].filter(Boolean).join(' · ');
   li.setAttribute('aria-label', `${title}: ${st.textContent}`);
   li.querySelector('.js-cancel').classList.toggle('hidden', !active);
   li.querySelector('.js-retry').classList.toggle('hidden', job.status !== 'error' && job.status !== 'cancelled');
@@ -350,7 +372,7 @@ async function refreshQueue() {
       if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
     });
     const active = all.filter((j) => OFFTUBE.ACTIVE.includes(j.status)).length;
-    $('queueCount').textContent = all.length ? `${active ? `${active} developing · ` : ''}${all.length}` : '';
+    $('queueCount').textContent = all.length ? `${active ? `${active} developing · ` : ''}${all.length} print${all.length === 1 ? '' : 's'}` : '';
     $('queueEmpty').classList.toggle('hidden', all.length > 0);
     $('clearQueue').classList.toggle('hidden', !all.some((j) => !OFFTUBE.ACTIVE.includes(j.status)));
   } catch { /* health shows the server is down */ }
@@ -413,7 +435,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('server').value = server;
   $('cookieBrowserName').value = s.cookiesBrowser;
   const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
-  pick('otype', s.otype);
   pick('access', s.access);
   renderFormats(s.quality);
   syncNotes();
@@ -421,7 +442,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   await OFFTUBE.showHealth(server);
   const session = await chrome.storage.session.get(['pendingUrl']);
   if (session.pendingUrl) {
-    $('url').value = session.pendingUrl;
+    setLink(session.pendingUrl);
     lastTabUrl = session.pendingUrl;
     await chrome.storage.session.remove('pendingUrl');
     await fillFromTab(false);
@@ -442,18 +463,15 @@ chrome.tabs.onActivated.addListener(followTab);
 chrome.tabs.onUpdated.addListener((_id, change, tab) => { if (tab.active && change.url) followTab(); });
 chrome.storage.session.onChanged.addListener(async (changes) => {
   if (!changes.pendingUrl || !changes.pendingUrl.newValue) return;
-  $('url').value = changes.pendingUrl.newValue;
+  setLink(changes.pendingUrl.newValue);
   lastTabUrl = changes.pendingUrl.newValue;
   await chrome.storage.session.remove('pendingUrl');
   inspect();
 });
 
 $('linkForm').addEventListener('submit', (e) => { e.preventDefault(); inspect(); });
+$('changeLink').addEventListener('click', () => { setLink(url(), { edit: true }); $('url').select(); });
 $('url').addEventListener('paste', () => setTimeout(inspect, 150));
-$$('input[name="otype"]').forEach((r) => r.addEventListener('change', async () => {
-  await chrome.storage.local.set({ otype: otype() });
-  renderFormats();
-}));
 $('qualities').addEventListener('change', () => { syncTally(); chrome.storage.local.set({ quality: quality() }); });
 ['clipFrom', 'clipTo', 'plStart', 'plEnd', 'plItems', 'subLang'].forEach((id) => $(id).addEventListener('input', syncNotes));
 $$('input[name="plmode"]').forEach((r) => r.addEventListener('change', syncNotes));

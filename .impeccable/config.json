@@ -2,25 +2,6 @@
   "detector": {
     "ignoreRules": [],
     "ignoreFiles": [],
-    "ignoreValues": [
-      {
-        "rule": "cramped-padding",
-        "value": "*",
-        "files": [
-          "web/index.html"
-        ],
-        "createdAt": "2026-10-13T19:40:05.684Z",
-        "reason": "model decision: only findings are .seg (segmented control; option spans carry 7-9px padding inside the frame) and .notes (border-top is a list rule over 44-50px rows) — by design"
-      },
-      {
-        "rule": "cramped-padding",
-        "value": "*",
-        "files": [
-          "extension/sidepanel/sidepanel.html"
-        ],
-        "createdAt": "2026-10-13T19:40:05.702Z",
-        "reason": "model decision: only findings are .seg (segmented control; option spans carry 7-9px padding inside the frame) and .notes (border-top is a list rule over 44-50px rows) — by design"
-      }
-    ]
+    "ignoreValues": []
   }
 }
