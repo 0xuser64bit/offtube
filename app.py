@@ -889,6 +889,15 @@ def _inspect_opts(payload: dict, cookie_id: str, url: str,
     return opts
 
 
+def entry_thumbnail(entry: dict) -> str | None:
+    """A playlist entry's thumbnail. Flat listings (YouTube, TikTok) often
+    carry only a `thumbnails` list, smallest first; take the largest."""
+    if entry.get("thumbnail"):
+        return display_thumbnail(entry["thumbnail"])
+    thumbs = [t for t in entry.get("thumbnails") or [] if isinstance(t, dict) and t.get("url")]
+    return display_thumbnail(thumbs[-1]["url"]) if thumbs else None
+
+
 def _engine_error(exc: Exception) -> str:
     """An engine's error without yt-dlp's 'ERROR:' prefix and 'please report
     this issue' tail."""
@@ -965,7 +974,7 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
                     "url": entry_url,
                     "duration": e.get("duration"),
                     "duration_str": format_seconds(e.get("duration")),
-                    "thumbnail": e.get("thumbnail"),
+                    "thumbnail": entry_thumbnail(e),
                 }
             )
         return {

@@ -1117,3 +1117,9 @@ def test_progress_hook_fills_title_and_thumbnail_once():
         assert app.jobs["t1"]["thumbnail"] == "https://i.ytimg.com/x.jpg"
     finally:
         app.jobs.clear()
+
+
+def test_entry_thumbnail_prefers_single_then_largest_listed():
+    assert app.entry_thumbnail({"thumbnail": "https://a/1.jpg"}) == "https://a/1.jpg"
+    assert app.entry_thumbnail({"thumbnails": [{"url": "https://a/s.jpg"}, {"url": "https://a/l.jpg"}]}) == "https://a/l.jpg"
+    assert app.entry_thumbnail({"thumbnails": []}) is None
