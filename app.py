@@ -304,7 +304,7 @@ SITE_ALIASES = {
 SOURCE_LABELS = {
     "youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram",
     "pinterest": "Pinterest", "x": "X", "reddit": "Reddit",
-    "facebook": "Facebook", "threads": "Threads", "bsky": "Bluesky",
+    "facebook": "Facebook", "bsky": "Bluesky",
     "tumblr": "Tumblr", "snapchat": "Snapchat", "linkedin": "LinkedIn",
     "vimeo": "Vimeo", "dailymotion": "Dailymotion", "twitch": "Twitch",
     "kick": "Kick", "rumble": "Rumble", "streamable": "Streamable",
@@ -554,10 +554,9 @@ def cleanup_job_temps(job: dict | None) -> None:
 
 
 # Full-browser exports carry MBs of unrelated sites (bank, mail, ...), so a
-# paste is trimmed to the target link's site before it touches disk. Some
-# sites sign in on a sibling domain too: YouTube rides Google's session,
-# Threads rides Instagram's.
-COOKIE_SIBLINGS = {"youtube": ("google", "googlevideo"), "threads": ("instagram",)}
+# paste is trimmed to the target link's site before it touches disk.
+# YouTube also signs in on Google's domains.
+COOKIE_SIBLINGS = {"youtube": ("google", "googlevideo")}
 
 NETSCAPE_MAGIC = "# Netscape HTTP Cookie File"
 
