@@ -23,15 +23,16 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
   video or audio → **Keep this page with offtube** (the page URL is sent —
   a media element's `blob:`/CDN src is useless to the engines). The toolbar
   badge flashes `↓` when queued, `!` on failure or an unsupported site. If
-  Access is set to cookies-file, the side panel opens instead (the file lives
-  in the textarea, not in the service worker).
+  Sign-in is set to a cookies file, the side panel opens instead (the file
+  lives in its textarea, not in the service worker).
 - Image posts and boards (gallery-dl) hide the video-only controls and keep
   the original files; audio-only sources default to MP3.
 - Keyboard: `Alt+Shift+O` opens the side panel (Chrome may require you to
   confirm the shortcut at `chrome://extensions/shortcuts`).
-- Access modes in both: Public, Browser cookies (native server only — Docker
-  can't see your host browser), Cookies file upload/paste (the Docker path
-  for bot-checks + members-only). Cookie contents are never stored.
+- Sign-in modes: None, Browser cookies (native server only — Docker can't
+  see your host browser), Cookies file upload/paste (side panel; the Docker
+  path for bot-checks + members-only). Cookie contents are never stored. A
+  sign-in failure in the popup offers "Use my browser's sign-in" in place.
 - Same contact-sheet design as the web app: the tab's media appears as a
   print in a black film rebate (site and kind edge-printed), a crimson
   pencil circles the chosen format and the prints you pick from a board or

@@ -7,12 +7,21 @@ Vimeo, Twitch, SoundCloud, Bandcamp, Flickr, DeviantArt and 2,000+ more sites.
 
 - Paste a **video, post, pin, board, track or playlist** link (private /
   members-only / sign-in-only ones your own account can see, via cookies)
-- Chrome extension: popup, side panel that follows your tabs, right-click any
-  link or page → Keep with offtube
-- **Quality** picker: Best / 2160p … 360p / audio-only MP3/M4A; image posts and
+- Chrome extension: a popup that opens on the tab's media ready to keep in
+  one press, a side panel that follows your tabs with every option, and
+  right-click any link or page → Keep with offtube
+- **Format**: Best / 2160p … 360p / audio-only MP3/M4A; image posts and
   boards are kept as the original files
-- **From–to**: clip trim (`01:30` → `02:45`) *and* collection ranges (`1-5,7`, start/end)
-- Subtitles toggle, live progress, queue (up to 5), file browser
+- **Collections** as a contact sheet: circle the prints you want, or keep the
+  whole playlist/board, or give a range (`1-5,7`, start/end)
+- **Trim** a clip (`01:30` → `02:45`), subtitles, live progress, a session
+  strip (up to 5 at once) and a visual library of everything kept
+
+The design is a darkroom contact sheet: every link becomes a print in a
+black film border edge-printed with its site and kind; a crimson grease
+pencil circles what you choose, ticks what was kept and strikes what
+failed; a print develops from negative to positive while it downloads.
+Light by default, dark follows your OS.
 
 Dependencies: `yt-dlp` + `gallery-dl`. No Flask/FastAPI — backend is Python stdlib.
 
@@ -115,15 +124,15 @@ The Docker image already includes Deno.
 
 ## How to use
 
-1. **Paste link** → **Inspect** (shows the site, title, thumbnail, available qualities — or a thumbnail grid for boards and multi-photo posts). Unsupported links are refused before anything is fetched.
+1. **Paste a link** (or open the extension on a tab) → it's previewed as a print: site, kind, title, thumbnail, available formats — or a contact sheet for boards, playlists and multi-photo posts. Unsupported links are refused before anything is fetched.
 2. **Format** — pick max height, Best, or Audio only. Audio-only sources (SoundCloud, Bandcamp, podcasts) switch to Audio on their own; image posts and boards skip this step and keep the original files.
-3. **Clip trim (optional, video)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`. Uses yt-dlp `--download-sections` (needs ffmpeg). Leave empty for full video.
-4. **Collection** — “This item only” or “Collection / range” with Start/End or Items like `1-5,7,10-12`. Works for playlists, boards, albums, profiles and multi-photo posts; pasting a collection link switches it on.
-5. **Access** — only needed for private / members-only / age-gated posts, most Instagram and X content, and YouTube bot-checks:
+3. **Trim (optional, video)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`. Uses yt-dlp `--download-sections` (needs ffmpeg). Leave empty for full video.
+4. **Collection** — circle prints on the sheet to keep only those, or choose “Whole collection” with Start/End or Items like `1-5,7,10-12`. Works for playlists, boards, albums, profiles and multi-photo posts; pasting a collection link switches it on.
+5. **Sign-in** — only needed for private / members-only / age-gated posts, most Instagram and X content, and YouTube bot-checks:
    - **Upload cookies.txt**: in Chrome, install [*Get cookies.txt Locally*](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc), open the site signed in as the account that can see the post, export Netscape format, upload here. Only that site's cookies are kept (YouTube also keeps Google's); the rest of a full-browser export is trimmed before it touches disk. Re-export when downloads start failing (cookies expire).
-   - **From browser**: reads Chrome/Edge/Firefox/… cookies directly from this machine. Pick the browser in Options → Access (web UI) or the side panel (extension); the extension's right-click "Keep with offtube" honors that choice.
+   - **From browser**: reads Chrome/Edge/Firefox/… cookies directly from this machine. Pick the browser under Sign-in (web app or side panel); the popup and the extension's right-click "Keep with offtube" honor that choice.
    - Tip from the field (YouTube): export in an incognito window with only `youtube.com/robots.txt` open if you hit weird auth errors; disable adblockers while exporting; make sure only the member account is signed in.
-6. **⬇ Download** — watch live progress; queue another while one runs. Finished files appear in the library and in `downloads/`. A running job stops itself if free disk space drops under 200 MB.
+6. **Keep** — the print develops as it downloads; queue another while one runs. Finished files get a pencil tick and appear under Kept and in `downloads/`. A running job stops itself if free disk space drops under 200 MB.
 
 ## Project layout
 
@@ -195,8 +204,8 @@ Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`
 ## Troubleshooting
 
 - **“… only shows this to a signed-in account”** (Instagram, X, Reddit,
-  Vimeo, private TikToks, age-gated videos) → the site wants a login. Options →
-  Access: Browser (native server) or a cookies file exported while signed in
+  Vimeo, private TikToks, age-gated videos) → the site wants a login. Open
+  Sign-in: Browser (native server) or a cookies file exported while signed in
   to that site.
 - **“offtube doesn't support that … link”** → neither engine has an extractor
   for that page. Paste the specific post / video / board, not a home or search
@@ -207,7 +216,7 @@ Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`
 - **“Sign in to confirm you’re not a bot” (even on public videos)** → YouTube
   is challenging this network, not a tool bug. Add cookies and retry:
   export `cookies.txt` (step 5 above) and use the Cookies-file mode, or run
-  natively (`./run.sh`) with Access → Browser. In Docker you must use the
+  natively (`./run.sh`) with Sign-in → Browser. In Docker you must use the
   file — the container can't see your host browser. A YouTube-only export is
   enough: other sites' cookies are trimmed automatically, and full-browser
   pastes no longer hit the size cap. Natively, also make sure a supported JS

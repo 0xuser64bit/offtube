@@ -606,14 +606,14 @@ def failure_hint(msg: str, label: str) -> str:
     if "not a bot" in low or "sign in to confirm" in low:
         return ("YouTube asked for a bot-check sign-in (it does this for public "
                 "videos too). Add cookies and retry: upload a cookies.txt export, "
-                "or run natively with Access → Browser (Docker can't read your "
+                "or run natively with Sign-in → Browser (Docker can't read your "
                 "host browser, so use the file there).")
     if "needs to be reloaded" in low:
         return ("YouTube rejected the session. Re-export fresh cookies while on "
                 "youtube.com, logged into a single account, then retry. "
                 "Full-browser exports go stale fastest.")
     if any(m in low for m in LOGIN_MARKERS):
-        return (f"{label} only shows this to a signed-in account. Options → Access: "
+        return (f"{label} only shows this to a signed-in account. Open Sign-in and "
                 f"pick Browser (native server) or a cookies file exported while "
                 f"signed in to {label}.")
     if any(m in low for m in ("your country", "your location", "geo restrict", "geo-restrict")):
