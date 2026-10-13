@@ -1,13 +1,17 @@
 # offtube extension (MV3, unpacked)
 
-Thin client over your local offtube server. It auto-reads the YouTube URL
-from the active tab (override manually if needed) and reuses the same
+Thin client over your local offtube server. It asks the server whether the
+active tab is a supported site (`GET /api/source` — a local extractor match,
+no network), auto-fills it (override manually if needed) and reuses the same
 `POST /api/info` + `POST /api/download` + `GET /api/job` API as the web UI.
+YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
 
 ## Why this shape
 
-- yt-dlp + ffmpeg can't run inside an extension, so the extension never
-  downloads directly — it drives `app.py` on `http://127.0.0.1:8000`.
+- yt-dlp, gallery-dl + ffmpeg can't run inside an extension, so the
+  extension never downloads directly — it drives `app.py` on
+  `http://127.0.0.1:8000`. There is no site list in the extension: the server
+  is the only authority on what's supported, so the two can't drift.
 - `tabs` permission is required: without it `tab.url` is silently `undefined`.
 - `host_permissions` is scoped to `127.0.0.1` + `localhost` + `[::1]` only
   (bypasses CORS for the local API, no `<all_urls>`). The server URL field
@@ -15,10 +19,14 @@ from the active tab (override manually if needed) and reuses the same
 - Popup = quick save. Side panel = full controls + progress (popups close
   when you click away, side panels stay open). "Open side panel →" closes the
   popup — only one surface at a time. The side panel follows the active tab.
-- Right-click a YouTube link (on any page) or a YouTube watch page →
-  **Keep with offtube**. The toolbar badge flashes `↓` when queued, `!` on
-  failure. If Access is set to cookies-file, the side panel opens instead
-  (the file lives in the textarea, not in the service worker).
+- Right-click any link → **Keep link with offtube**, or any page, image,
+  video or audio → **Keep this page with offtube** (the page URL is sent —
+  a media element's `blob:`/CDN src is useless to the engines). The toolbar
+  badge flashes `↓` when queued, `!` on failure or an unsupported site. If
+  Access is set to cookies-file, the side panel opens instead (the file lives
+  in the textarea, not in the service worker).
+- Image posts and boards (gallery-dl) hide the video-only controls and keep
+  the original files; audio-only sources default to MP3.
 - Keyboard: `Alt+Shift+O` opens the side panel (Chrome may require you to
   confirm the shortcut at `chrome://extensions/shortcuts`).
 - Access modes in both: Public, Browser cookies (native server only — Docker
@@ -33,10 +41,10 @@ from the active tab (override manually if needed) and reuses the same
 1. Start the server: `./run.sh` (must be running — the badge shows
    "server unreachable" otherwise).
 2. `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
-3. Open a YouTube video → click the offtube icon.
-   - Popup shows the tab title/URL prefilled → Inspect → Download.
-   - "Open side panel →" gives quality/trim/playlist/access + queue/library.
-   - Right-click the page or a YouTube link → Keep with offtube.
+3. Open a video, pin, post or track → click the offtube icon.
+   - Popup shows `Site · tab title` with the URL prefilled → inspects → Download.
+   - "Open side panel →" gives quality/trim/collection/access + queue/library.
+   - Right-click the page or any link → Keep with offtube.
 
 ## Backend requirement
 

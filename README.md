@@ -1,19 +1,50 @@
 # offtube
 
-Paste-a-link YouTube keeper — local web UI powered by `yt-dlp` + `ffmpeg`.
+Paste-a-link media keeper — local web UI + Chrome extension powered by
+`yt-dlp`, `gallery-dl` and `ffmpeg`. Videos, audio, images, boards and
+playlists from YouTube, TikTok, Instagram, Pinterest, X, Reddit, Facebook,
+Vimeo, Twitch, SoundCloud, Bandcamp, Flickr, DeviantArt and 2,000+ more sites.
 
-- Paste a **video or playlist** URL (unlisted / members-only you can already watch)
-- Chrome extension: popup, side panel, right-click → Keep with offtube
-- **Quality** picker: Best / 2160p / 1440p / 1080p / 720p / 480p / 360p / audio-only MP3/M4A
-- **From–to**: clip trim (`01:30` → `02:45`) *and* playlist ranges (`1-5,7`, start/end)
+- Paste a **video, post, pin, board, track or playlist** link (private /
+  members-only / sign-in-only ones your own account can see, via cookies)
+- Chrome extension: popup, side panel that follows your tabs, right-click any
+  link or page → Keep with offtube
+- **Quality** picker: Best / 2160p … 360p / audio-only MP3/M4A; image posts and
+  boards are kept as the original files
+- **From–to**: clip trim (`01:30` → `02:45`) *and* collection ranges (`1-5,7`, start/end)
 - Subtitles toggle, live progress, queue (up to 5), file browser
 
-Only dependency: `yt-dlp`. No Flask/FastAPI — backend is Python stdlib.
+Dependencies: `yt-dlp` + `gallery-dl`. No Flask/FastAPI — backend is Python stdlib.
 
-> Only download content you own or are authorized to keep. Members-only videos
-> require **your own** active membership. This tool cannot bypass paywalls —
-> if yt-dlp says “Join this channel to get access”, your cookies are expired,
-> from the wrong account, or your tier doesn’t cover that video.
+> Only download content you own or are authorized to keep. Private and
+> members-only posts require **your own** access. This tool cannot bypass
+> paywalls or DRM — if a site says “Join this channel” or “login required”,
+> your cookies are expired, from the wrong account, or that account can't
+> see the post.
+
+## Supported sites
+
+A link works when one of two engines has a **dedicated extractor** for it —
+the same one that engine would pick on its own:
+
+| Engine | Covers | Examples |
+|---|---|---|
+| `yt-dlp` | video & audio, ~1,800 sites | YouTube, TikTok, Instagram reels, X videos, Reddit, Facebook, Vimeo, Twitch, Dailymotion, Bilibili, SoundCloud, Bandcamp, Mixcloud |
+| `gallery-dl` | images, galleries, boards, ~300 sites | Pinterest pins & boards, Instagram/X/Reddit/Tumblr/Bluesky photo posts, Flickr, Imgur, DeviantArt, ArtStation, Behance, pixiv |
+
+- **Engine chain.** yt-dlp goes first where it matches; when it finds no video
+  (an image-only tweet, a Flickr photo) gallery-dl takes the post. Pinterest
+  and Imgur go gallery-first, since yt-dlp only sees their videos.
+- **No catch-alls.** yt-dlp's Generic page scraper and gallery-dl's
+  directlink/generic extractors are never used, and IP / LAN hostnames are
+  refused, so outbound fetches stay on sites those projects explicitly support.
+- **DRM services** (Spotify, Netflix, Disney+, …) are refused up front.
+- YouTube keeps its special handling: channel/home/search pages are rejected
+  (thousands of videos), `watch?v=…&list=…` inspects as one video, and
+  bot-check failures retry with alternate player clients.
+
+Ask the server about any link without fetching it:
+`GET /api/source?url=…` → `{supported, source: {id, label}, engines}`.
 
 ## Quick start
 
@@ -34,7 +65,7 @@ run.bat                     @rem same, via .venv\Scripts\python
 
 Then open **http://127.0.0.1:8000**. Optional: load `extension/` unpacked in
 `chrome://extensions` (Developer mode) for a toolbar button and
-right-click → Keep with offtube. See `extension/README.md`.
+right-click → Keep with offtube on any link. See `extension/README.md`.
 
 ## Docker & background services
 
@@ -47,7 +78,7 @@ docker compose logs -f
 docker compose down
 ```
 
-- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp. Healthcheck hits `/api/health`.
+- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp + gallery-dl. Healthcheck hits `/api/health`.
 - Port is published on loopback only (`127.0.0.1:8000:8000`); inside the
   container `HOST=0.0.0.0` is required (a container has its own loopback).
 - Native `./run.sh` defaults to `HOST=127.0.0.1`; `HOST=0.0.0.0` is docker-only.
@@ -84,21 +115,21 @@ The Docker image already includes Deno.
 
 ## How to use
 
-1. **Paste link** → **Inspect** (shows title, thumbnail, available qualities). Watch URLs that happen to include `list=` stay a single video; only `/playlist?list=` inspects as a playlist. Channel/home/search pages are rejected.
-2. **Quality** — pick max height, Best, or Audio only.
-3. **Clip trim (optional)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`. Uses yt-dlp `--download-sections` (needs ffmpeg). Leave empty for full video.
-4. **Playlist** — “Just this video” or “Whole playlist / range” with Start/End or Items like `1-5,7,10-12`.
-5. **Cookies** — only needed for members-only/private/age-restricted:
-   - **Upload cookies.txt**: in Chrome, install [*Get cookies.txt Locally*](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc), open YouTube logged in as the member account, export Netscape format, upload here. Re-export when downloads start failing (cookies expire).
+1. **Paste link** → **Inspect** (shows the site, title, thumbnail, available qualities — or a thumbnail grid for boards and multi-photo posts). Unsupported links are refused before anything is fetched.
+2. **Format** — pick max height, Best, or Audio only. Audio-only sources (SoundCloud, Bandcamp, podcasts) switch to Audio on their own; image posts and boards skip this step and keep the original files.
+3. **Clip trim (optional, video)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`. Uses yt-dlp `--download-sections` (needs ffmpeg). Leave empty for full video.
+4. **Collection** — “This item only” or “Collection / range” with Start/End or Items like `1-5,7,10-12`. Works for playlists, boards, albums, profiles and multi-photo posts; pasting a collection link switches it on.
+5. **Access** — only needed for private / members-only / age-gated posts, most Instagram and X content, and YouTube bot-checks:
+   - **Upload cookies.txt**: in Chrome, install [*Get cookies.txt Locally*](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc), open the site signed in as the account that can see the post, export Netscape format, upload here. Only that site's cookies are kept (YouTube also keeps Google's); the rest of a full-browser export is trimmed before it touches disk. Re-export when downloads start failing (cookies expire).
    - **From browser**: reads Chrome/Edge/Firefox/… cookies directly from this machine. Pick the browser in Options → Access (web UI) or the side panel (extension); the extension's right-click "Keep with offtube" honors that choice.
-   - Tip from the field: export in an incognito window with only `youtube.com/robots.txt` open if you hit weird auth errors; disable adblockers while exporting; make sure only the member account is signed in.
-6. **⬇ Download** — watch live progress; queue another while one runs. Finished files appear in the library and in `downloads/`.
+   - Tip from the field (YouTube): export in an incognito window with only `youtube.com/robots.txt` open if you hit weird auth errors; disable adblockers while exporting; make sure only the member account is signed in.
+6. **⬇ Download** — watch live progress; queue another while one runs. Finished files appear in the library and in `downloads/`. A running job stops itself if free disk space drops under 200 MB.
 
 ## Project layout
 
 ```
 offtube/
-  app.py            # backend: stdlib HTTP server + yt-dlp engine
+  app.py            # backend: stdlib HTTP server + source resolver + yt-dlp/gallery-dl engines
   web/              # local UI (no build step)
   extension/        # MV3 Chrome extension (popup + side panel + context menu)
   tests/            # pytest: helper units + live-HTTP API tests (stubbed yt-dlp)
@@ -107,7 +138,7 @@ offtube/
   deploy/           # launchd plist + systemd user unit (path-templated)
   Dockerfile, docker-compose.yml
   tools/gen_icons.py
-  requirements.txt  # runtime: pinned yt-dlp
+  requirements.txt  # runtime: pinned yt-dlp + gallery-dl
   run.sh / run.bat  # venv launchers (install-on-missing, --upgrade to refresh)
 ```
 
@@ -115,31 +146,37 @@ offtube/
 
 ```bash
 ./.venv/bin/pip install -q -r requirements-dev.txt
-./.venv/bin/python -m pytest tests -q   # 111 tests, ~11s, no network
+./.venv/bin/python -m pytest tests -q   # 207 tests, ~18s, no network
 ```
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
-stubbed `YoutubeDL`, covering health/headers, traversal blocks, info
-validation, download → files → delete, bad input, oversized bodies,
-queued + running cancel, origin/CORS, payload stripping, channel
-rejection, temp-file hiding, disposition, jobs limit, disk guard, the
+stubbed `YoutubeDL` and a fake gallery-dl CLI, covering health/headers,
+traversal blocks, info validation, `/api/source`, download → files →
+delete, bad input, oversized bodies, queued + running cancel (including
+killing a gallery-dl process), origin/CORS, payload stripping, channel
+rejection, temp/dotfile hiding, disposition, jobs limit, disk guard, the
 public-job field whitelist, Host-header guard, `/api/retry`, and
-`/api/jobs/clear`.
+`/api/jobs/clear`. `tests/test_helpers.py` checks source resolution against
+the real extractor tables (no network) — including every site named in the
+web UI's “works with” strip — plus engine order and fallback, per-site
+cookie trimming, failure hints, and filename byte caps.
 
 ## API (for scripting)
 
-- `GET /api/health` → `{checks: {yt_dlp, ffmpeg, deno, node, node_supported, js_runtime, js_runtime_ok}}` (cached 60s)
-- `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → video/playlist metadata (side-effect-free; pasted cookies use an ephemeral file)
+- `GET /api/health` → `{checks: {yt_dlp, gallery_dl, ffmpeg, deno, node, node_supported, js_runtime, js_runtime_ok}}` (cached 60s)
+- `GET /api/source?url=…` → `{supported, source: {id, label}, engines}` or `{supported: false, error}` (local extractor match, no network)
+- `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → metadata with `source`, `engine`, `type` (`video` | `playlist` | `gallery`) and `media` (`video` | `audio` | `image` | `mixed`); galleries carry `count`, `more` and `entries` with thumbnails (side-effect-free; pasted cookies use an ephemeral file)
 - `POST /api/download` `{url, quality, clip_from, clip_to, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
-- `GET /api/job?id=…` → `{status, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
-- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running jobs stop cooperatively at the next progress callback)
+- `GET /api/job?id=…` → `{status, source, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback, gallery-dl processes are terminated)
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
 - `GET /api/files` → `{files, disk_free, disk_free_str}` (in-progress `.part`/`.temp` hidden); `GET /files/<name>` downloads one (RFC 5987 filename)
 - `POST /api/files/delete` `{name}` → `{deleted}`
 
-Only video/playlist YouTube URLs are accepted (400 otherwise). Channel, home,
+Only links with a dedicated yt-dlp or gallery-dl extractor are accepted (400
+otherwise, also for IP/LAN hosts and DRM services). YouTube channel, home,
 and search pages are rejected. Inspect treats `watch?v=&list=` as a single
 video; only `/playlist?list=` is a playlist. Bodies are capped at ~2 MB (413).
 Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
@@ -152,9 +189,20 @@ leave the server. Jobs and UI prefs are in-memory/local only — a restart
 clears history; leftover `.part` files and orphaned job cookies are cleaned
 on boot and when a job ends.
 
-Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`.
+Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`
+(ignored for gallery-dl jobs, which keep original files).
 
 ## Troubleshooting
+
+- **“… only shows this to a signed-in account”** (Instagram, X, Reddit,
+  Vimeo, private TikToks, age-gated videos) → the site wants a login. Options →
+  Access: Browser (native server) or a cookies file exported while signed in
+  to that site.
+- **“offtube doesn't support that … link”** → neither engine has an extractor
+  for that page. Paste the specific post / video / board, not a home or search
+  page. Short links (`pin.it`, `youtu.be`, `redd.it`) are fine.
+- **Both engines failed** → the error lists each (`yt-dlp: … · gallery-dl: …`);
+  usually it's the same login problem, or a deleted/private post.
 
 - **“Sign in to confirm you’re not a bot” (even on public videos)** → YouTube
   is challenging this network, not a tool bug. Add cookies and retry:

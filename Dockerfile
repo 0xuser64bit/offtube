@@ -1,4 +1,4 @@
-# offtube — small runtime image (python + ffmpeg + deno + yt-dlp).
+# offtube — small runtime image (python + ffmpeg + deno + yt-dlp + gallery-dl).
 # Deno is yt-dlp's JS runtime for PO-token/JS challenges (node would need
 # >= 23.5; Debian bookworm only ships node 18, which yt-dlp rejects as
 # unsupported). ffmpeg is required for merge/trim/audio-extract.
