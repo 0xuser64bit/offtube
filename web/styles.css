@@ -426,7 +426,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
 .meter.is-error i { background: var(--pencil); }
 .deck-line { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 10px 0 0; font-size: 14px; color: var(--ink-2); }
 .deck-line #jobStatus { overflow-wrap: anywhere; }
-.deck-line.is-error { color: var(--pencil-ink); font-weight: 600; }
+.deck-line.is-error { color: var(--pencil-ink); }
 .deck-line.is-done { color: var(--ink); font-weight: 600; }
 .deck-pct { font-weight: 700; color: var(--ink); }
 .log { margin-top: 10px; }

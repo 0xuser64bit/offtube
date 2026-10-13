@@ -1123,3 +1123,24 @@ def test_entry_thumbnail_prefers_single_then_largest_listed():
     assert app.entry_thumbnail({"thumbnail": "https://a/1.jpg"}) == "https://a/1.jpg"
     assert app.entry_thumbnail({"thumbnails": [{"url": "https://a/s.jpg"}, {"url": "https://a/l.jpg"}]}) == "https://a/l.jpg"
     assert app.entry_thumbnail({"thumbnails": []}) is None
+
+
+@pytest.mark.parametrize("msg, reason", [
+    ("ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if you've been granted access", "Private video."),
+    ("yt-dlp: ERROR: [Instagram] Cxyz: Requested content is not available, login required. Use --cookies · gallery-dl: 401",
+     "Requested content is not available, login required."),
+    ("HTTP Error 404: Not Found", "HTTP Error 404: Not Found"),
+])
+def test_plain_reason(msg, reason):
+    assert app.plain_reason(msg) == reason
+
+
+def test_failure_message_hides_tool_framing_when_it_can_explain():
+    out = app.failure_message("ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if granted access", "YouTube", "Download failed: ")
+    assert out.startswith("Private video. YouTube only shows this")
+    assert "ERROR" not in out and "[youtube]" not in out
+    raw = app.failure_message("HTTP Error 500: boom", "YouTube", "Download failed: ")
+    assert raw == "Download failed: HTTP Error 500: boom"
+    logged = app.failure_message("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable",
+                                 "YouTube", "Couldn’t keep this: ", logged=True)
+    assert logged == "Couldn’t keep this: This video is unavailable"

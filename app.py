@@ -596,6 +596,27 @@ LOGIN_MARKERS = ("--cookies", "login", "log in", "sign in", "private",
                  "authenticat", "age-restricted", "inappropriate for some users")
 
 
+def plain_reason(msg: str) -> str:
+    """The site's own reason, without the engine's framing:
+    'ERROR: [youtube] jNQXAC9IVRw: Private video. Sign in if…' → 'Private video.'"""
+    body, prev = (msg or "").strip(), None
+    while body != prev:  # joined engine errors stack prefixes: "yt-dlp: ERROR: [x] id: …"
+        prev = body
+        body = re.sub(r"^(ERROR:\s*)?(\[[^\]]+\]\s*)?([\w-]+:\s+)?", "", body)
+    return re.split(r"(?<=[.!?])\s", body, maxsplit=1)[0][:160]
+
+
+def failure_message(msg: str, label: str, prefix: str = "", logged: bool = False) -> str:
+    """What the UI shows for an engine error: the site's own reason plus a
+    plain-language next step when there is one. Without a hint, the raw
+    error is all we know — shown whole unless it's already in a job log
+    (`logged`), where the reason alone is enough."""
+    hint = failure_hint(msg, label)
+    if hint:
+        return clean_text(f"{plain_reason(msg)} {hint}", 1000)
+    return clean_text(f"{prefix}{plain_reason(msg) if logged else msg}", 1000)
+
+
 def failure_hint(msg: str, label: str) -> str:
     """One plain-language next step for an engine error, or ''."""
     low = (msg or "").lower()
@@ -1465,13 +1486,13 @@ def run_download(job_id: str, payload: dict):
                 job["detail"] = "Cancelled."
                 job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
                 return
-        hint = failure_hint(msg, job.get("source") or "the site")
         with jobs_lock:
             job = jobs.get(job_id)
             if job is None:
                 return
             job["status"] = "error"
-            job["detail"] = clean_text(f"Download failed: {msg}" + (f" — {hint}" if hint else ""), 1000)
+            job["detail"] = failure_message(msg, job.get("source") or "the site",
+                                            "Couldn’t keep this: ", logged=True)
             job["log"].append(clean_text(f"ERROR: {msg}"))
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except Exception as exc:  # pragma: no cover - surfaced to UI
@@ -1869,10 +1890,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
-                msg = clean_text(str(exc), 1000)
-                hint = failure_hint(msg, site_label(validate_url(body.get("url"))))
-                if hint:
-                    msg += f" — {hint}"
+                msg = failure_message(clean_text(str(exc), 1000),
+                                      site_label(validate_url(body.get("url"))))
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":
