@@ -1054,3 +1054,37 @@ def test_run_download_disk_full_is_error_not_engine_fallback(tmp_path, monkeypat
         assert not any("trying yt-dlp" in ln for ln in job["log"])
     finally:
         app.jobs.clear()
+
+
+# --- the web UI's "works with" strip only names sites that resolve -------------------
+FEATURED = {
+    "YouTube": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "TikTok": "https://www.tiktok.com/@scout2015/video/6718335390845095173",
+    "Instagram": "https://www.instagram.com/p/CxyzABC123/",
+    "Pinterest": "https://www.pinterest.com/pin/664281013778109217/",
+    "X": "https://x.com/user/status/1234567890",
+    "Reddit": "https://www.reddit.com/r/pics/comments/abc123/title/",
+    "Facebook": "https://www.facebook.com/watch/?v=123456",
+    "Bluesky": "https://bsky.app/profile/user.bsky.social/post/3kabc",
+    "Tumblr": "https://user.tumblr.com/post/123/slug",
+    "Vimeo": "https://vimeo.com/76979871",
+    "Twitch": "https://www.twitch.tv/videos/123456",
+    "Dailymotion": "https://www.dailymotion.com/video/x7tgad0",
+    "Bilibili": "https://www.bilibili.com/video/BV1xx411c7mD",
+    "SoundCloud": "https://soundcloud.com/artist/track",
+    "Bandcamp": "https://artist.bandcamp.com/track/song",
+    "Mixcloud": "https://www.mixcloud.com/user/mix/",
+    "Flickr": "https://www.flickr.com/photos/user/123456/",
+    "DeviantArt": "https://www.deviantart.com/artist/art/Title-123456",
+    "ArtStation": "https://www.artstation.com/artwork/abc",
+    "Imgur": "https://imgur.com/gallery/abcDEF",
+}
+
+
+def test_featured_sources_in_web_ui_all_resolve():
+    import re
+    html = (Path(app.__file__).parent / "web" / "index.html").read_text()
+    strip = re.search(r'class="sources"[^>]*>(.*?)<span>', html).group(1)
+    assert {n.strip() for n in strip.split("·") if n.strip()} == set(FEATURED)
+    for label, url in FEATURED.items():
+        assert app.resolve_source(url)["label"] == label, url

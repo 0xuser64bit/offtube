@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>offtube — keep videos locally</title>
-<meta name="description" content="Paste a YouTube link, pick a format, keep the file. Local-only downloader powered by yt-dlp." />
+<title>offtube — keep media locally</title>
+<meta name="description" content="Paste a link from YouTube, TikTok, Instagram, Pinterest, X and 2,000+ sites, pick a format, keep the file. Local-only downloader powered by yt-dlp and gallery-dl." />
 <meta name="referrer" content="no-referrer" />
 <meta name="color-scheme" content="light" />
 <meta name="theme-color" content="#faf8f3" />
@@ -34,7 +34,7 @@
     <header class="workbench-head">
       <p class="eyebrow">Transfer desk <span aria-hidden="true">/</span> local session</p>
       <h1>Keep the version you mean to keep.</h1>
-      <p class="workbench-copy">Inspect a YouTube link, choose the file, and send it straight to your machine. Nothing is uploaded or tracked.</p>
+      <p class="workbench-copy">Inspect a video, post, pin, board or track from almost any site, choose the file, and send it straight to your machine. Nothing is uploaded or tracked.</p>
       <ol class="transfer-legend" aria-label="Transfer steps">
         <li><b>01</b> Identify</li>
         <li><b>02</b> Set output</li>
@@ -52,18 +52,19 @@
         </div>
       </div>
 
-      <label class="field-label" for="url">Video or playlist URL</label>
+      <label class="field-label" for="url">Link</label>
       <div class="url-row">
         <input id="url" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-               placeholder="https://www.youtube.com/watch?v=…" aria-describedby="urlHint" />
+               placeholder="https://… a video, post, pin, board, track or playlist" aria-describedby="urlHint" />
         <button id="fetchBtn" class="btn" type="button">Inspect</button>
       </div>
-      <p id="urlHint" class="hint">Pastes are inspected automatically. Public, unlisted, private and members-only links you can already watch.</p>
+      <p id="urlHint" class="hint">Pastes are inspected automatically. Public links, plus private, members-only or sign-in-only ones your own account can see (Options → Access).</p>
+      <p class="sources" aria-label="Works with">YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
 
       <div id="infoBox" class="preview is-empty" aria-live="polite">
         <div class="preview-empty">
           <p class="preview-empty-title">Nothing inspected yet</p>
-          <p class="preview-empty-sub">Paste a link above — title, duration and available formats appear here.</p>
+          <p class="preview-empty-sub">Paste a link above — the site, title and available formats appear here.</p>
         </div>
       </div>
       <p id="infoError" class="inline-error hidden" role="alert"></p>
@@ -79,7 +80,7 @@
         </div>
       </div>
 
-      <div class="seg" role="radiogroup" aria-label="Output type">
+      <div class="seg video-only" role="radiogroup" aria-label="Output type">
         <label class="seg-opt"><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
         <label class="seg-opt"><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
       </div>
@@ -90,7 +91,7 @@
         <p class="hint" id="qualityNote">“Best” keeps the highest available stream and merges to MP4.</p>
       </fieldset>
 
-      <div class="row-check">
+      <div class="row-check video-only">
         <input type="checkbox" id="subs" />
         <label for="subs" class="row-check-main"><strong>Keep subtitles</strong><em>SRT sidecar next to the file.</em></label>
         <input id="subLang" class="mono sub-lang" value="en" maxlength="20" autocomplete="off" spellcheck="false"
@@ -104,11 +105,11 @@
         <span class="step" aria-hidden="true">03</span>
         <div>
           <h2 id="h-options">Options</h2>
-          <p class="lede">Only when you need them. Defaults download the whole video, no login.</p>
+          <p class="lede">Only when you need them. Defaults keep the whole item, no login.</p>
         </div>
       </div>
 
-      <details class="disclosure" id="discTrim">
+      <details class="disclosure video-only" id="discTrim">
         <summary><span>Clip <em>trim to a from–to range</em></span><span class="disc-state" id="trimState">off</span></summary>
         <div class="disc-body">
           <div class="trim-row">
@@ -123,17 +124,18 @@
       </details>
 
       <details class="disclosure" id="discPlaylist">
-        <summary><span>Playlist <em id="plSummary">single video</em></span><span class="disc-state" id="plState">off</span></summary>
+        <summary><span>Collection <em id="plSummary">single item</em></span><span class="disc-state" id="plState">off</span></summary>
         <div class="disc-body">
-          <div class="seg seg-small" role="radiogroup" aria-label="Playlist scope">
-            <label class="seg-opt"><input type="radio" name="plmode" value="single" checked /><span>This video only</span></label>
-            <label class="seg-opt"><input type="radio" name="plmode" value="playlist" /><span>Playlist / range</span></label>
+          <div class="seg seg-small" role="radiogroup" aria-label="Collection scope">
+            <label class="seg-opt"><input type="radio" name="plmode" value="single" checked /><span>This item only</span></label>
+            <label class="seg-opt"><input type="radio" name="plmode" value="playlist" /><span>Collection / range</span></label>
           </div>
           <div class="trim-row" id="plRangeRow">
             <div class="field field-narrow"><label for="plStart">Start #</label><input id="plStart" class="mono" type="number" min="1" placeholder="1" /></div>
             <div class="field field-narrow"><label for="plEnd">End #</label><input id="plEnd" class="mono" type="number" min="1" placeholder="—" /></div>
             <div class="field field-wide"><label for="plItems">Items <span class="label-note">overrides start / end</span></label><input id="plItems" class="mono" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></div>
           </div>
+          <p class="hint">Playlists, boards, albums, profiles and multi-photo posts. Pasting a collection link switches this on.</p>
         </div>
       </details>
 
@@ -146,7 +148,7 @@
             <label class="seg-opt"><input type="radio" name="cmode" value="browser" /><span>Browser</span></label>
           </div>
           <div id="cookieNone" class="cpane">
-            <p class="hint">For public and unlisted videos. If YouTube asks you to join or sign in to watch, use a cookies file instead.</p>
+            <p class="hint">For anything you can see logged out. If the site wants you signed in (private, members-only, age-gated, most Instagram and X posts), use a cookies file or your browser.</p>
           </div>
           <div id="cookieUpload" class="cpane hidden">
             <div class="file-row">
@@ -156,7 +158,7 @@
             </div>
             <label class="field-label" for="cookieText">Or paste file contents</label>
             <textarea id="cookieText" rows="3" class="mono" spellcheck="false" placeholder="# Netscape HTTP Cookie File"></textarea>
-            <p class="hint">Export with “Get cookies.txt Locally” while signed in as the account that can watch the video. A YouTube-only export is enough — other sites are trimmed automatically. Cookies expire — re-export when downloads fail. This file never leaves your machine.</p>
+            <p class="hint">Export with “Get cookies.txt Locally” while signed in to the site, as the account that can see the post. Only that site’s cookies are kept — the rest are trimmed automatically. Cookies expire — re-export when downloads fail. This file never leaves your machine.</p>
           </div>
           <div id="cookieBrowser" class="cpane hidden">
             <div class="field field-wide">
@@ -230,14 +232,14 @@
 
     <section class="panel panel-side panel-note" aria-label="About this tool">
       <h2 class="note-title">Local only</h2>
-      <p>Files never leave this machine. Only keep content you own or are allowed to archive. Members-only videos need <strong>your own</strong> active membership — this tool can’t bypass paywalls.</p>
+      <p>Files never leave this machine. Only keep content you own or are allowed to archive. Private and members-only posts need <strong>your own</strong> access — this tool can’t bypass paywalls or DRM.</p>
       <p class="mono micro" id="envLine">env —</p>
     </section>
   </aside>
 </main>
 
 <footer class="foot">
-  <span>offtube · stdlib server + yt-dlp engine</span>
+  <span>offtube · stdlib server + yt-dlp &amp; gallery-dl engines</span>
   <span class="mono" id="footFiles"></span>
 </footer>
 

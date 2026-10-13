@@ -26,6 +26,10 @@ let allFiles = [];
 let activeJobId = null;
 let lastInfo = null;
 
+// Errors that mean "give the site a signed-in session" — open Access.
+const NEEDS_ACCESS = /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership/i;
+const MEDIA_WORD = { image: "Image", video: "Video", audio: "Audio", mixed: "Post" };
+
 const escapeHtml = (s) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -111,6 +115,15 @@ function audioOptions() {
 
 function renderQualities() {
   const box = $("qualities");
+  if (lastInfo && lastInfo.type === "gallery") {
+    // gallery-dl keeps files exactly as served; there is nothing to pick.
+    box.innerHTML = `<label class="q-opt">
+        <input type="radio" name="q" value="best" checked />
+        <span class="q-row"><span class="q-radio" aria-hidden="true"></span><span class="q-name">Original files</span><span class="q-tag">as posted</span><span class="q-sub">no re-encode</span></span>
+      </label>`;
+    $("qualityNote").textContent = "Images and clips are saved exactly as the site serves them, full size.";
+    return;
+  }
   const keep = selectedQuality();
   const list = outputType() === "audio" ? audioOptions() : videoOptions();
   const ids = new Set(list.map((q) => q.id));
@@ -150,9 +163,9 @@ function syncStates() {
   const bits = [];
   if (isPl) {
     const s = $("plStart").value.trim(), e = $("plEnd").value.trim(), it = $("plItems").value.trim();
-    bits.push(it ? `items ${it}` : s || e ? `#${s || "1"}–${e || "end"}` : "whole playlist");
+    bits.push(it ? `items ${it}` : s || e ? `#${s || "1"}–${e || "end"}` : "whole collection");
   }
-  $("plSummary").textContent = isPl ? bits.join("") || "playlist" : "single video";
+  $("plSummary").textContent = isPl ? bits.join("") || "collection" : "single item";
   $("plRangeRow").style.opacity = isPl ? "1" : "0.45";
 
   const cm = cookiesMode();
@@ -186,7 +199,8 @@ $("cookieFile").addEventListener("change", async (e) => {
 
 /* ---------------- inspect ---------------- */
 function looksLikeUrl(v) {
-  return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com|youtu\.be|youtube-nocookie\.com)\//i.test(v.trim());
+  // Any host.tld/path; the server decides whether the site is supported.
+  return /^(https?:\/\/)?[a-z0-9-]+(\.[a-z0-9-]+)+\/\S/i.test(v.trim());
 }
 
 let debounce = null;
@@ -219,7 +233,7 @@ async function fetchInfo() {
   const err = $("infoError");
   err.classList.add("hidden");
   if (!url) {
-    err.textContent = "Paste a YouTube URL first.";
+    err.textContent = "Paste a link first.";
     err.classList.remove("hidden");
     return;
   }
@@ -236,6 +250,7 @@ async function fetchInfo() {
     if (my !== fetchToken) return;
     lastInfo = null;
     fetchedQualities = null;
+    document.body.dataset.kind = "";
     $("infoBox").classList.add("is-empty");
     $("infoBox").innerHTML = `<div class="preview-empty">
       <p class="preview-empty-title">Couldn’t inspect that link</p>
@@ -243,26 +258,54 @@ async function fetchInfo() {
     </div>`;
     err.textContent = e.message;
     err.classList.remove("hidden");
-    if (/not a bot|sign in to confirm|needs to be reloaded|cookies|membership/i.test(e.message)) {
-      $("discAccess").open = true;
-    }
+    if (NEEDS_ACCESS.test(e.message)) $("discAccess").open = true;
   } finally {
     if (my === fetchToken) { btn.disabled = false; btn.textContent = "Inspect"; }
   }
+}
+
+function setCollection(on) {
+  document.querySelector(`input[name="plmode"][value="${on ? "playlist" : "single"}"]`).checked = true;
+  if (on) $("discPlaylist").open = true;
 }
 
 function renderPreview(info) {
   lastInfo = info;
   const box = $("infoBox");
   box.classList.remove("is-empty");
-  if (info.type === "playlist") {
+  document.body.dataset.kind = info.type === "gallery" ? "gallery" : "";
+  const site = info.source && info.source.label ? `<b>${escapeHtml(info.source.label)}</b> · ` : "";
+  if (info.type === "gallery") {
+    const count = info.count || (info.entries || []).length;
+    const many = count > 1;
+    const tiles = (info.entries || []).slice(0, 12);
+    const what = many ? `${count}${info.more ? "+" : ""} items` : MEDIA_WORD[info.media] || "Post";
+    const hero = !many && info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : "";
+    const grid = many
+      ? `<ul class="preview-grid">${tiles.map((e) => `<li>${e.thumbnail ? `<img src="${escapeHtml(e.thumbnail)}" alt="" loading="lazy" />` : ""}${e.is_video ? "<em>video</em>" : ""}</li>`).join("")}</ul>`
+      : "";
+    const more = info.more
+      ? `<div class="preview-meta">Listing stops at ${count}; the download takes the whole collection unless you set a range.</div>`
+      : "";
+    box.innerHTML = `<div class="preview-full">
+      ${hero}
+      <div style="min-width:0;flex:1">
+        <span class="preview-kind">${site}${escapeHtml(what)}</span>
+        <h3>${escapeHtml(info.title || "Untitled")}</h3>
+        <div class="preview-meta">${escapeHtml(info.uploader || "")}</div>
+        ${grid}${more}
+      </div>
+    </div>`;
+    setCollection(many);
+    fetchedQualities = null;
+  } else if (info.type === "playlist") {
     const total = info.count || (info.entries || []).length;
     const entries = (info.entries || []).slice(0, 8);
-    const more = total > entries.length ? `<div class="preview-meta">Showing first ${entries.length} of ${escapeHtml(String(total))} — use Playlist / range to narrow it.</div>` : "";
+    const more = total > entries.length ? `<div class="preview-meta">Showing first ${entries.length} of ${escapeHtml(String(total))} — use Collection / range to narrow it.</div>` : "";
     box.innerHTML = `<div class="preview-full">
       ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
       <div style="min-width:0;flex:1">
-        <span class="preview-kind">Playlist · ${escapeHtml(String(total))} videos</span>
+        <span class="preview-kind">${site}Playlist · ${escapeHtml(String(total))} items</span>
         <h3>${escapeHtml(info.title || "Playlist")}</h3>
         <div class="preview-meta">${escapeHtml(info.uploader || "")}</div>
         <ul class="preview-entries">
@@ -271,8 +314,7 @@ function renderPreview(info) {
         ${more}
       </div>
     </div>`;
-    document.querySelector('input[name="plmode"][value="playlist"]').checked = true;
-    $("discPlaylist").open = true;
+    setCollection(true);
     fetchedQualities = null;
   } else {
     fetchedQualities = info.qualities || null;
@@ -281,12 +323,16 @@ function renderPreview(info) {
       ? `<div class="preview-meta">Live stream — download records from now on; trim ranges don't apply.</div>`
       : "";
     const plNote = info.part_of_playlist
-      ? `<div class="preview-meta">This video is part of a playlist. Options → Playlist if you want more than this one.</div>`
+      ? `<div class="preview-meta">This video is part of a playlist. Options → Collection if you want more than this one.</div>`
       : "";
+    if (info.media === "audio") {
+      // SoundCloud, Bandcamp, podcasts: there is no picture to keep.
+      document.querySelector('input[name="otype"][value="audio"]').checked = true;
+    }
     box.innerHTML = `<div class="preview-full">
       ${info.thumbnail ? `<img src="${escapeHtml(info.thumbnail)}" alt="" loading="lazy" />` : ""}
       <div style="min-width:0;flex:1">
-        <span class="preview-kind">Video${info.is_live ? " · live" : ""}</span>
+        <span class="preview-kind">${site}${MEDIA_WORD[info.media] || "Video"}${info.is_live ? " · live" : ""}</span>
         <h3>${escapeHtml(info.title || "Video")}</h3>
         <div class="preview-meta">${escapeHtml(info.uploader || "")}${info.duration_str ? ` · <span class="mono">${escapeHtml(info.duration_str)}</span>` : ""}</div>
         <div class="preview-meta"><span class="mono">${quals}</span></div>
@@ -357,9 +403,7 @@ $("dlBtn").addEventListener("click", async () => {
     refreshQueue();
   } catch (e) {
     setDeck("Error: " + e.message, "error");
-    if (/not a bot|sign in to confirm|needs to be reloaded|cookies|membership/i.test(e.message)) {
-      $("discAccess").open = true;
-    }
+    if (NEEDS_ACCESS.test(e.message)) $("discAccess").open = true;
   } finally {
     btn.disabled = false;
     btn.classList.remove("is-busy");
@@ -432,9 +476,7 @@ async function pollJob(job_id) {
         $("jobLog").textContent = (job.log || []).slice(-30).join("\n");
         activeJobId = null;
         setCancelVisible(false);
-        if (/not a bot|sign in to confirm|needs to be reloaded|cookies|membership/i.test(job.detail || "")) {
-          $("discAccess").open = true;
-        }
+        if (NEEDS_ACCESS.test(job.detail || "")) $("discAccess").open = true;
         refreshQueue();
       } else if (job.status === "cancelled") {
         clearInterval(pollTimer);
@@ -470,7 +512,7 @@ async function refreshQueue(silent) {
     $("queue").innerHTML = list
       .map((j) => {
         const pct = Math.round(j.progress || 0);
-        const short = (j.url || "").replace(/^https?:\/\//, "").slice(0, 42);
+        const short = (j.source ? `${j.source} · ` : "") + (j.url || "").replace(/^https?:\/\/(www\.)?/, "").slice(0, 42);
         const cancellable = ["queued", "starting", "downloading", "processing"].includes(j.status);
         const retryable = j.status === "error";
         const cancel = cancellable
@@ -618,6 +660,7 @@ async function checkHealth() {
     if (!checks.ffmpeg) problems.push("ffmpeg missing");
     if (checks.yt_dlp === "missing") problems.push("yt-dlp missing");
     if (!checks.js_runtime_ok) problems.push("no JS runtime (Deno or Node ≥ 23.5)");
+    if (checks.gallery_dl === "missing") problems.push("gallery-dl missing (image sites off)");
     if (problems.length) {
       el.className = "status is-bad";
       $("healthText").textContent = problems.join(" · ");
@@ -626,7 +669,7 @@ async function checkHealth() {
       const rt = checks.js_runtime && checks.js_runtime !== "none" ? ` · ${checks.js_runtime}` : "";
       $("healthText").textContent = `ready · yt-dlp ${checks.yt_dlp} · ffmpeg ok${rt}`;
     }
-    $("envLine").textContent = `env · yt-dlp ${checks.yt_dlp} · ${(checks.ffmpeg_version || "ffmpeg ?").slice(0, 42)} · js ${checks.js_runtime || "?"}`;
+    $("envLine").textContent = `env · yt-dlp ${checks.yt_dlp} · gallery-dl ${checks.gallery_dl || "?"} · ${(checks.ffmpeg_version || "ffmpeg ?").slice(0, 42)} · js ${checks.js_runtime || "?"}`;
   } catch {
     $("health").className = "status is-bad";
     $("healthText").textContent = "server unreachable — start ./run.sh";
