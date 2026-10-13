@@ -26,6 +26,7 @@
   --edge-2: #a19d92;
   --pencil: #d0103a;
   --pencil-ink: #b00d31;
+  --on-pencil: #fff;
   --safelight: #f0962a;
   --face: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   --code: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
@@ -44,6 +45,7 @@
     --rebate-2: #1a1a18;
     --pencil: #ff4766;
     --pencil-ink: #ff6f86;
+    --on-pencil: #121211;
   }
   .rebate { outline: 1px solid var(--rule-2); }
 }
@@ -154,7 +156,7 @@ button.cell:hover .cell-img { outline: 1px solid var(--edge-2); outline-offset: 
 .cell-no { font-size: 9.5px; }
 
 /* controls */
-.label { display: block; font: 650 10.5px/1.2 var(--face); font-stretch: 72%; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
+.label { display: block; font: 650 11px/1.2 var(--face); font-stretch: 72%; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); }
 .hint { margin: 6px 0 0; font-size: 12.5px; line-height: 1.45; color: var(--ink-2); }
 .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; border: 1.5px solid var(--ink); }
 .seg label { position: relative; display: block; }
@@ -225,7 +227,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 .keep-actions:has(#cancelBtn:not(.hidden)) { grid-template-columns: 1fr auto; }
 .keep-btn { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 52px; border: 0; background: var(--ink); color: var(--paper); font-size: 17px; font-weight: 760; font-stretch: 86%; transition: background .2s; }
 .keep-btn svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.keep-btn:hover { background: var(--pencil-ink); color: #fff; }
+.keep-btn:hover { background: var(--pencil-ink); color: var(--on-pencil); }
 .keep-btn:active { transform: translateY(1px); }
 .keep-btn:disabled { cursor: default; opacity: .45; }
 .keep-btn:disabled:hover { background: var(--ink); color: var(--paper); }
@@ -233,7 +235,7 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
 
 .deck { margin-top: 12px; }
 .meter { height: 3px; background: var(--rule); overflow: hidden; }
-.meter i { display: block; height: 100%; width: calc(var(--p, 0) * 100%); background: var(--safelight); transition: width .4s var(--ease); }
+.meter i { display: block; height: 100%; width: 100%; transform: scaleX(var(--p, 0)); transform-origin: left; background: var(--safelight); transition: transform .4s var(--ease); }
 .meter.is-done i { background: var(--ink); }
 .meter.is-error i { background: var(--pencil); }
 .deck-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin: 8px 0 0; font-size: 13px; color: var(--ink-2); }
@@ -272,13 +274,11 @@ textarea { resize: vertical; font: 12px/1.5 var(--code); }
   margin: 0;
   padding: 14px 26px;
   list-style: none;
+  /* the strip's perforations, left and right */
   background-color: var(--rebate);
-  background-image:
-    repeating-linear-gradient(180deg, var(--rebate-2) 0 9px, transparent 9px 20px),
-    repeating-linear-gradient(180deg, var(--rebate-2) 0 9px, transparent 9px 20px);
-  background-size: 8px 100%, 8px 100%;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%232a2a27'/%3E%3C/svg%3E"), url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%232a2a27'/%3E%3C/svg%3E");
   background-position: 8px 0, calc(100% - 8px) 0;
-  background-repeat: no-repeat;
+  background-repeat: repeat-y;
 }
 .strip:empty { display: none; }
 .strip-frame { position: relative; display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 4px 12px; align-items: start; cursor: pointer; }
