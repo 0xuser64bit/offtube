@@ -15,3 +15,5 @@ __pycache__/
 skills-lock.json
 # design-tool scratch (decision pages)
 .impeccable/questions/
+.impeccable/review/
+.impeccable/hook.cache.json
