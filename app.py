@@ -236,10 +236,23 @@ def cors_allow_origin(origin: str | None) -> str | None:
 # internal: `payload` (may hold pasted cookies), `filename`/`seen_files`
 # (absolute server paths), `seen_ids`, `cancel_requested`.
 PUBLIC_JOB_FIELDS = (
-    "id", "url", "source", "quality", "status", "progress", "detail", "log", "files",
+    "id", "url", "source", "title", "thumbnail", "quality", "status", "progress",
+    "detail", "log", "files",
     "created_at", "finished_at", "downloaded_bytes", "total_bytes", "speed",
     "eta", "playlist_index", "playlist_count",
 )
+
+
+def display_thumbnail(value) -> str | None:
+    """A thumbnail URL safe to hand back to the UI: http(s), sane length."""
+    s = str(value or "").strip()
+    return s if s.startswith(("https://", "http://")) and len(s) <= MAX_URL_LEN else None
+
+
+def file_kind(name: str) -> str:
+    """'video' | 'audio' | 'image' | 'other', for library thumbnails."""
+    major = (mimetypes.guess_type(name)[0] or "").split("/")[0]
+    return major if major in ("video", "audio", "image") else "other"
 
 
 def public_job(job: dict, log_limit: int | None = None) -> dict:
@@ -1297,6 +1310,11 @@ def progress_hook(job_id: str, d: dict):
             for variant in {base, stripped, stem}:
                 if variant and variant not in seen:
                     seen.append(variant)
+        # Display fields for the session strip, when inspect didn't send them.
+        if info_dict.get("title") and not job.get("title"):
+            job["title"] = clean_text(info_dict["title"], 300)
+        if not job.get("thumbnail"):
+            job["thumbnail"] = display_thumbnail(info_dict.get("thumbnail"))
         vid = info_dict.get("id")
         if vid:
             seen_ids = job.setdefault("seen_ids", [])
@@ -1521,6 +1539,9 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
         "url": url,
         "source": src["label"],
         "quality": body.get("quality") or "best",
+        # Shown on the session strip; the UI sends what inspect found.
+        "title": clean_text(body.get("title"), 300) or None,
+        "thumbnail": display_thumbnail(body.get("thumbnail")),
         "status": "queued",
         "progress": 0,
         "detail": "Queued…",
@@ -1752,7 +1773,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if route in ("/", "/index.html"):
             return self.serve_static("index.html")
-        if route in ("/app.js", "/styles.css", "/favicon.svg"):
+        if route in ("/app.js", "/styles.css", "/favicon.svg") or route.startswith("/fonts/"):
             return self.serve_static(route.lstrip("/"))
         if route == "/api/health":
             return self.send_json({"ok": True, "checks": environment_checks()})
@@ -1802,6 +1823,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "size_str": format_bytes(st.st_size) or "?",
                         "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
                         "url": f"/files/{urllib.parse.quote(p.name)}",
+                        "kind": file_kind(p.name),
                     }
                 )
             try:

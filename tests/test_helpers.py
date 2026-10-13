@@ -1088,3 +1088,32 @@ def test_featured_sources_in_web_ui_all_resolve():
     assert {n.strip() for n in strip.split("·") if n.strip()} == set(FEATURED)
     for label, url in FEATURED.items():
         assert app.resolve_source(url)["label"] == label, url
+
+
+# --- display fields --------------------------------------------------------------------
+def test_display_thumbnail_only_http():
+    assert app.display_thumbnail("https://i.ytimg.com/vi/x/hq.jpg") == "https://i.ytimg.com/vi/x/hq.jpg"
+    assert app.display_thumbnail("javascript:alert(1)") is None
+    assert app.display_thumbnail("data:image/png;base64,AAA") is None
+    assert app.display_thumbnail(None) is None
+
+
+@pytest.mark.parametrize("name, kind", [
+    ("Clip [abc].mp4", "video"), ("Song [x].mp3", "audio"), ("Track [x].m4a", "audio"),
+    ("pinterest_1.jpg", "image"), ("pin.png", "image"), ("subs.en.srt", "other"),
+])
+def test_file_kind(name, kind):
+    assert app.file_kind(name) == kind
+
+
+def test_progress_hook_fills_title_and_thumbnail_once():
+    app.jobs["t1"] = {"id": "t1", "status": "starting", "log": []}
+    try:
+        app.progress_hook("t1", {"status": "downloading", "info_dict": {
+            "id": "x", "title": "Me at the zoo", "thumbnail": "https://i.ytimg.com/x.jpg"}})
+        app.progress_hook("t1", {"status": "downloading", "info_dict": {
+            "id": "y", "title": "Second", "thumbnail": "https://i.ytimg.com/y.jpg"}})
+        assert app.jobs["t1"]["title"] == "Me at the zoo"
+        assert app.jobs["t1"]["thumbnail"] == "https://i.ytimg.com/x.jpg"
+    finally:
+        app.jobs.clear()

@@ -554,3 +554,26 @@ def test_cancel_running_gallery_job_kills_process(server, fake_gallery):
     job = wait_for(server, jid, timeout=10)
     assert job["status"] == "cancelled"
     assert time.time() - started < 5  # terminated, not left to sleep 30s
+
+
+def test_download_keeps_display_fields_and_files_report_kind(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123abc12", "title": "Shown title",
+                            "thumbnail": "javascript:alert(1)"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["title"] == "Shown title"
+    assert job["thumbnail"] is None  # unsafe scheme dropped; stub has no thumbnail
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert {f["name"]: f["kind"] for f in listing["files"]}["Test Video [abc123].mp4"] == "video"
+
+
+def test_fonts_are_served_and_traversal_blocked(server):
+    import urllib.error
+    with urllib.request.urlopen(server + "/fonts/archivo.woff2", timeout=10) as res:
+        assert res.status == 200 and res.headers["Content-Type"] == "font/woff2"
+    try:
+        urllib.request.urlopen(server + "/fonts/..%2F..%2Fapp.py", timeout=10)
+        raise AssertionError("traversal should 404")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 404
