@@ -1787,7 +1787,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if route == "/api/files":
             files = []
             listing = sorted(
-                (p for p in DOWNLOAD_DIR.iterdir() if p.is_file() and not is_temp_file(p.name)),
+                # Dotfiles (.DS_Store, ...) are never served, so never listed.
+                (p for p in DOWNLOAD_DIR.iterdir() if p.is_file() and not is_temp_file(p.name)
+                 and not p.name.startswith(".")),
                 key=lambda p: p.stat().st_mtime,
                 reverse=True,
             )

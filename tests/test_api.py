@@ -313,14 +313,16 @@ def test_temp_files_hidden_from_library(server):
     import app as _app
     (_app.DOWNLOAD_DIR / "half.mp4.part").write_bytes(b"partial")
     (_app.DOWNLOAD_DIR / "real [abc123].mp4").write_bytes(b"ok")
+    (_app.DOWNLOAD_DIR / ".DS_Store").write_bytes(b"finder")
     try:
         status, listing, _ = api(server, "GET", "/api/files")
         assert status == 200
         names = [f["name"] for f in listing["files"]]
         assert "real [abc123].mp4" in names
         assert "half.mp4.part" not in names
+        assert ".DS_Store" not in names  # unservable, so unlisted
     finally:
-        for n in ("half.mp4.part", "real [abc123].mp4"):
+        for n in ("half.mp4.part", "real [abc123].mp4", ".DS_Store"):
             try:
                 (_app.DOWNLOAD_DIR / n).unlink()
             except OSError:
