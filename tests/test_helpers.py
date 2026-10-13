@@ -836,3 +836,12 @@ def test_environment_checks_reports_missing(monkeypatch):
     assert checks["yt_dlp"] == "missing"
     assert checks["js_runtime"] == "none"
     assert checks["js_runtime_ok"] is False
+
+
+def test_output_name_caps_long_captions_and_keeps_id():
+    import yt_dlp
+    opts = app.build_download_opts({"id": "validate"}, {}, persist=False)
+    name = yt_dlp.YoutubeDL({"outtmpl": opts["outtmpl"]}).prepare_filename(
+        {"title": "🔥" * 200 + " caption", "id": "abc", "ext": "mp4"})
+    base = Path(name).name
+    assert len(base.encode()) <= 255 and base.endswith("[abc].mp4")

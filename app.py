@@ -881,7 +881,9 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True,
                         player_clients: list[str] | None = None) -> dict:
     quality = payload.get("quality") or "best"
     fmt = quality_to_format(quality)
-    outtmpl = str(DOWNLOAD_DIR / "%(title)s [%(id)s].%(ext)s")
+    # Titles on TikTok/X/Instagram are whole captions; cap the bytes so the
+    # name stays under the 255-byte filesystem limit and keeps its [id].
+    outtmpl = str(DOWNLOAD_DIR / "%(title).150B [%(id)s].%(ext)s")
 
     opts = base_ydl_opts(payload, job.get("id"), persist=persist,
                          player_clients=player_clients)
