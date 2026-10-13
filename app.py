@@ -1072,7 +1072,8 @@ def inspect_gallery(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
     for file_url, meta in files:
         ext = str(meta.get("extension") or "").lower()
         entries.append({
-            "title": _gallery_text(meta, ("title", "grid_title", "description", "content", "caption")),
+            "title": _gallery_text(meta, ("title", "grid_title", "seo_title", "description",
+                                          "content", "caption", "alt_text")),
             "thumbnail": _gallery_thumb(file_url, meta),
             "ext": ext,
             "is_video": ext in VIDEO_EXTS,
