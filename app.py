@@ -314,6 +314,12 @@ def url_site(url: str) -> str:
     return site_id(urllib.parse.urlsplit(url).hostname or "")
 
 
+def site_label(url: str) -> str:
+    """'YouTube', 'Pinterest', … or the bare domain for unlisted sites."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    return SOURCE_LABELS.get(site_id(host), site_domain(host))
+
+
 @functools.lru_cache(maxsize=1024)
 def ytdlp_extractor(url: str) -> str | None:
     """Key of the extractor yt-dlp would pick for `url`, or None when only
@@ -357,8 +363,7 @@ def resolve_source(url: str) -> dict:
             "specific video, post, track or playlist — YouTube, TikTok, "
             "Instagram, X, Reddit, Vimeo, SoundCloud and ~1,800 more sites work."
         )
-    return {"id": sid, "label": SOURCE_LABELS.get(sid, site_domain(host)),
-            "engines": engines}
+    return {"id": sid, "label": site_label(url), "engines": engines}
 
 
 def check_url(url: str | None) -> tuple[str, dict]:
@@ -525,6 +530,42 @@ FALLBACK_PLAYER_CLIENTS = ["web_creator", "tv", "mweb"]
 def _is_session_failure(msg: str | None) -> bool:
     low = (msg or "").lower()
     return any(m in low for m in SESSION_FAILURE_MARKERS)
+
+
+# Engine errors that mean "this needs a signed-in session". yt-dlp phrases
+# it per site ("login required", "Use --cookies…", "private"), so match
+# the shared vocabulary rather than each site's sentence.
+LOGIN_MARKERS = ("--cookies", "login", "log in", "sign in", "private",
+                 "authenticat", "age-restricted", "inappropriate for some users")
+
+
+def failure_hint(msg: str, label: str) -> str:
+    """One plain-language next step for an engine error, or ''."""
+    low = (msg or "").lower()
+    if "join this channel" in low or "members-only" in low:
+        return ("This looks like a members-only video. Use cookies from an account "
+                "that can already watch it, re-export them (they expire), and check "
+                "the membership tier.")
+    if "not a bot" in low or "sign in to confirm" in low:
+        return ("YouTube asked for a bot-check sign-in (it does this for public "
+                "videos too). Add cookies and retry: upload a cookies.txt export, "
+                "or run natively with Access → Browser (Docker can't read your "
+                "host browser, so use the file there).")
+    if "needs to be reloaded" in low:
+        return ("YouTube rejected the session. Re-export fresh cookies while on "
+                "youtube.com, logged into a single account, then retry. "
+                "Full-browser exports go stale fastest.")
+    if any(m in low for m in LOGIN_MARKERS):
+        return (f"{label} only shows this to a signed-in account. Options → Access: "
+                f"pick Browser (native server) or a cookies file exported while "
+                f"signed in to {label}.")
+    if any(m in low for m in ("your country", "your location", "geo restrict", "geo-restrict")):
+        return f"{label} region-locks this; it isn't available where offtube is running."
+    if "cookies" in low:
+        return "Your cookies may be expired — re-export cookies.txt and try again."
+    if "ffmpeg" in low:
+        return "ffmpeg is required for merging/trimming — install it and restart."
+    return ""
 
 
 HTTPONLY_PREFIX = "#HttpOnly_"
@@ -1156,30 +1197,13 @@ def run_download(job_id: str, payload: dict):
                 job["detail"] = "Cancelled."
                 job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
                 return
-        hint = ""
-        if "Join this channel" in msg or "members-only" in msg.lower():
-            hint = (" This looks like a members-only/private video. Make sure your cookies "
-                    "come from an account that can already watch it, re-export them "
-                    "(they expire), and check the membership tier.")
-        elif "not a bot" in msg or "Sign in to confirm" in msg:
-            hint = (" YouTube asked for a bot-check sign-in (it does this for public "
-                    "videos too). Add cookies and retry: upload a cookies.txt export, "
-                    "or run natively with Access → Browser (Docker can't read your "
-                    "host browser, so use the file there).")
-        elif "reload" in msg.lower():
-            hint = (" YouTube rejected the session. Re-export fresh cookies while on "
-                    "youtube.com, logged into a single account, then retry. "
-                    "Full-browser exports go stale fastest.")
-        elif "cookies" in msg.lower():
-            hint = " Your cookies may be expired — re-export cookies.txt and try again."
-        elif "ffmpeg" in msg.lower():
-            hint = " ffmpeg is required for merging/trimming — install it and restart."
+        hint = failure_hint(msg, job.get("source") or "the site")
         with jobs_lock:
             job = jobs.get(job_id)
             if job is None:
                 return
             job["status"] = "error"
-            job["detail"] = clean_text(f"Download failed: {msg}{hint}", 1000)
+            job["detail"] = clean_text(f"Download failed: {msg}" + (f" — {hint}" if hint else ""), 1000)
             job["log"].append(clean_text(f"ERROR: {msg}"))
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except Exception as exc:  # pragma: no cover - surfaced to UI
@@ -1551,18 +1575,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 msg = clean_text(str(exc), 1000)
-                if "Join this channel" in msg:
-                    msg += (" — this video needs membership access. Add cookies from an "
-                            "account that can watch it, then retry.")
-                elif "not a bot" in msg or "Sign in to confirm" in msg:
-                    msg += (" — YouTube asked for a bot-check sign-in (it does this for "
-                            "public videos too). Add cookies and retry: upload a "
-                            "cookies.txt export, or run natively with Access → Browser "
-                            "(Docker can't read your host browser, so use the file there).")
-                elif "reload" in msg.lower():
-                    msg += (" — YouTube rejected the session. Re-export fresh cookies "
-                            "while on youtube.com, logged into a single account, then "
-                            "retry. Full-browser exports go stale fastest.")
+                hint = failure_hint(msg, site_label(validate_url(body.get("url"))))
+                if hint:
+                    msg += f" — {hint}"
                 return self.send_json({"ok": False, "error": msg}, 400)
 
         if route == "/api/download":

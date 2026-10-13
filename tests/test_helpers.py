@@ -845,3 +845,19 @@ def test_output_name_caps_long_captions_and_keeps_id():
         {"title": "🔥" * 200 + " caption", "id": "abc", "ext": "mp4"})
     base = Path(name).name
     assert len(base.encode()) <= 255 and base.endswith("[abc].mp4")
+
+
+@pytest.mark.parametrize("msg, needle", [
+    ("ERROR: [youtube] x: Join this channel to get access", "members-only"),
+    ("Sign in to confirm you're not a bot", "bot-check"),
+    ("The page needs to be reloaded.", "Re-export fresh cookies"),
+    ("ERROR: [Instagram] x: Requested content is not available, rate-limit "
+     "reached or login required. Use --cookies", "Instagram only shows this"),
+    ("ERROR: [TikTok] x: This video is private", "Instagram only shows this"),
+    ("The uploader has not made this video available in your country", "region-locks"),
+    ("ffmpeg not found", "ffmpeg is required"),
+    ("HTTP Error 404: Not Found", ""),
+])
+def test_failure_hint(msg, needle):
+    hint = app.failure_hint(msg, "Instagram")
+    assert (needle in hint) if needle else hint == ""
