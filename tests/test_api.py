@@ -149,10 +149,22 @@ def test_static_dotfile_and_traversal_blocked(server):
         assert exc.code == 404
 
 
-def test_info_rejects_non_youtube_without_network(server):
-    status, body, _ = api(server, "POST", "/api/info", {"url": "https://vimeo.com/123"})
+def test_info_rejects_unsupported_site_without_network(server):
+    status, body, _ = api(server, "POST", "/api/info", {"url": "https://example.com/page"})
     assert status == 400
-    assert "YouTube" in body["error"]
+    assert "doesn't support" in body["error"]
+    status, body, _ = api(server, "POST", "/api/info", {"url": "http://192.168.1.5/a.mp4"})
+    assert status == 400
+
+
+def test_source_endpoint_names_the_site(server):
+    q = urllib.parse.quote("https://vimeo.com/76979871", safe="")
+    status, body, _ = api(server, "GET", f"/api/source?url={q}")
+    assert status == 200 and body["supported"] is True
+    assert body["source"] == {"id": "vimeo", "label": "Vimeo"}
+    q = urllib.parse.quote("https://example.com/page", safe="")
+    status, body, _ = api(server, "GET", f"/api/source?url={q}")
+    assert status == 200 and body["supported"] is False and body["error"]
 
 
 def test_info_and_download_reject_channel_urls(server):
@@ -168,7 +180,7 @@ def test_info_and_download_reject_channel_urls(server):
 
 def test_info_video_with_stub(server):
     status, body, _ = api(server, "POST", "/api/info",
-                           {"url": "https://www.youtube.com/watch?v=abc123"})
+                           {"url": "https://www.youtube.com/watch?v=abc123abc12"})
     assert status == 200
     info = body["info"]
     assert info["type"] == "video" and info["title"] == "Test Video"
@@ -177,7 +189,7 @@ def test_info_video_with_stub(server):
 
 def test_download_end_to_end_and_files_and_delete(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123", "quality": "720"})
+                           {"url": "https://youtu.be/abc123abc12", "quality": "720"})
     assert status == 200, body
     job = wait_for(server, body["job_id"])
     assert job["status"] == "done", job
@@ -203,12 +215,12 @@ def test_download_rejects_bad_input(server):
     status, body, _ = api(server, "POST", "/api/download", {"url": ""})
     assert status == 400
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123",
+                           {"url": "https://youtu.be/abc123abc12",
                             "clip_from": "02:00", "clip_to": "01:00"})
     assert status == 400
     assert "after" in body["error"]
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://vimeo.com/123"})
+                           {"url": "https://example.com/page"})
     assert status == 400
 
 
@@ -264,7 +276,7 @@ def test_cors_preflight_extension_allowed_evil_omitted(server):
 
 def test_job_listing_omits_payload(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123", "quality": "720",
+                           {"url": "https://youtu.be/abc123abc12", "quality": "720",
                             "cookies_mode": "none"})
     assert status == 200, body
     job = wait_for(server, body["job_id"])
@@ -276,11 +288,11 @@ def test_job_listing_omits_payload(server):
 
 def test_cross_site_post_blocked(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123"},
+                           {"url": "https://youtu.be/abc123abc12"},
                            headers={"Origin": "https://evil.com"})
     assert status == 403
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123"},
+                           {"url": "https://youtu.be/abc123abc12"},
                            headers={"Origin": "http://127.0.0.1:8000"})
     assert status in (200, 429)
     if status == 200:
@@ -316,7 +328,7 @@ def test_temp_files_hidden_from_library(server):
 
 def test_download_disposition_uses_rfc5987(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123", "quality": "720"})
+                           {"url": "https://youtu.be/abc123abc12", "quality": "720"})
     assert status == 200, body
     job = wait_for(server, body["job_id"])
     assert job["status"] == "done"
@@ -330,7 +342,7 @@ def test_download_disposition_uses_rfc5987(server):
 
 def test_jobs_limit_trims_logs(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123"})
+                           {"url": "https://youtu.be/abc123abc12"})
     assert status == 200
     wait_for(server, body["job_id"])
     status, data, _ = api(server, "GET", "/api/jobs?limit=1")
@@ -344,7 +356,7 @@ def test_disk_guard_refuses_when_full(server, monkeypatch):
     fake = collections.namedtuple("usage", "total used free")(100, 99, 1)
     monkeypatch.setattr(app.shutil, "disk_usage", lambda *a, **k: fake)
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123"})
+                           {"url": "https://youtu.be/abc123abc12"})
     assert status == 507
     assert "Disk" in body.get("error", "")
 
@@ -356,12 +368,12 @@ def test_cancel_queued_job(server):
         first, second = [], []
         for i in range(2):
             s, b, _ = api(server, "POST", "/api/download",
-                           {"url": f"https://youtu.be/block{i}"})
+                           {"url": f"https://youtu.be/blockblock{i}"})
             assert s == 200
             first.append(b["job_id"]) if i == 0 else second.append(b["job_id"])
         time.sleep(0.5)  # let workers pick up the blocking jobs
         s, b, _ = api(server, "POST", "/api/download",
-                       {"url": "https://youtu.be/queued"})
+                       {"url": "https://youtu.be/queuedqueue"})
         assert s == 200
         queued = b["job_id"]
         s, b, _ = api(server, "POST", "/api/cancel", {"job_id": queued})
@@ -385,7 +397,7 @@ def test_cancel_queued_job(server):
 # --- public job field whitelist -------------------------------------------------
 def test_public_job_omits_internal_paths(server):
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123", "quality": "720"})
+                           {"url": "https://youtu.be/abc123abc12", "quality": "720"})
     assert status == 200, body
     job = wait_for(server, body["job_id"])
     assert job["status"] == "done"
@@ -401,7 +413,7 @@ def test_non_loopback_host_rejected(server):
                            headers={"Host": "evil.example.com"})
     assert status == 403
     status, body, _ = api(server, "POST", "/api/download",
-                           {"url": "https://youtu.be/abc123"},
+                           {"url": "https://youtu.be/abc123abc12"},
                            headers={"Host": "offtube.example.com:8000"})
     assert status == 403
     # loopback Host still works
@@ -415,7 +427,7 @@ def test_jobs_clear_evicts_only_terminal(server):
     ids = []
     for i in range(3):
         s, b, _ = api(server, "POST", "/api/download",
-                       {"url": "https://youtu.be/abc123", "quality": "720"})
+                       {"url": "https://youtu.be/abc123abc12", "quality": "720"})
         assert s == 200, b
         ids.append(b["job_id"])
     for jid in ids:
@@ -435,7 +447,7 @@ def test_retry_unknown_job(server):
 def test_retry_running_job_refused(server):
     BLOCK.clear()
     try:
-        s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/block0"})
+        s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/blockblock0"})
         assert s == 200
         jid = b["job_id"]
         time.sleep(0.5)
@@ -451,7 +463,7 @@ def test_retry_running_job_refused(server):
 def test_retry_resubmits_stored_payload(server):
     # First run succeeds; retry must re-enqueue the same url/quality.
     s, b, _ = api(server, "POST", "/api/download",
-                   {"url": "https://youtu.be/abc123", "quality": "720"})
+                   {"url": "https://youtu.be/abc123abc12", "quality": "720"})
     assert s == 200, b
     first = wait_for(server, b["job_id"])
     assert first["status"] == "done"
@@ -472,9 +484,9 @@ def test_retry_validates_stored_payload(server, tmp_path, monkeypatch):
     app.jobs.clear()
     jid = "badclip"
     app.jobs[jid] = {
-        "id": jid, "url": "https://youtu.be/abc123", "quality": "720",
+        "id": jid, "url": "https://youtu.be/abc123abc12", "quality": "720",
         "status": "error", "progress": 0, "detail": "x", "log": [], "files": [],
-        "payload": {"url": "https://youtu.be/abc123", "clip_from": "02:00", "clip_to": "01:00"},
+        "payload": {"url": "https://youtu.be/abc123abc12", "clip_from": "02:00", "clip_to": "01:00"},
     }
     try:
         s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})

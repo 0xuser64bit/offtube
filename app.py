@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-offtube — paste-a-link YouTube keeper (local web UI + yt-dlp engine).
+offtube — paste-a-link media keeper (local web UI + yt-dlp engine).
 
 Features:
-  - Paste any YouTube URL (single video, playlist, members-only/private with cookies)
+  - Paste a link from any site yt-dlp has a dedicated extractor for
+    (YouTube, TikTok, Instagram, X, Reddit, Vimeo, Twitch, SoundCloud, …)
   - Fetch metadata + thumbnails + available qualities before downloading
   - Quality picker (best / 2160p / 1440p / 1080p / 720p / 480p / 360p / audio-only)
   - Clip trim (from-to, uses yt-dlp --download-sections, needs ffmpeg)
@@ -31,7 +32,9 @@ from __future__ import annotations
 
 import datetime as _dt
 import concurrent.futures
+import functools
 import http.server
+import ipaddress
 import json
 import mimetypes
 import os
@@ -59,9 +62,11 @@ COOKIES_DIR.mkdir(exist_ok=True)
 
 try:
     import yt_dlp
+    from yt_dlp.extractor import gen_extractor_classes
     from yt_dlp.utils import DownloadError
 except ImportError:  # pragma: no cover
     yt_dlp = None
+    gen_extractor_classes = None
     DownloadError = Exception
 
 jobs: dict[str, dict] = {}
@@ -114,7 +119,8 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 
 # ------------------------------- security limits -------------------------------
 # Local-only server, but still: bound request sizes, restrict outbound fetch
-# targets to YouTube, and never serve files outside their directories.
+# targets to sites with a dedicated extractor, and never serve files outside
+# their directories.
 
 MAX_JSON_BODY = 2 * 1024 * 1024  # full-browser cookie pastes can be MBs; trimmed after parse
 MAX_URL_LEN = 2000
@@ -122,12 +128,6 @@ MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; YouTube-only rows surviving the
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
-
-YOUTUBE_HOSTS = frozenset({
-    "youtube.com",
-    "youtu.be",
-    "youtube-nocookie.com",
-})
 
 # Origins that may read JSON responses (extension + the local web UI).
 # Never reflect * — that lets any website fetch /api/jobs and /api/files
@@ -152,13 +152,26 @@ class HttpError(Exception):
         self.status = status
 
 
+# Hostnames that only ever mean this machine or the LAN.
+LOCAL_SUFFIXES = (".local", ".localhost", ".internal", ".lan", ".home.arpa")
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
 def validate_url(url: str | None) -> str:
-    """Allowlist check: only http(s) YouTube URLs (incl. subdomains)."""
+    """Syntax + host sanity: http(s) on a public-looking hostname.
+    Whether the site is supported is resolve_source's call."""
     u = (url or "").strip()
     if not u:
-        raise ValueError("Paste a YouTube URL first.")
+        raise ValueError("Paste a link first.")
     if len(u) > MAX_URL_LEN:
-        raise ValueError("That URL is too long to be a YouTube link.")
+        raise ValueError("That URL is too long.")
     if not u.startswith(("http://", "https://")):
         u = "https://" + u
     try:
@@ -166,10 +179,12 @@ def validate_url(url: str | None) -> str:
         host = (parts.hostname or "").lower().rstrip(".")
     except Exception:
         raise ValueError("That doesn't look like a valid URL.")
-    if parts.scheme not in ("http", "https") or not host:
+    if parts.scheme not in ("http", "https") or "." not in host:
         raise ValueError("That doesn't look like a valid URL.")
-    if not any(host == h or host.endswith("." + h) for h in YOUTUBE_HOSTS):
-        raise ValueError("Only YouTube links are supported (youtube.com / youtu.be).")
+    # Media sites have names. Refusing IPs and LAN names keeps a pasted or
+    # right-clicked link from pointing the engines at this machine's network.
+    if _is_ip(host) or host.endswith(LOCAL_SUFFIXES):
+        raise ValueError("That's a local or IP address, not a media site.")
     return u
 
 
@@ -197,7 +212,7 @@ def cors_allow_origin(origin: str | None) -> str | None:
 # internal: `payload` (may hold pasted cookies), `filename`/`seen_files`
 # (absolute server paths), `seen_ids`, `cancel_requested`.
 PUBLIC_JOB_FIELDS = (
-    "id", "url", "quality", "status", "progress", "detail", "log", "files",
+    "id", "url", "source", "quality", "status", "progress", "detail", "log", "files",
     "created_at", "finished_at", "downloaded_bytes", "total_bytes", "speed",
     "eta", "playlist_index", "playlist_count",
 )
@@ -244,21 +259,112 @@ def classify_youtube_url(url: str) -> str:
     return "video"
 
 
-def reject_unsupported_youtube(url: str) -> str:
-    """validate_url + refuse channel/home/search pages."""
+# ------------------------------- sources -------------------------------
+# A link is supported when yt-dlp has a *dedicated* extractor for it — the
+# same one yt-dlp itself would pick. Its Generic extractor (scrape any page)
+# is never used, so outbound fetches stay on sites yt-dlp explicitly knows.
+
+# Short-link and alternate domains, folded into the site they belong to.
+SITE_ALIASES = {
+    "youtu.be": "youtube.com",
+    "youtube-nocookie.com": "youtube.com",
+    "pin.it": "pinterest.com",
+    "twitter.com": "x.com",
+    "redd.it": "reddit.com",
+    "fb.watch": "facebook.com",
+}
+
+# Display names. Unlisted sites still work; they show their domain.
+SOURCE_LABELS = {
+    "youtube": "YouTube", "tiktok": "TikTok", "instagram": "Instagram",
+    "pinterest": "Pinterest", "x": "X", "reddit": "Reddit",
+    "facebook": "Facebook", "threads": "Threads", "bsky": "Bluesky",
+    "tumblr": "Tumblr", "snapchat": "Snapchat", "linkedin": "LinkedIn",
+    "vimeo": "Vimeo", "dailymotion": "Dailymotion", "twitch": "Twitch",
+    "kick": "Kick", "rumble": "Rumble", "streamable": "Streamable",
+    "loom": "Loom", "ted": "TED", "archive": "Internet Archive",
+    "bilibili": "Bilibili", "nicovideo": "Niconico", "douyin": "Douyin",
+    "weibo": "Weibo", "vk": "VK", "odysee": "Odysee", "9gag": "9GAG",
+    "soundcloud": "SoundCloud", "bandcamp": "Bandcamp",
+    "mixcloud": "Mixcloud", "audiomack": "Audiomack",
+    "flickr": "Flickr", "imgur": "Imgur", "deviantart": "DeviantArt",
+    "artstation": "ArtStation", "behance": "Behance", "pixiv": "pixiv",
+    "patreon": "Patreon", "redgifs": "RedGIFs",
+}
+
+_SECOND_LEVEL = frozenset({"co", "com", "net", "org", "ac", "gov", "edu", "ne", "or"})
+
+
+def site_domain(host: str) -> str:
+    """Registrable domain with aliases folded: m.youtu.be → youtube.com.
+    ponytail: two-letter-ccTLD heuristic, not the public suffix list; swap
+    one in if a real site misparses."""
+    labels = (host or "").lower().strip(".").split(".")
+    n = 3 if len(labels) > 2 and len(labels[-1]) == 2 and labels[-2] in _SECOND_LEVEL else 2
+    base = ".".join(labels[-n:])
+    return SITE_ALIASES.get(base, base)
+
+
+def site_id(host: str) -> str:
+    """'youtube', 'pinterest', 'x', … — the site's name without its TLD."""
+    return site_domain(host).split(".")[0]
+
+
+def url_site(url: str) -> str:
+    return site_id(urllib.parse.urlsplit(url).hostname or "")
+
+
+@functools.lru_cache(maxsize=1024)
+def ytdlp_extractor(url: str) -> str | None:
+    """Key of the extractor yt-dlp would pick for `url`, or None when only
+    its Generic page scraper would try. Local regex match, no network."""
+    if gen_extractor_classes is None:
+        return None
+    for ie in gen_extractor_classes():
+        if ie.suitable(url):
+            key = ie.ie_key()
+            return None if key == "Generic" else key
+    return None
+
+
+def resolve_source(url: str) -> dict:
+    """{id, label, engines} for a validated URL. Raises ValueError when no
+    engine supports it. No network."""
+    host = urllib.parse.urlsplit(url).hostname or ""
+    sid = site_id(host)
+    if sid == "youtube":
+        kind = classify_youtube_url(url)
+        if kind == "channel":
+            raise ValueError(
+                "Channel pages aren't supported — they can be thousands of videos. "
+                "Paste a video or playlist link."
+            )
+        if kind == "other":
+            raise ValueError(
+                "That YouTube page isn't a video or playlist. "
+                "Paste a watch, shorts, or playlist link."
+            )
+    yt = ytdlp_extractor(url)
+    if yt == "KnownDRM":
+        raise ValueError(
+            "That service is DRM-protected (Spotify, Netflix, Disney+, …). "
+            "offtube can't download from it."
+        )
+    engines = ["yt-dlp"] if yt else []
+    if not engines:
+        raise ValueError(
+            f"offtube doesn't support that {site_domain(host)} link. Paste a "
+            "specific video, post, track or playlist — YouTube, TikTok, "
+            "Instagram, X, Reddit, Vimeo, SoundCloud and ~1,800 more sites work."
+        )
+    return {"id": sid, "label": SOURCE_LABELS.get(sid, site_domain(host)),
+            "engines": engines}
+
+
+def check_url(url: str | None) -> tuple[str, dict]:
+    """validate_url + resolve_source: (normalized url, source)."""
     u = validate_url(url)
-    kind = classify_youtube_url(u)
-    if kind == "channel":
-        raise ValueError(
-            "Channel pages aren't supported — they can be thousands of videos. "
-            "Paste a video or playlist link."
-        )
-    if kind == "other":
-        raise ValueError(
-            "That YouTube page isn't a video or playlist. "
-            "Paste a watch, shorts, or playlist link."
-        )
-    return u
+    return u, resolve_source(u)
 
 
 def safe_child(base: Path, name: str) -> Path | None:
@@ -667,22 +773,24 @@ def _inspect_opts(payload: dict, cookie_id: str, url: str,
                   player_clients: list[str] | None = None) -> dict:
     opts = base_ydl_opts(payload, cookie_id, player_clients=player_clients)
     opts["skip_download"] = True
+    # Collections inspect flat (first 50) so a 2,000-video profile answers
+    # fast; a no-op for single videos.
+    opts["extract_flat"] = "in_playlist"
+    opts["playlistend"] = 50
     # watch?v=…&list=… is a video page that happens to mention a playlist.
     # Inspect it as a single video so we don't auto-queue 200 mix items.
-    # Only /playlist?list= URLs extract as a playlist (flat, first 50).
-    if classify_youtube_url(url) == "playlist":
-        opts["extract_flat"] = "in_playlist"
-        opts["playlistend"] = 50
-        opts["noplaylist"] = False
-    else:
-        opts["noplaylist"] = True
+    # Only /playlist?list= extracts as a playlist. Other sites' pure
+    # collection URLs ignore noplaylist and still list.
+    opts["noplaylist"] = not (url_site(url) == "youtube"
+                              and classify_youtube_url(url) == "playlist")
     return opts
 
 
 def fetch_info(url: str, payload: dict) -> dict:
     if yt_dlp is None:
         raise RuntimeError("yt-dlp is not installed. Run: pip install -r requirements.txt")
-    url = reject_unsupported_youtube(url)
+    url, src = check_url(url)
+    youtube = src["id"] == "youtube"
     if not info_sema.acquire(timeout=60):
         raise RuntimeError("Too many inspect requests. Wait a moment and retry.")
     # Inspect must be side-effect-free: pasted cookies go to an ephemeral
@@ -696,7 +804,7 @@ def fetch_info(url: str, payload: dict) -> dict:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
         except Exception as exc:
-            if not _is_session_failure(str(exc)):
+            if not youtube or not _is_session_failure(str(exc)):
                 raise
             # Same session, different player clients — never a blind repeat.
             fb_opts = _inspect_opts(payload, info_cookie_id, url,
@@ -708,7 +816,10 @@ def fetch_info(url: str, payload: dict) -> dict:
         cleanup_job_cookies(info_cookie_id)
     if info is None:
         raise RuntimeError("Could not extract info for that URL.")
-    list_id = (urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list") or [None])[0]
+    source = {"id": src["id"], "label": src["label"]}
+    list_id = None
+    if youtube:
+        list_id = (urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get("list") or [None])[0]
     if info.get("_type") == "playlist":
         entries = []
         for e in (info.get("entries") or [])[:50]:
@@ -716,7 +827,7 @@ def fetch_info(url: str, payload: dict) -> dict:
                 continue
             vid = e.get("id")
             entry_url = e.get("url") or e.get("webpage_url")
-            if not entry_url and vid:
+            if not entry_url and vid and youtube:
                 entry_url = f"https://www.youtube.com/watch?v={vid}"
             entries.append(
                 {
@@ -730,6 +841,7 @@ def fetch_info(url: str, payload: dict) -> dict:
             )
         return {
             "type": "playlist",
+            "source": source,
             "title": info.get("title"),
             "uploader": info.get("uploader"),
             "count": info.get("playlist_count") or len(entries),
@@ -737,8 +849,13 @@ def fetch_info(url: str, payload: dict) -> dict:
             "thumbnail": (entries[0].get("thumbnail") if entries else info.get("thumbnail")),
             "webpage_url": info.get("webpage_url") or url,
         }
+    qualities = summarize_formats(info)
+    audio_only = not any(q["height"] for q in qualities) and any(
+        q["id"].startswith("audio") for q in qualities)
     return {
         "type": "video",
+        "source": source,
+        "media": "audio" if audio_only else "video",
         "id": info.get("id"),
         "title": info.get("title"),
         "uploader": info.get("uploader") or info.get("channel"),
@@ -747,7 +864,7 @@ def fetch_info(url: str, payload: dict) -> dict:
         "thumbnail": info.get("thumbnail"),
         "webpage_url": info.get("webpage_url") or url,
         "is_live": bool(info.get("is_live")),
-        "qualities": summarize_formats(info),
+        "qualities": qualities,
         "subtitles": sorted(list((info.get("subtitles") or {}).keys()))[:12],
         "automatic_captions": sorted(list((info.get("automatic_captions") or {}).keys()))[:12],
         "part_of_playlist": bool(list_id or info.get("playlist") or info.get("playlist_id")),
@@ -989,13 +1106,14 @@ def run_download(job_id: str, payload: dict):
         if job is None:
             return
         opts = build_download_opts(job, payload)
-        url = validate_url(payload.get("url"))
+        url, src = check_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([url])
         except DownloadError as exc:
-            if not _is_session_failure(str(exc)) or job.get("cancel_requested"):
+            if (src["id"] != "youtube" or not _is_session_failure(str(exc))
+                    or job.get("cancel_requested")):
                 raise
             # Same session, different player clients — visible in the UI log
             # so a repeated failure clearly means the session itself is bad.
@@ -1087,7 +1205,7 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     success or (None, (message, status)) on refusal. Shared by /api/download
     and /api/retry so a retry is byte-for-byte the same code path."""
     try:
-        url = reject_unsupported_youtube(body.get("url") or "")
+        url, src = check_url(body.get("url"))
     except ValueError as exc:
         return None, (str(exc), 400)
     if parse_time_to_seconds(body.get("clip_from")) is None and (body.get("clip_from") or "").strip():
@@ -1109,6 +1227,7 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     job = {
         "id": jid,
         "url": url,
+        "source": src["label"],
         "quality": body.get("quality") or "best",
         "status": "queued",
         "progress": 0,
@@ -1344,6 +1463,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.serve_static(route.lstrip("/"))
         if route == "/api/health":
             return self.send_json({"ok": True, "checks": environment_checks()})
+        if route == "/api/source":
+            # Is this link supported, and by which site? Local match, no
+            # network — cheap enough for the extension to ask on every tab.
+            try:
+                _, src = check_url((qs.get("url") or [""])[0])
+            except ValueError as exc:
+                return self.send_json({"ok": True, "supported": False, "error": str(exc)})
+            return self.send_json({"ok": True, "supported": True,
+                                   "source": {"id": src["id"], "label": src["label"]},
+                                   "engines": src["engines"]})
         if route == "/api/jobs":
             try:
                 limit = int((qs.get("limit") or ["50"])[0])
@@ -1530,7 +1659,7 @@ def main():
             print("WARNING: listening on all interfaces (docker mode). "
                   "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
         print(f"Downloads folder   → {DOWNLOAD_DIR}")
-        print("Paste a YouTube link in the page, pick quality / from-to, hit Download.\n")
+        print("Paste a link in the page, pick quality / from-to, hit Download.\n")
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:

@@ -25,18 +25,68 @@ def test_validate_url_accepts_youtube(url):
 
 
 @pytest.mark.parametrize("url", [
-    "https://vimeo.com/123",
-    "https://evilyoutube.com/watch?v=x",
-    "https://youtube.com.evil.com/x",
-    "https://notyoutu.be/x",
     "file:///etc/passwd",
     "ftp://youtube.com/x",
+    "http://127.0.0.1:8000/api/jobs",
+    "http://192.168.1.5/Mediasite/Play/x",
+    "http://[::1]/x",
+    "http://localhost/x",
+    "http://nas.local/x",
     "",
     "   ",
 ])
-def test_validate_url_rejects_non_youtube(url):
+def test_validate_url_rejects_bad_and_local(url):
     with pytest.raises(ValueError):
         app.validate_url(url)
+
+
+@pytest.mark.parametrize("url, sid, label", [
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ", "youtube", "YouTube"),
+    ("https://youtu.be/dQw4w9WgXcQ", "youtube", "YouTube"),
+    ("https://music.youtube.com/watch?v=dQw4w9WgXcQ", "youtube", "YouTube"),
+    ("https://www.tiktok.com/@scout2015/video/6718335390845095173", "tiktok", "TikTok"),
+    ("https://www.instagram.com/reel/CxyzABC123/", "instagram", "Instagram"),
+    ("https://twitter.com/user/status/1234567890", "x", "X"),
+    ("https://x.com/user/status/1234567890", "x", "X"),
+    ("https://www.reddit.com/r/pics/comments/abc123/title/", "reddit", "Reddit"),
+    ("https://www.facebook.com/watch/?v=123456", "facebook", "Facebook"),
+    ("https://vimeo.com/76979871", "vimeo", "Vimeo"),
+    ("https://www.twitch.tv/videos/123456", "twitch", "Twitch"),
+    ("https://soundcloud.com/artist/track", "soundcloud", "SoundCloud"),
+    ("https://artist.bandcamp.com/track/song", "bandcamp", "Bandcamp"),
+    ("https://www.dailymotion.com/video/x7tgad0", "dailymotion", "Dailymotion"),
+    ("https://www.bilibili.com/video/BV1xx411c7mD", "bilibili", "Bilibili"),
+    ("https://www.pinterest.com/pin/664281013778109217/", "pinterest", "Pinterest"),
+    ("https://www.bbc.co.uk/news/av/world-123", "bbc", "bbc.co.uk"),
+])
+def test_resolve_source_known_sites(url, sid, label):
+    src = app.resolve_source(url)
+    assert (src["id"], src["label"]) == (sid, label)
+    assert "yt-dlp" in src["engines"]
+
+
+@pytest.mark.parametrize("url, match", [
+    ("https://evilyoutube.com/watch?v=dQw4w9WgXcQ", "doesn't support"),
+    ("https://youtube.com.evil.com/watch?v=dQw4w9WgXcQ", "doesn't support"),
+    ("https://notyoutu.be/dQw4w9WgXcQ", "doesn't support"),
+    ("https://example.com/page", "doesn't support"),
+    ("https://open.spotify.com/track/abc", "DRM"),
+])
+def test_resolve_source_rejects_unknown_and_drm(url, match):
+    with pytest.raises(ValueError, match=match):
+        app.resolve_source(url)
+
+
+@pytest.mark.parametrize("host, domain", [
+    ("www.youtube.com", "youtube.com"),
+    ("m.youtu.be", "youtube.com"),
+    ("pin.it", "pinterest.com"),
+    ("www.pinterest.co.uk", "pinterest.co.uk"),
+    ("twitter.com", "x.com"),
+    ("www.nicovideo.jp", "nicovideo.jp"),
+])
+def test_site_domain(host, domain):
+    assert app.site_domain(host) == domain
 
 
 def test_validate_url_rejects_oversize():
@@ -59,21 +109,19 @@ def test_classify_youtube_url(url, kind):
     assert app.classify_youtube_url(url) == kind
 
 
-def test_reject_unsupported_youtube_blocks_channels():
+def test_check_url_blocks_youtube_channels():
     with pytest.raises(ValueError, match="Channel pages"):
-        app.reject_unsupported_youtube("https://www.youtube.com/@someone")
+        app.check_url("https://www.youtube.com/@someone")
     with pytest.raises(ValueError, match="isn't a video"):
-        app.reject_unsupported_youtube("https://www.youtube.com/results?search_query=x")
-    assert app.reject_unsupported_youtube(
-        "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDxxxx"
-    ).startswith("http")
+        app.check_url("https://www.youtube.com/results?search_query=x")
+    url, src = app.check_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDxxxx")
+    assert url.startswith("http") and src["id"] == "youtube"
 
 
 def test_inspect_opts_watch_list_is_single_video():
     url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDxxxx"
     opts = app._inspect_opts({"cookies_mode": "none"}, "info-x", url)
     assert opts["noplaylist"] is True
-    assert "extract_flat" not in opts
 
 
 def test_inspect_opts_playlist_is_flat():
@@ -82,6 +130,13 @@ def test_inspect_opts_playlist_is_flat():
     assert opts["extract_flat"] == "in_playlist"
     assert opts["playlistend"] == 50
     assert opts["noplaylist"] is False
+
+
+def test_inspect_opts_other_sites_flat_and_single():
+    opts = app._inspect_opts({"cookies_mode": "none"}, "info-x",
+                             "https://www.tiktok.com/@scout2015")
+    assert opts["extract_flat"] == "in_playlist" and opts["playlistend"] == 50
+    assert opts["noplaylist"] is True
 
 
 # --- CORS / origin trust ----------------------------------------------------
