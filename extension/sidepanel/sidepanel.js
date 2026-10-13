@@ -1,160 +1,424 @@
-/* offtube side panel — full controls + progress. Polling lives here
- * (not in the service worker — service workers are ephemeral).
+/* offtube side panel — the full desk, docked: follows the tab you're on,
+ * prints it, every option, the session strip and recent kept files.
+ * Polling lives here (service workers are ephemeral).
  */
 'use strict';
 
 const $ = (id) => document.getElementById(id);
-let pollTimer = null;
+const $$ = (sel, root = document) => Array.from(root.querySelectorAll(sel));
+const checked = (name) => document.querySelector(`input[name="${name}"]:checked`)?.value;
+
+let server = OFFTUBE.DEFAULT_SERVER;
+let info = null;
+let infoUrl = '';
+const marks = new Set();
 let lastTabUrl = '';
-let lastInspected = '';
 let activeJobId = null;
+let printJobId = null;
+let pollTimer = null;
+let inspectToken = 0;
 
-const { getSettings, setError } = OFFTUBE;
+const url = () => $('url').value.trim();
+const otype = () => checked('otype') || 'video';
+const access = () => checked('access') || 'none';
+const quality = () => checked('q') || (otype() === 'audio' ? 'audio_mp3' : 'best');
+const current = () => (info && infoUrl === url() ? info : null);
 
-function syncAccess() {
-  $('cookieUpload').classList.toggle('hidden', $('access').value !== 'upload');
-  $('cookieBrowserPane').classList.toggle('hidden', $('access').value !== 'browser');
-}
-
-function otype() {
-  return document.querySelector('input[name="otype"]:checked')?.value || 'video';
-}
-
-function effectiveQuality() {
-  const q = $('quality').value;
-  if (otype() === 'audio' && !q.startsWith('audio')) return 'audio_mp3';
-  return q;
-}
+/* ---------------- payload ---------------- */
 
 function accessFields() {
-  const mode = $('access').value;
+  const mode = access();
   if (mode === 'upload') return { cookies_mode: 'upload', cookies_text: $('cookieText').value };
   if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: $('cookieBrowserName').value };
   return { cookies_mode: 'none' };
 }
 
-function payload() {
+function scopeFields() {
+  if (marks.size) return { playlist_mode: 'playlist', playlist_items: OFFTUBE.ranges(marks) };
   return {
-    url: $('url').value.trim(),
-    quality: effectiveQuality(),
-    subtitles: $('subs').checked,
-    auto_subs: true,
-    sub_lang: 'en',
-    clip_from: $('clipFrom').value.trim(),
-    clip_to: $('clipTo').value.trim(),
-    playlist_mode: document.querySelector('input[name="plmode"]:checked')?.value || 'single',
-    ...accessFields(),
+    playlist_mode: checked('plmode') || 'single',
+    playlist_start: $('plStart').value.trim(),
+    playlist_end: $('plEnd').value.trim(),
+    playlist_items: $('plItems').value.trim(),
   };
 }
 
+function payload() {
+  const i = current();
+  return {
+    url: url(),
+    quality: quality(),
+    subtitles: $('subs').checked,
+    auto_subs: true,
+    sub_lang: ($('subLang').value.trim() || 'en').slice(0, 20),
+    clip_from: $('clipFrom').value.trim(),
+    clip_to: $('clipTo').value.trim(),
+    ...scopeFields(),
+    ...accessFields(),
+    title: i ? i.title || '' : '',
+    thumbnail: i ? i.thumbnail || '' : '',
+  };
+}
+
+/* ---------------- formats + notes ---------------- */
+
+function renderFormats(selected) {
+  const i = current();
+  const list = OFFTUBE.formatOptions(i, otype());
+  $('qualities').innerHTML = OFFTUBE.formatsHtml(list, selected || quality());
+  $('qualityNote').textContent = i && i.type === 'gallery'
+    ? 'Every image and clip is saved exactly as the site serves it.'
+    : otype() === 'audio' || (i && i.media === 'audio') ? 'Converted with ffmpeg once the download lands.' : '';
+  syncTally();
+}
+
+function setNote(id, text, on) {
+  $(id).textContent = text;
+  $(id).classList.toggle('is-on', on);
+}
+
+function syncNotes() {
+  const from = $('clipFrom').value.trim(), to = $('clipTo').value.trim();
+  setNote('trimState', from || to ? `${from || 'start'} → ${to || 'end'}` : 'Whole video', Boolean(from || to));
+  const mode = checked('plmode');
+  let pl = 'This item';
+  if (marks.size) pl = `${marks.size} circled`;
+  else if (mode === 'playlist') {
+    const s = $('plStart').value.trim(), e = $('plEnd').value.trim(), it = $('plItems').value.trim();
+    pl = it ? `Items ${it}` : s || e ? `#${s || 1}–${e || 'last'}` : 'Whole collection';
+  }
+  setNote('plState', pl, Boolean(marks.size) || mode === 'playlist');
+  $('plRangeRow').classList.toggle('is-off', mode !== 'playlist');
+  setNote('subsState', $('subs').checked ? ($('subLang').value.trim() || 'en') : 'Off', $('subs').checked);
+  const a = access();
+  const browserName = $('cookieBrowserName').selectedOptions[0]?.textContent || 'Browser';
+  setNote('accessState', a === 'browser' ? `${browserName} cookies` : a === 'upload' ? 'Cookies file' : 'Not needed', a !== 'none');
+  $('cookieNone').classList.toggle('hidden', a !== 'none');
+  $('cookieBrowserPane').classList.toggle('hidden', a !== 'browser');
+  $('cookieUpload').classList.toggle('hidden', a !== 'upload');
+  syncTally();
+}
+
+function syncTally() {
+  const i = current();
+  if (!i) { $('tally').textContent = ''; return; }
+  let what;
+  if (marks.size) what = `<b>${marks.size} circled</b>`;
+  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>`;
+  else if (i.type === 'gallery') what = '<b>1 file</b> · as posted';
+  else {
+    const q = (i.qualities || []).find((x) => x.id === quality());
+    what = `<b>1 ${otype() === 'audio' || i.media === 'audio' ? 'audio file' : 'video'}</b>${q && q.filesize_str ? ` · ~${esc(q.filesize_str)}` : ''}`;
+  }
+  $('tally').innerHTML = what;
+}
+
+function syncSheet() {
+  const i = current();
+  if (!OFFTUBE.isCollection(i)) { $('sheetTools').classList.add('hidden'); return; }
+  const all = `${i.count}${i.more ? '+' : ''}`;
+  $('markCount').textContent = marks.size ? `${marks.size} circled — only these are kept` : `Keeping all ${all}`;
+  if ($('sheetCount')) $('sheetCount').textContent = marks.size ? `${marks.size} circled` : `All ${all}`;
+  $('sheetTools').classList.remove('hidden');
+  syncNotes();
+}
+
+/* ---------------- source + inspect ---------------- */
+
 async function fillFromTab(force) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const url = tab?.url || '';
-  $('tabLine').title = url;
-  if (!url) {
-    $('tabLine').textContent = 'Could not read tab URL. Paste a link below.';
-    return false;
-  }
+  const tabUrl = tab?.url || '';
+  if (!tabUrl) { $('tabLine').textContent = 'Can’t read this tab. Paste a link above.'; return false; }
   let source;
   try {
-    source = await OFFTUBE.sourceOf((await getSettings()).serverUrl, url);
+    source = await OFFTUBE.sourceOf(server, tabUrl);
   } catch {
-    $('tabLine').textContent = 'Server unreachable — start ./run.sh.';
+    $('tabLine').textContent = 'offtube isn’t running — start it with ./run.sh.';
     return false;
   }
   if (!source) {
-    $('tabLine').textContent = 'Nothing offtube can keep on this tab — paste a link below.';
+    $('tabLine').textContent = 'Nothing to keep on this tab. Paste a link above.';
     return false;
   }
-  const current = $('url').value.trim();
-  if (force || !current || current === lastTabUrl) {
-    $('url').value = url;
-    lastTabUrl = url;
+  const cur = url();
+  if (force || !cur || cur === lastTabUrl) {
+    $('url').value = tabUrl;
+    lastTabUrl = tabUrl;
   }
-  $('tabLine').textContent = `${source.label} · ${tab.title || url}`.slice(0, 100);
+  $('tabLine').textContent = `Following ${source.label} · ${tab.title || tabUrl}`;
   return true;
 }
 
 async function inspect() {
-  setError('');
-  const { serverUrl } = await getSettings();
-  const url = $('url').value.trim();
-  if (!url) {
-    setError('Paste a link first.');
-    return;
-  }
+  const u = url();
+  OFFTUBE.showProblem('');
+  if (!u) return;
+  const my = ++inspectToken;
+  $('stage').innerHTML = OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]);
+  $('sheetTools').classList.add('hidden');
   try {
-    lastInspected = url;
-    const { info } = await OFFTUBE.api(serverUrl, '/api/info', { url, ...accessFields() });
-    $('preview').innerHTML = OFFTUBE.previewHtml(info);
-    const collection = info.type === 'playlist' || (info.type === 'gallery' && info.count > 1);
-    document.querySelector(`input[name="plmode"][value="${collection ? 'playlist' : 'single'}"]`).checked = true;
+    const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessFields() });
+    if (my !== inspectToken) return;
+    info = got;
+    infoUrl = u;
+    marks.clear();
+    printJobId = null;
+    document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
+    document.body.dataset.media = info.media || '';
+    $('stage').innerHTML = OFFTUBE.printHtml(info);
+    document.querySelector(`input[name="plmode"][value="${OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
     if (info.media === 'audio') document.querySelector('input[name="otype"][value="audio"]').checked = true;
-    OFFTUBE.fitControls(info);
+    renderFormats();
+    syncSheet();
+    syncNotes();
   } catch (err) {
-    setError(err.message);
+    if (my !== inspectToken) return;
+    info = null;
+    document.body.dataset.kind = '';
+    document.body.dataset.media = '';
+    $('stage').innerHTML = OFFTUBE.blankHtml('offtube', 'No print', 'Couldn’t read this link.', 'Fix the link, or set up sign-in below.');
+    OFFTUBE.showProblem(err.message);
+    if (OFFTUBE.NEEDS_ACCESS.test(err.message)) $('discAccess').open = true;
+    renderFormats();
   }
 }
 
-async function refreshQueue(server) {
-  try {
-    const { jobs } = await OFFTUBE.apiGet(server, '/api/jobs?limit=5');
-    $('queueCount').textContent = String((jobs || []).length);
-    $('queue').innerHTML = (jobs || []).slice(-5).reverse().map((j) => {
-      const cancellable = ['queued', 'starting', 'downloading', 'processing'].includes(j.status);
-      const cancel = cancellable
-        ? `<button class="btn quiet small" data-cancel="${OFFTUBE.escapeHtml(j.id)}" type="button">Cancel</button>`
-        : '';
-      const what = (j.source ? `${j.source} · ` : '') + (j.url || '').replace(/^https?:\/\/(www\.)?/, '').slice(0, 60);
-      return `<div class="job"><strong>${OFFTUBE.escapeHtml(j.status)}</strong> · ${Math.round(j.progress || 0)}%<br /><span class="muted">${OFFTUBE.escapeHtml(what)}</span>${cancel}</div>`;
-    }).join('') || '<p class="muted">No downloads yet.</p>';
-  } catch { /* server down — health badge already shows it */ }
+$('stage').addEventListener('click', (e) => {
+  const cell = e.target.closest('.cell');
+  if (!cell) return;
+  const i = Number(cell.dataset.i);
+  const on = cell.getAttribute('aria-pressed') !== 'true';
+  cell.setAttribute('aria-pressed', String(on));
+  if (on) marks.add(i); else marks.delete(i);
+  syncSheet();
+});
+$('markAll').addEventListener('click', () => {
+  $$('.cell').forEach((c) => { c.setAttribute('aria-pressed', 'true'); marks.add(Number(c.dataset.i)); });
+  syncSheet();
+});
+$('markNone').addEventListener('click', () => {
+  $$('.cell').forEach((c) => c.setAttribute('aria-pressed', 'false'));
+  marks.clear();
+  syncSheet();
+});
+
+/* ---------------- keep + job ---------------- */
+
+function setDeck(text, mode, pct) {
+  $('jobStatus').textContent = text;
+  const line = $('jobStatus').parentElement;
+  line.classList.toggle('is-error', mode === 'error');
+  line.classList.toggle('is-done', mode === 'done');
+  $('meter').classList.toggle('is-error', mode === 'error');
+  $('meter').classList.toggle('is-done', mode === 'done');
+  if (typeof pct === 'number') {
+    $('meter').style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
+    $('meter').setAttribute('aria-valuenow', String(Math.round(pct)));
+    $('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
+  }
 }
 
-async function refreshFiles(server) {
+function showJob(job, live) {
+  const pct = job.progress || 0;
+  $('log').textContent = (job.log || []).slice(-30).join('\n');
+  const isPrint = printJobId === job.id;
+  if (job.status === 'done') {
+    const files = job.files || [];
+    setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`, 'done', 100);
+    if (isPrint) OFFTUBE.finishPrint('tick', 'Kept');
+  } else if (job.status === 'error') {
+    setDeck(job.detail || 'That didn’t work.', 'error', pct);
+    if (isPrint) OFFTUBE.finishPrint('strike', 'Failed');
+    if (OFFTUBE.NEEDS_ACCESS.test(job.detail || '')) $('discAccess').open = true;
+  } else if (job.status === 'cancelled') {
+    setDeck('Cancelled.', 'idle', 0);
+    if (isPrint) OFFTUBE.finishPrint('', 'Cancelled');
+  } else {
+    setDeck(job.detail || OFFTUBE.STATE_WORD[job.status] || job.status, 'busy', pct);
+    if (isPrint && live) OFFTUBE.developPrint(pct);
+  }
+  $('cancelBtn').classList.toggle('hidden', !(live && OFFTUBE.ACTIVE.includes(job.status)));
+}
+
+function pollJob(id) {
+  clearInterval(pollTimer);
+  activeJobId = id;
+  let inFlight = false;
+  pollTimer = setInterval(async () => {
+    if (inFlight) return;
+    inFlight = true;
+    try {
+      const job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(id)}`);
+      if (activeJobId !== id) return;
+      showJob(job, true);
+      if (!OFFTUBE.ACTIVE.includes(job.status)) {
+        clearInterval(pollTimer);
+        activeJobId = null;
+        refreshFiles();
+        refreshQueue();
+      }
+    } catch {
+      if (activeJobId === id) setDeck('Lost the server — retrying…', 'busy');
+    } finally {
+      inFlight = false;
+    }
+  }, 800);
+}
+
+$('dlBtn').addEventListener('click', async () => {
+  const p = payload();
+  OFFTUBE.showProblem('');
+  if (!p.url) { OFFTUBE.showProblem('Paste a link first.'); $('url').focus(); return; }
+  $('dlBtn').disabled = true;
+  setDeck('Starting…', 'busy', 0);
   try {
-    const { files } = await OFFTUBE.apiGet(server, '/api/files');
-    $('files').innerHTML = (files || []).slice(0, 20).map((f) => (
-      `<div class="file"><span>${OFFTUBE.escapeHtml(f.name)}</span><a href="${OFFTUBE.escapeHtml(server + f.url)}" target="_blank" rel="noreferrer">Save</a></div>`
-    )).join('') || '<p class="muted">Nothing saved yet.</p>';
+    await chrome.storage.local.set({ quality: quality(), otype: otype(), access: access() });
+    const { job_id: id } = await OFFTUBE.api(server, '/api/download', p);
+    printJobId = current() ? id : null;
+    OFFTUBE.developPrint(0);
+    pollJob(id);
+    refreshQueue();
+  } catch (err) {
+    setDeck(err.message, 'error', 0);
+    if (OFFTUBE.NEEDS_ACCESS.test(err.message)) $('discAccess').open = true;
+  } finally {
+    $('dlBtn').disabled = false;
+  }
+});
+
+$('cancelBtn').addEventListener('click', async () => {
+  if (!activeJobId) return;
+  try { await OFFTUBE.api(server, '/api/cancel', { job_id: activeJobId }); setDeck('Stopping…', 'busy'); } catch (err) { setDeck(err.message, 'error'); }
+  refreshQueue();
+});
+
+/* ---------------- this session: a vertical strip, updated in place ---------------- */
+
+function stripFrame(jid) {
+  const li = document.createElement('li');
+  li.className = 'strip-frame';
+  li.dataset.jid = jid;
+  li.tabIndex = 0;
+  li.innerHTML = `<div class="frame js-frame"></div>
+    <div class="edge-row"><span class="edge edge-dim js-no"></span><span class="edge js-state"></span></div>
+    <p class="strip-title js-title"></p>
+    <div class="strip-actions"><button type="button" class="text-btn js-cancel">Cancel</button><button type="button" class="text-btn js-retry">Retry</button></div>`;
+  return li;
+}
+
+function updateFrame(li, job, no) {
+  const pct = Math.round(job.progress || 0);
+  const active = OFFTUBE.ACTIVE.includes(job.status);
+  li.querySelector('.js-no').textContent = String(no).padStart(2, '0');
+  const st = li.querySelector('.js-state');
+  st.textContent = job.status === 'downloading' && pct ? `Developing ${pct}%` : OFFTUBE.STATE_WORD[job.status] || job.status;
+  st.classList.toggle('edge-amber', active);
+  const frame = li.querySelector('.js-frame');
+  if (frame.dataset.thumb !== (job.thumbnail || '')) {
+    frame.dataset.thumb = job.thumbnail || '';
+    frame.innerHTML = job.thumbnail ? OFFTUBE.developHtml(job.thumbnail)
+      : `<div class="frame-empty"><span class="edge">${esc(job.source || 'offtube')}</span><span class="mark-slot"></span></div>`;
+    frame.dataset.mark = '';
+  }
+  li.classList.toggle('is-developing', active);
+  li.style.setProperty('--p', String(active ? pct / 100 : 1));
+  const kind = job.status === 'done' ? 'tick' : job.status === 'error' ? 'strike' : '';
+  if (frame.dataset.mark !== kind) {
+    frame.dataset.mark = kind;
+    const slot = frame.querySelector('.mark-slot');
+    if (slot) slot.innerHTML = kind ? OFFTUBE.markSvg(kind) : '';
+  }
+  const title = job.title || `${job.source ? `${job.source} · ` : ''}${(job.url || '').replace(/^https?:\/\/(www\.)?/, '')}`;
+  li.querySelector('.js-title').textContent = title;
+  li.setAttribute('aria-label', `${title}: ${st.textContent}`);
+  li.querySelector('.js-cancel').classList.toggle('hidden', !active);
+  li.querySelector('.js-retry').classList.toggle('hidden', job.status !== 'error' && job.status !== 'cancelled');
+}
+
+async function refreshQueue() {
+  try {
+    const { jobs } = await OFFTUBE.apiGet(server, '/api/jobs?limit=20');
+    const all = jobs || [];
+    const shown = all.slice(-8).reverse();
+    const ol = $('queue');
+    const keep = new Set(shown.map((j) => j.id));
+    $$('.strip-frame', ol).forEach((li) => { if (!keep.has(li.dataset.jid)) li.remove(); });
+    shown.forEach((job, i) => {
+      let li = ol.querySelector(`[data-jid="${CSS.escape(job.id)}"]`);
+      if (!li) li = stripFrame(job.id);
+      updateFrame(li, job, all.indexOf(job) + 1);
+      if (ol.children[i] !== li) ol.insertBefore(li, ol.children[i] || null);
+    });
+    const active = all.filter((j) => OFFTUBE.ACTIVE.includes(j.status)).length;
+    $('queueCount').textContent = all.length ? `${active ? `${active} developing · ` : ''}${all.length}` : '';
+    $('queueEmpty').classList.toggle('hidden', all.length > 0);
+    $('clearQueue').classList.toggle('hidden', !all.some((j) => !OFFTUBE.ACTIVE.includes(j.status)));
+  } catch { /* health shows the server is down */ }
+}
+
+$('queue').addEventListener('click', async (e) => {
+  const li = e.target.closest('.strip-frame');
+  if (!li) return;
+  const jid = li.dataset.jid;
+  if (e.target.closest('.js-cancel')) {
+    try { await OFFTUBE.api(server, '/api/cancel', { job_id: jid }); } catch (err) { setDeck(err.message, 'error'); }
+  } else if (e.target.closest('.js-retry')) {
+    try { const { job_id: id } = await OFFTUBE.api(server, '/api/retry', { job_id: jid }); pollJob(id); } catch (err) { setDeck(err.message, 'error'); }
+  } else {
+    try {
+      const job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(jid)}`);
+      const live = OFFTUBE.ACTIVE.includes(job.status);
+      showJob(job, live);
+      if (live) pollJob(jid);
+      $('logBox').open = job.status === 'error';
+    } catch (err) { setDeck(err.message, 'error'); }
+  }
+  refreshQueue();
+});
+$('queue').addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('strip-frame')) { e.preventDefault(); e.target.click(); }
+});
+$('clearQueue').addEventListener('click', async () => {
+  try { await OFFTUBE.api(server, '/api/jobs/clear', {}); } catch (err) { setDeck(err.message, 'error'); }
+  refreshQueue();
+});
+
+/* ---------------- kept ---------------- */
+
+async function refreshFiles() {
+  try {
+    const { files, disk_free_str: free } = await OFFTUBE.apiGet(server, '/api/files');
+    const list = files || [];
+    $('filesCount').textContent = list.length ? `${list.length}${free ? ` · ${free} free` : ''}` : '';
+    $('filesEmpty').classList.toggle('hidden', list.length > 0);
+    $('files').innerHTML = list.slice(0, 12).map((f, i) => {
+      const href = esc(server + f.url);
+      const ext = (f.name.split('.').pop() || '').toUpperCase();
+      const thumb = f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`
+        : f.kind === 'video' ? `<video src="${href}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`
+          : `<span class="edge">${esc(ext || 'File')}</span>`;
+      return `<li class="kept-cell"><div class="kept-print"><div class="kept-thumb">${thumb}</div>
+        <div class="edge-row"><span class="edge edge-dim">${String(i + 1).padStart(2, '0')}</span><span class="edge">${esc(f.size_str)}</span></div></div>
+        <p class="kept-name"><a href="${href}" target="_blank" rel="noreferrer" title="Save ${esc(f.name)}">${esc(f.name)}</a></p></li>`;
+    }).join('');
   } catch { /* ignore */ }
 }
 
-async function pollJob(server, jobId) {
-  clearInterval(pollTimer);
-  activeJobId = jobId;
-  pollTimer = setInterval(async () => {
-    try {
-      const job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(jobId)}`);
-      if (activeJobId !== jobId) return;
-      $('bar').style.width = `${job.progress || 0}%`;
-      $('status').textContent = job.detail || job.status;
-      $('log').textContent = (job.log || []).slice(-30).join('\n');
-      refreshQueue(server);
-      if (['done', 'error', 'cancelled'].includes(job.status)) {
-        clearInterval(pollTimer);
-        $('download').disabled = false;
-        activeJobId = null;
-        refreshFiles(server);
-        if (job.status !== 'done') setError(job.detail || job.status);
-      }
-    } catch {
-      if (activeJobId === jobId) $('status').textContent = 'Lost connection — retrying…';
-    }
-  }, 900);
-}
+/* ---------------- boot + wiring ---------------- */
 
 document.addEventListener('DOMContentLoaded', async () => {
   try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
-  const { serverUrl, quality, otype: ot, access, cookiesBrowser } = await getSettings();
-  $('server').value = serverUrl;
-  $('quality').value = quality;
-  $('access').value = access;
-  $('cookieBrowserName').value = cookiesBrowser;
-  syncAccess();
-  const r = document.querySelector(`input[name="otype"][value="${ot}"]`);
-  if (r) r.checked = true;
+  const s = await OFFTUBE.getSettings();
+  server = s.serverUrl;
+  $('server').value = server;
+  $('cookieBrowserName').value = s.cookiesBrowser;
+  const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
+  pick('otype', s.otype);
+  pick('access', s.access);
+  renderFormats(s.quality);
+  syncNotes();
 
+  await OFFTUBE.showHealth(server);
   const session = await chrome.storage.session.get(['pendingUrl']);
   if (session.pendingUrl) {
     $('url').value = session.pendingUrl;
@@ -164,18 +428,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     await fillFromTab(false);
   }
-  await OFFTUBE.showHealth(serverUrl);
-  refreshQueue(serverUrl);
-  refreshFiles(serverUrl);
-  if ($('url').value.trim()) inspect();
+  if (url()) inspect();
+  refreshQueue();
+  refreshFiles();
+  setInterval(refreshQueue, 4000);
 });
 
-async function followTabIfNeeded() {
-  const changed = await fillFromTab(false);
-  const current = $('url').value.trim();
-  if (changed && current === lastTabUrl && current !== lastInspected) inspect();
+async function followTab() {
+  const ok = await fillFromTab(false);
+  if (ok && url() === lastTabUrl && url() !== infoUrl) inspect();
 }
-
+chrome.tabs.onActivated.addListener(followTab);
+chrome.tabs.onUpdated.addListener((_id, change, tab) => { if (tab.active && change.url) followTab(); });
 chrome.storage.session.onChanged.addListener(async (changes) => {
   if (!changes.pendingUrl || !changes.pendingUrl.newValue) return;
   $('url').value = changes.pendingUrl.newValue;
@@ -184,84 +448,42 @@ chrome.storage.session.onChanged.addListener(async (changes) => {
   inspect();
 });
 
-chrome.tabs.onActivated.addListener(async () => {
-  await followTabIfNeeded();
-});
-chrome.tabs.onUpdated.addListener(async (_id, change, tab) => {
-  if (!tab.active || !change.url) return;
-  await followTabIfNeeded();
-});
-
-$('useTab').addEventListener('click', async () => { await fillFromTab(true); inspect(); });
-$('inspect').addEventListener('click', inspect);
-$('url').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') { e.preventDefault(); inspect(); }
-});
-
-document.querySelectorAll('input[name="otype"]').forEach((el) => el.addEventListener('change', async () => {
+$('linkForm').addEventListener('submit', (e) => { e.preventDefault(); inspect(); });
+$('url').addEventListener('paste', () => setTimeout(inspect, 150));
+$$('input[name="otype"]').forEach((r) => r.addEventListener('change', async () => {
   await chrome.storage.local.set({ otype: otype() });
-  if (otype() === 'audio' && !$('quality').value.startsWith('audio')) $('quality').value = 'audio_mp3';
-  if (otype() === 'video' && $('quality').value.startsWith('audio')) $('quality').value = '1080';
+  renderFormats();
 }));
-
-$('download').addEventListener('click', async () => {
-  setError('');
-  const p = payload();
-  if (!p.url) { setError('Paste a link first.'); return; }
-  $('download').disabled = true;
-  $('status').textContent = 'Starting…';
-  try {
-    const serverUrl = OFFTUBE.normalizeServerUrl($('server').value);
-    await chrome.storage.local.set({ quality: $('quality').value, otype: otype(), access: $('access').value, serverUrl });
-    const { job_id } = await OFFTUBE.api(serverUrl, '/api/download', p);
-    $('download').disabled = false;
-    pollJob(serverUrl, job_id);
-  } catch (err) {
-    setError(err.message);
-    $('download').disabled = false;
-  }
-});
-
-$('queue').addEventListener('click', async (e) => {
-  const btn = e.target.closest('[data-cancel]');
-  if (!btn) return;
-  btn.disabled = true;
-  try {
-    const { serverUrl } = await getSettings();
-    await OFFTUBE.api(serverUrl, '/api/cancel', { job_id: btn.dataset.cancel });
-    refreshQueue(serverUrl);
-  } catch (err) {
-    setError('Cancel failed: ' + err.message);
-    btn.disabled = false;
-  }
-});
-
-$('access').addEventListener('change', async () => {
-  syncAccess();
-  await chrome.storage.local.set({ access: $('access').value });
-});
-
+$('qualities').addEventListener('change', () => { syncTally(); chrome.storage.local.set({ quality: quality() }); });
+['clipFrom', 'clipTo', 'plStart', 'plEnd', 'plItems', 'subLang'].forEach((id) => $(id).addEventListener('input', syncNotes));
+$$('input[name="plmode"]').forEach((r) => r.addEventListener('change', syncNotes));
+$$('input[name="access"]').forEach((r) => r.addEventListener('change', async () => {
+  syncNotes();
+  await chrome.storage.local.set({ access: access() });
+}));
+$('subs').addEventListener('change', syncNotes);
 $('cookieBrowserName').addEventListener('change', async () => {
+  syncNotes();
   await chrome.storage.local.set({ cookies_browser: $('cookieBrowserName').value });
 });
-
 OFFTUBE.wireCookieFile();
-
-$('openLib').addEventListener('click', async () => {
-  const { serverUrl } = await getSettings();
-  await chrome.tabs.create({ url: `${serverUrl}/` });
+$('problemFix').addEventListener('click', () => {
+  const d = $('discAccess');
+  d.open = true;
+  d.scrollIntoView({ behavior: 'smooth', block: 'center' });
 });
-
+$('openLib').addEventListener('click', () => chrome.tabs.create({ url: `${server}/` }));
 $('server').addEventListener('change', async () => {
   try {
     const v = OFFTUBE.normalizeServerUrl($('server').value);
     $('server').value = v;
+    server = v;
     await chrome.storage.local.set({ serverUrl: v });
     await OFFTUBE.showHealth(v);
-    refreshQueue(v);
-    refreshFiles(v);
+    refreshQueue();
+    refreshFiles();
   } catch (err) {
-    setError(err.message);
-    $('server').value = OFFTUBE.DEFAULT_SERVER;
+    OFFTUBE.showProblem(err.message);
+    $('server').value = server;
   }
 });
