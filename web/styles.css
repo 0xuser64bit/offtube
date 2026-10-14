@@ -140,8 +140,9 @@ figure { margin: 0; }
 }
 .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
 .brand-mark { width: 28px; height: 28px; }
-.brand-rebate { fill: var(--rebate); }
-.brand-window { fill: var(--paper-hi); }
+/* the mark is a logo, not a themed surface: fixed film colours in both schemes */
+.brand-rebate { fill: #0f0f0e; }
+.brand-window, .brand-perf { fill: #fbfbf9; }
 .brand-tick { fill: none; stroke: var(--pencil); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .brand-name { font-size: 24px; font-weight: 800; font-stretch: 70%; letter-spacing: -.01em; line-height: 1; }
 

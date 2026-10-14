@@ -188,7 +188,7 @@ Achromatic paper and ink, with a near-black film. Only two hues exist, and both 
 
 ### Neutral
 - **Photo Paper** (`paper`): the page ground and the text on black controls. Dark: #121211.
-- **Paper Highlight** (`paper-hi`): input and paste-rail fills, the hovered or checked format row, and the brand mark's window. Dark: #1b1b19.
+- **Paper Highlight** (`paper-hi`): input and paste-rail fills and the hovered or checked format row. Dark: #1b1b19.
 - **Ink** (`ink`): body text, primary controls, the selected segment, 2px section rules, the done meter and the ok-health dot. Dark: #ecebe5.
 - **Ink 2 / Ink 3** (`ink-2`, `ink-3`): secondary copy (meta, hints, deck line) and tertiary copy (counts, field labels, placeholders). Dark: #bdbcb4 / #9a998f.
 - **Ink Hover** (`ink-hover`): pure black (white in dark), the hover fill for black controls. It deepens the control and never tints it.
@@ -228,6 +228,9 @@ Eight steps plus two fluid sizes; both surfaces draw from the same ramp (the ext
 **The Edge-Print-Lives-On-Film Rule.** Condensed tracked uppercase in edge colours appears only inside a rebate band or a film strip. Off the film, small uppercase is a form label above its own control, never a kicker above a heading.
 
 **The Tabular Numbers Rule.** Frame numbers, sizes, percentages, counts and numeric inputs use tabular figures so live values don't jitter.
+
+### The mark
+A strip of film: black rebate, five rounded perforations down each side, two frames, and a crimson pencil tick on the second — kept from the strip. It is a logo, not a themed surface: its film colours stay fixed (#0f0f0e / #fbfbf9 / pencil) in both schemes. One drawing in four places: `web/favicon.svg`, the inline header SVG on each surface, and the PNG icons from `tools/gen_icons.py`.
 
 ## Layout
 

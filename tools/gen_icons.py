@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Generate offtube's extension PNG icons. Stdlib only.
 
-The mark matches web/favicon.svg: a black film-rebate square, a paper print
-window, and a crimson grease-pencil tick running off the print. Drawn in a
-32-unit grid and supersampled 4x4 per pixel for antialiasing.
+The mark matches web/favicon.svg: a strip of film — black rebate, a row of
+perforations down each side, two frames — with a crimson grease-pencil tick
+on the second: kept. Drawn in a 32-unit grid and supersampled 4x4 per
+pixel for antialiasing.
 """
 from __future__ import annotations
 
@@ -19,11 +20,13 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "extension" / "icons"
 SS = 4  # samples per axis per pixel
 
-WINDOW = (4.0, 7.0, 28.0, 25.0)  # x0, y0, x1, y1 in the 32 grid
+# (x, y, w, h, corner radius) in the 32 grid, all painted PAPER.
+HOLES = [(x, y, 2.6, 3.5, 0.7) for x in (2.0, 27.4) for y in (2.5, 8.5, 14.25, 20.0, 26.0)]
+FRAMES = [(7.0, 2.5, 18.0, 12.0, 0.0), (7.0, 17.5, 18.0, 12.0, 0.0)]
 # The tick from favicon.svg: two cubic Béziers in absolute coordinates.
 TICK = [
-    ((8.5, 16.5), (10.1, 17.7), (11.5, 19.3), (12.8, 21.1)),
-    ((12.8, 21.1), (15.8, 16.5), (19.2, 12.5), (23.8, 8.9)),
+    ((12.0, 23.3), (13.2, 24.2), (14.2, 25.4), (15.1, 26.8)),
+    ((15.1, 26.8), (17.5, 22.8), (20.1, 19.8), (23.8, 17.1)),
 ]
 
 
@@ -54,11 +57,18 @@ def dist_seg(px: float, py: float, a: tuple[float, float], b: tuple[float, float
     return math.hypot(px - (x0 + t * dx), py - (y0 + t * dy))
 
 
+def in_rect(x: float, y: float, rect: tuple[float, float, float, float, float]) -> bool:
+    rx, ry, w, h, r = rect
+    # rounded-rectangle signed distance, <= 0 inside
+    qx = abs(x - (rx + w / 2)) - (w / 2 - r)
+    qy = abs(y - (ry + h / 2)) - (h / 2 - r)
+    return math.hypot(max(qx, 0), max(qy, 0)) + min(max(qx, qy), 0) - r <= 0
+
+
 def sample(x: float, y: float, half_stroke: float) -> tuple[int, int, int]:
     if min(dist_seg(x, y, a, b) for a, b in SEGMENTS) <= half_stroke:
         return PENCIL
-    x0, y0, x1, y1 = WINDOW
-    return PAPER if x0 <= x <= x1 and y0 <= y <= y1 else REBATE
+    return PAPER if any(in_rect(x, y, r) for r in HOLES + FRAMES) else REBATE
 
 
 def render(size: int) -> list[tuple[int, int, int, int]]:

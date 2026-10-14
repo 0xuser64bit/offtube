@@ -104,8 +104,9 @@ figure { margin: 0; }
 .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--rule); }
 .brand { display: flex; align-items: center; gap: 8px; }
 .brand-mark { width: 22px; height: 22px; }
-.brand-rebate { fill: var(--rebate); }
-.brand-window { fill: var(--paper-hi); }
+/* the mark is a logo, not a themed surface: fixed film colours in both schemes */
+.brand-rebate { fill: #0f0f0e; }
+.brand-window, .brand-perf { fill: #fbfbf9; }
 .brand-tick { fill: none; stroke: var(--pencil); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .brand-name { font-size: 19px; font-weight: 800; font-stretch: 70%; letter-spacing: -.01em; line-height: 1; }
 .health { display: flex; align-items: center; gap: 7px; margin: 0; max-width: 60%; font: 650 11px/1.2 var(--face); font-stretch: 72%; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-2); }
