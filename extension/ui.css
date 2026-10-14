@@ -53,7 +53,7 @@
     --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23ecebe5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --perf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='20'%3E%3Crect x='0' y='1' width='8' height='10' rx='1.6' fill='%2334342f'/%3E%3C/svg%3E");
   }
-  .rebate { outline: 1px solid var(--rule-2); }
+  .rebate, .sheet-grid { outline: 1px solid var(--rule-2); }
 }
 
 * { box-sizing: border-box; }
@@ -309,16 +309,26 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .strip-frame:focus-visible .frame { outline: 2px solid var(--pencil); outline-offset: 2px; }
 
 /* kept */
-.sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 12px 8px; margin: 0; padding: 0; list-style: none; }
+/* one continuous contact sheet, perforated down both sides */
+.sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 14px 6px;
+  margin: 0;
+  padding: 14px 26px;
+  list-style: none;
+  background-color: var(--rebate);
+  background-image: var(--perf), var(--perf);
+  background-position: 8px 0, calc(100% - 8px) 0;
+  background-repeat: repeat-y;
+}
+.sheet-grid:empty { display: none; }
 .kept-cell { display: grid; gap: 4px; min-width: 0; }
-.kept-print { background: var(--rebate); padding: 5px 5px 4px; }
 .kept-thumb { position: relative; display: grid; place-items: center; aspect-ratio: 1; background: var(--rebate-2); overflow: hidden; }
 .kept-thumb img, .kept-thumb video { display: block; width: 100%; height: 100%; object-fit: cover; }
 .kept-thumb .edge { font-size: 14px; color: var(--edge-2); }
-.kept-print .edge-row { padding-top: 4px; }
-.kept-print .edge { font-size: 11px; }
-.kept-name { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.kept-name a { text-decoration: none; }
+.kept-name { margin: 0; font-size: 12.5px; font-weight: 600; line-height: 1.3; color: var(--edge); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kept-name a { color: inherit; text-decoration: none; }
 .kept-name a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 .empty { margin: 0; padding: 6px 0 2px; font-size: 13.5px; color: var(--ink-3); }
 

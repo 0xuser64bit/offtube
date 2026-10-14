@@ -712,10 +712,8 @@ function renderFiles() {
     const ext = (f.name.split(".").pop() || "").toUpperCase();
     const when = f.modified ? dateFmt.format(new Date(f.modified)) : "";
     return `<li class="kept-cell">
-      <div class="kept-print">
-        <div class="kept-thumb">${keptThumb(f)}</div>
-        <div class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}</span><span class="edge">${esc(ext)} · ${esc(f.size_str)}</span></div>
-      </div>
+      <div class="kept-thumb">${keptThumb(f)}</div>
+      <div class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}</span><span class="edge">${esc(ext)} · ${esc(f.size_str)}</span></div>
       <p class="kept-name" title="${esc(f.name)}">${esc(f.name)}</p>
       <p class="kept-meta">${esc(when)}</p>
       <div class="kept-actions"><a href="${esc(f.url)}" download>Save</a><button class="text-btn" type="button" data-del="${esc(f.name)}">Delete</button></div>

@@ -419,8 +419,8 @@ async function refreshFiles() {
       const thumb = f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`
         : f.kind === 'video' ? `<video src="${href}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`
           : `<span class="edge">${esc(ext || 'File')}</span>`;
-      return `<li class="kept-cell"><div class="kept-print"><div class="kept-thumb">${thumb}</div>
-        <div class="edge-row"><span class="edge edge-dim">${String(i + 1).padStart(2, '0')}</span><span class="edge">${esc(f.size_str)}</span></div></div>
+      return `<li class="kept-cell"><div class="kept-thumb">${thumb}</div>
+        <div class="edge-row"><span class="edge edge-dim">${String(i + 1).padStart(2, '0')}</span><span class="edge">${esc(f.size_str)}</span></div>
         <p class="kept-name"><a href="${href}" target="_blank" rel="noreferrer" title="Save ${esc(f.name)}">${esc(f.name)}</a></p></li>`;
     }).join('');
   } catch { /* ignore */ }

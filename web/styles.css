@@ -213,7 +213,7 @@ figure { margin: 0; }
 .rebate { position: relative; background: var(--rebate); color: var(--edge); padding: 10px 16px; }
 .rebate > .edge-row:first-child { padding: 2px 0 9px; }
 .rebate > .edge-row:last-of-type { padding: 9px 0 2px; }
-@media (prefers-color-scheme: dark) { .rebate { outline: 1px solid var(--rule-2); } }
+@media (prefers-color-scheme: dark) { .rebate, .sheet-grid { outline: 1px solid var(--rule-2); } }
 
 .frame {
   position: relative;
@@ -483,21 +483,35 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
 /* ---------- kept: the library as a contact sheet ---------- */
 .kept-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-left: auto; }
 .kept-tools input[type="search"] { width: 220px; }
-.sheet-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(188px, 1fr)); gap: 26px 18px; margin: 4px 0 0; padding: 0; list-style: none; }
-.kept-cell { display: grid; gap: 8px; align-content: start; min-width: 0; }
-.kept-print { background: var(--rebate); padding: 8px 8px 6px; }
+/* One continuous contact sheet: a single black sheet, perforated top and
+   bottom, frames butted on it with their edge print, names and actions
+   printed on the film rather than on separate mats. */
+.sheet-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(188px, 1fr));
+  gap: 26px 12px;
+  margin: 4px 0 0;
+  padding: 30px 16px 32px;
+  list-style: none;
+  background-color: var(--rebate);
+  background-image: var(--perf), var(--perf);
+  background-position: 0 9px, 0 calc(100% - 9px);
+  background-repeat: repeat-x;
+}
+.sheet-grid:empty { display: none; }
+.kept-cell { display: grid; gap: 6px; align-content: start; min-width: 0; }
 .kept-thumb { position: relative; display: grid; place-items: center; aspect-ratio: 4 / 3; background: var(--rebate-2); overflow: hidden; }
 .kept-thumb img, .kept-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
 .kept-thumb .edge { font-size: 24px; letter-spacing: .08em; color: var(--edge-2); }
-.kept-print .edge-row { padding-top: 6px; }
-.kept-name { margin: 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.kept-meta { margin: 0; font-size: 12.5px; color: var(--ink-3); }
+.kept-name { margin: 2px 0 0; font-size: 13.5px; font-weight: 600; line-height: 1.35; color: var(--edge); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.kept-meta { margin: 0; font-size: 12.5px; color: var(--edge-2); }
 .kept-actions { display: flex; gap: 16px; font-size: 13.5px; }
-.kept-actions a { font-weight: 650; text-decoration-thickness: 1px; }
-.kept-actions a:hover, .kept-actions .text-btn:hover { color: var(--ink); text-decoration-thickness: 2px; }
-.kept-actions .text-btn { color: var(--ink-2); }
-
+.kept-actions a, .kept-actions .text-btn { color: var(--edge); font-weight: 650; text-decoration-thickness: 1px; }
+.kept-actions .text-btn { color: var(--edge-2); }
+.kept-actions a:hover, .kept-actions .text-btn:hover { color: var(--edge); text-decoration-thickness: 2px; }
 .kept-more { grid-column: 1 / -1; }
+.kept-more .btn { border-color: var(--edge-2); color: var(--edge); }
+.kept-more .btn:hover { background: var(--rebate-2); }
 .pair.is-off { opacity: .45; }
 
 /* ---------- the loupe: round by nature, the one circle besides the marks ---------- */
@@ -530,7 +544,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
   .kept-tools { margin-left: 0; width: 100%; }
   .kept-tools .seg { flex: 1 1 100%; }
   .kept-tools input[type="search"] { flex: 1; width: auto; }
-  .sheet-grid { grid-template-columns: repeat(2, 1fr); gap: 20px 12px; }
+  .sheet-grid { grid-template-columns: repeat(2, 1fr); gap: 22px 10px; padding: 28px 12px 30px; }
   .strip-frame { flex-basis: 172px; }
 }
 
