@@ -21,7 +21,9 @@ The design is a darkroom contact sheet: every link becomes a print in a
 black film border edge-printed with its site and kind; a crimson grease
 pencil circles what you choose, ticks what was kept and strikes what
 failed; a print develops from negative to positive while it downloads.
-Light by default, dark follows your OS.
+Hover any print with a mouse and a loupe magnifies it; everything you've
+kept lives on one continuous contact sheet. Light by default, dark
+follows your OS.
 
 Dependencies: `yt-dlp` + `gallery-dl`. No Flask/FastAPI — backend is Python stdlib.
 

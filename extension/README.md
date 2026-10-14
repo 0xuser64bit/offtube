@@ -37,7 +37,8 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
   print in a black film rebate (site and kind edge-printed), a crimson
   pencil circles the chosen format and the prints you pick from a board or
   playlist, ticks what was kept and strikes what failed; a print develops
-  from negative to positive while it downloads. Popup = the instant path
+  from negative to positive while it downloads; hovering a print with a
+  mouse holds a loupe over it. Popup = the instant path
   (one Keep); side panel = every option, the session as a vertical film
   strip, and recently kept files. Styles live in `ui.css`, helpers in
   `shared.js`, type is self-hosted Archivo (`fonts/`, OFL).
