@@ -31,6 +31,7 @@
   --safelight: #f0962a;
   --on-pencil: #fff;
   --ink-hover: #000;
+  --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23141413' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   /* film perforations, one hole per tile (an SVG fill can't take a var,
      so the tile itself is the token) */
   --perf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='8'%3E%3Crect x='1' y='0' width='12' height='8' rx='1.6' fill='%232c2c29'/%3E%3C/svg%3E");
@@ -55,6 +56,7 @@
     --pencil-ink: #ff6f86;
     --on-pencil: #121211;
     --ink-hover: #fff;
+    --chev: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 6l4 4 4-4' fill='none' stroke='%23ecebe5' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
     --perf: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='8'%3E%3Crect x='1' y='0' width='12' height='8' rx='1.6' fill='%2334342f'/%3E%3C/svg%3E");
   }
 }
@@ -372,6 +374,9 @@ figure { margin: 0; }
   background: var(--paper-hi);
   font-size: 15px;
 }
+/* selects wear the same drawn chevron as the option rows (a scheme token,
+   like --perf, since an SVG fill can't read a var) */
+select { appearance: none; padding-right: 34px; background-image: var(--chev); background-repeat: no-repeat; background-position: right 11px center; background-size: 14px 14px; cursor: pointer; }
 textarea { resize: vertical; font: 13.5px/1.5 var(--code); }
 input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
 .paste input:focus-visible { outline: none; }
