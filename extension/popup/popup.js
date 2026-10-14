@@ -186,6 +186,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('access').value = s.access;
   $('accessBrowser').textContent = `Use ${savedBrowser[0].toUpperCase()}${savedBrowser.slice(1)}’s cookies`;
   renderChips(s.quality);
+  OFFTUBE.wireLoupe();
 
   if (!(await OFFTUBE.showHealth(server))) {
     setStage(OFFTUBE.blankHtml('offtube', 'Server off', 'offtube isn’t running.', 'Start it with ./run.sh, then open this again.'));

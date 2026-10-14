@@ -801,6 +801,55 @@ function restorePrefs() {
   pick("q", p.quality);
 }
 
+/* ================= the loupe ================= */
+// What a contact sheet is read with: hover a print, a sheet frame or a kept
+// image (mouse only) and a lens holds over it at 2.5×, following the pointer.
+// It appears after a short pause so sweeping across the sheet doesn't
+// flicker, and it never takes the click (circling still works).
+function wireLoupe(zoom = 2.5) {
+  if (!matchMedia("(hover: hover) and (pointer: fine)").matches) return;
+  const lens = document.createElement("div");
+  lens.className = "loupe";
+  lens.setAttribute("aria-hidden", "true");
+  document.body.append(lens);
+  const TARGET = ".cell-img img, .develop img, .kept-thumb img";
+  let img = null, timer = null, frame = 0, last = null;
+  const hide = () => { clearTimeout(timer); img = null; lens.classList.remove("is-on"); };
+  const place = () => {
+    frame = 0;
+    if (!img || !last || !img.naturalWidth) return;
+    const r = img.getBoundingClientRect();
+    const fit = getComputedStyle(img).objectFit;
+    const scale = fit === "cover" ? Math.max(r.width / img.naturalWidth, r.height / img.naturalHeight)
+      : fit === "contain" ? Math.min(r.width / img.naturalWidth, r.height / img.naturalHeight)
+        : r.width / img.naturalWidth;
+    const w = img.naturalWidth * scale, h = img.naturalHeight * scale;
+    const fx = (last.clientX - r.left - (r.width - w) / 2) / w;
+    const fy = (last.clientY - r.top - (r.height - h) / 2) / h;
+    const size = lens.offsetWidth, inner = lens.clientWidth;
+    lens.style.backgroundImage = `url(${JSON.stringify(img.currentSrc || img.src)})`;
+    lens.style.backgroundSize = `${w * zoom}px ${h * zoom}px`;
+    lens.style.backgroundPosition = `${inner / 2 - fx * w * zoom}px ${inner / 2 - fy * h * zoom}px`;
+    lens.style.transform = `translate(${last.clientX - size / 2}px, ${last.clientY - size / 2}px)`;
+  };
+  document.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse") return;
+    const host = e.target.closest(".cell-img, .develop, .kept-thumb");
+    const target = host && host.querySelector("img.pos, .cell-img > img, .kept-thumb > img");
+    if (!target || !target.matches(TARGET)) { hide(); return; }
+    last = e;
+    if (target !== img) {
+      hide();
+      img = target;
+      timer = setTimeout(() => { place(); lens.classList.add("is-on"); }, 220);
+      return;
+    }
+    if (!frame) frame = requestAnimationFrame(place);
+  }, { passive: true });
+  document.documentElement.addEventListener("mouseleave", hide);
+  window.addEventListener("scroll", hide, { passive: true });
+}
+
 /* ================= wiring ================= */
 
 $$('input[name="otype"]').forEach((r) => r.addEventListener("change", renderFormats));
@@ -829,6 +878,7 @@ $("subLang").addEventListener("input", savePrefs);
 
 restorePrefs();
 syncNotes();
+wireLoupe();
 checkHealth();
 loadFiles();
 refreshQueue();

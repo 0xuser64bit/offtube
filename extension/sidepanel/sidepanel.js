@@ -437,6 +437,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
   pick('access', s.access);
   renderFormats(s.quality);
+  OFFTUBE.wireLoupe();
   syncNotes();
 
   await OFFTUBE.showHealth(server);

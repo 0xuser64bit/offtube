@@ -250,7 +250,7 @@ The system has no shadows. Depth comes from material contrast instead: black fil
 
 ## Shapes
 
-Every corner is square (`rounded.none`). Strokes are 1px for dividers and input borders and 1.5px ink for framed controls (paste rail, segmented control, buttons). Section openers use 2px ink. The only curves are hand-drawn: the pencil circle, tick and strike are rounded-cap SVG strokes. On every surface they pass through a fractal-noise displacement filter (`#wax`, defined once per page) for a waxy grease-pencil edge. Small exceptions are the round 8–9px health dot and the 1.6px-radius perforation holes in the film tile. Perforations are a background tile, horizontal on the web strip and vertical on the extension strip.
+Every corner is square (`rounded.none`). Strokes are 1px for dividers and input borders and 1.5px ink for framed controls (paste rail, segmented control, buttons). Section openers use 2px ink. The only curves are hand-drawn: the pencil circle, tick and strike are rounded-cap SVG strokes. On every surface they pass through a fractal-noise displacement filter (`#wax`, defined once per page) for a waxy grease-pencil edge. Small exceptions are the round loupe, the round 8–9px health dot and the 1.6px-radius perforation holes in the film tile. Perforations are a background tile, horizontal on the web strip and vertical on the extension strip.
 
 ## Components
 
@@ -284,6 +284,9 @@ These are SVG overlays (`viewBox 0 0 100 100`, non-scaling stroke, about 4–4.5
 
 ### Session strip and kept sheet (signature)
 The session strip is literal film: a rebate band with perforation rails, 216px frames (16:10), edge-colour titles and text actions. The current frame is outlined in `edge`. A kept frame is ticked, and a failed one is struck. The kept library is a contact sheet of small rebate prints (4:3 on the web, 1:1 in the extension) with edge print for index and type·size. A filename, date and Save/Delete text buttons sit below each print.
+
+### Loupe
+The contact sheet's own inspection tool. With a mouse, hovering a print, a sheet frame, a session frame or a kept image holds a round lens over it after a 220ms pause: 2.5× the rendered size, the full image (not the cover crop) under the pointer, a 6px rebate barrel (5px / 140px in the extension; 184px on the web). It follows the pointer on rAF, never takes the click, hides on scroll or leaving the page, and doesn't exist on touch (no hover). Decorative, so `aria-hidden`.
 
 ### Health and meter
 Health is condensed uppercase status with a round dot: neutral `ink-3` while checking, ink when ok, crimson when unreachable. The meter is a 3px `rule` track with a scaleX fill, amber while running, ink when done and crimson when failed.

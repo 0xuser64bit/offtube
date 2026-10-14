@@ -322,6 +322,10 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .kept-name a:hover { text-decoration: underline; text-decoration-thickness: 2px; }
 .empty { margin: 0; padding: 6px 0 2px; font-size: 13.5px; color: var(--ink-3); }
 
+/* the loupe: round by nature, the one circle besides the marks */
+.loupe { position: fixed; left: 0; top: 0; z-index: 40; width: 140px; height: 140px; border: 5px solid var(--rebate); border-radius: 50%; background-color: var(--rebate-2); background-repeat: no-repeat; pointer-events: none; opacity: 0; transition: opacity .18s var(--ease); will-change: transform; }
+.loupe.is-on { opacity: 1; }
+
 /* the inspected media decides which controls exist */
 [data-kind="gallery"] .video-only, [data-media="audio"] .video-only-strict { display: none !important; }
 
