@@ -338,6 +338,15 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 
 /* the inspected media decides which controls exist */
 [data-kind="gallery"] .video-only, [data-media="audio"] .video-only-strict { display: none !important; }
+[data-output="gif"][data-kind="gallery"] #discTrim { display: block !important; }
+[data-output="gif"] #discSubs { display: none !important; }
+.gif-fields { min-width: 0; border: 0; border-block: 1px solid var(--rule); margin: 0 0 16px; padding: 12px 0; display: grid; gap: 12px; }
+.gif-fields .hint { margin: 0; }
+.gif-fields .text-btn { justify-self: start; }
+.gif-fields select { font-size: 12.5px; padding-left: 6px; }
+.gif-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; }
+.gif-result { display: grid; gap: 10px; margin-top: 12px; }
+.gif-result > img { display: block; max-width: 100%; max-height: 300px; margin-inline: auto; }
 
 /* popup sizing */
 .popup { width: 380px; }

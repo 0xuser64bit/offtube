@@ -12,6 +12,8 @@ Vimeo, Twitch, SoundCloud, Bandcamp, Flickr, DeviantArt and 2,000+ more sites.
   right-click any link or page → Keep with offtube
 - **Format**: Best / 2160p … 360p / audio-only MP3/M4A; image posts and
   boards are kept as the original files
+- **GIFs**: turn a whole video or an exact time range into an animated GIF,
+  with size, frame rate and looping controls, a preview and a Save GIF action
 - **Collections** as a contact sheet: circle the prints you want, or keep the
   whole playlist/board, or give a range (`1-5,7`, start/end)
 - **Trim** a clip (`01:30` → `02:45`), subtitles, live progress, a session
@@ -127,8 +129,8 @@ The Docker image already includes Deno.
 ## How to use
 
 1. **Paste a link** (or open the extension on a tab) → it's previewed as a print: site, kind, title, thumbnail, available formats — or a contact sheet for boards, playlists and multi-photo posts. Unsupported links are refused before anything is fetched.
-2. **Format** — pick max height, Best, or Audio only. Audio-only sources (SoundCloud, Bandcamp, podcasts) switch to Audio on their own; image posts and boards skip this step and keep the original files.
-3. **Trim (optional, video)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`. Uses yt-dlp `--download-sections` (needs ffmpeg). Leave empty for full video.
+2. **Format** — pick max height, Best, Audio only, or GIF. Audio-only sources (SoundCloud, Bandcamp, podcasts) switch to Audio on their own; image posts and boards keep the original files. Mixed collections can turn their video items into GIFs.
+3. **Trim (optional, video or GIF)** — `From: 01:30`, `To: 02:45`. Accepts `90`, `1:30`, `01:30`, `1:02:03`, and fractional seconds such as `1.25`. Leave empty for the whole video. GIF size is the longest edge (320, 480, 640 or 960 pixels); motion is 10–30 fps. Defaults are 480 px, 15 fps and looping forever. Short clips make smaller files; the 5-second shortcut helps pick a moment. GIFs are silent, preserve the display aspect ratio and use an optimized color palette. GIF creation needs both `ffmpeg` and `ffprobe`, supplied by the ffmpeg installation. Live streams must finish first.
 4. **Collection** — circle prints on the sheet to keep only those, or choose “Whole collection” with Start/End or Items like `1-5,7,10-12`. Works for playlists, boards, albums, profiles and multi-photo posts; pasting a collection link switches it on.
 5. **Sign-in** — only needed for private / members-only / age-gated posts, most Instagram and X content, and YouTube bot-checks:
    - **Upload cookies.txt**: in Chrome, install [*Get cookies.txt Locally*](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc), open the site signed in as the account that can see the post, export Netscape format, upload here. Only that site's cookies are kept (YouTube also keeps Google's); the rest of a full-browser export is trimmed before it touches disk. Re-export when downloads start failing (cookies expire).
@@ -157,7 +159,7 @@ offtube/
 
 ```bash
 ./.venv/bin/pip install -q -r requirements-dev.txt
-./.venv/bin/python -m pytest tests -q   # 207 tests, ~18s, no network
+./.venv/bin/python -m pytest tests -q   # no external network
 ```
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
@@ -170,14 +172,17 @@ public-job field whitelist, Host-header guard, `/api/retry`, and
 `/api/jobs/clear`. `tests/test_helpers.py` checks source resolution against
 the real extractor tables (no network) — including every site named in the
 web UI's “works with” strip — plus engine order and fallback, per-site
-cookie trimming, failure hints, and filename byte caps.
+cookie trimming, failure hints, and filename byte caps. `tests/test_gif.py`
+covers GIF validation, cancellation, isolated temporary sources, cleanup and
+real generated-media encoding (when ffmpeg and ffprobe are on PATH), including
+duration, frame count, dimensions, looping and anamorphic display ratios.
 
 ## API (for scripting)
 
 - `GET /api/health` → `{checks: {yt_dlp, gallery_dl, ffmpeg, deno, node, node_supported, js_runtime, js_runtime_ok}}` (cached 60s)
 - `GET /api/source?url=…` → `{supported, source: {id, label}, engines}` or `{supported: false, error}` (local extractor match, no network)
 - `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → metadata with `source`, `engine`, `type` (`video` | `playlist` | `gallery`) and `media` (`video` | `audio` | `image` | `mixed`); galleries carry `count`, `more` and `entries` with thumbnails (side-effect-free; pasted cookies use an ephemeral file)
-- `POST /api/download` `{url, quality, clip_from, clip_to, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
+- `POST /api/download` `{url, quality, clip_from, clip_to, gif_size, gif_fps, gif_loop, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, source, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
 - `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback, gallery-dl processes are terminated)
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
@@ -200,8 +205,14 @@ leave the server. Jobs and UI prefs are in-memory/local only — a restart
 clears history; leftover `.part` files and orphaned job cookies are cleaned
 on boot and when a job ends.
 
-Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a`
-(ignored for gallery-dl jobs, which keep original files).
+Quality ids: `best, 2160, 1440, 1080, 720, 480, 360, audio_mp3, audio_m4a, gif`
+(gallery-dl keeps original files unless `quality` is `gif`, which selects video items).
+For GIFs, `gif_size` is an integer in `320, 480, 640, 960` (default `480`),
+`gif_fps` is an integer in `10, 15, 20, 25, 30` (default `15`), and
+`gif_loop` is a boolean (default `true`). `clip_from` / `clip_to` are optional
+time strings. Subtitles are ignored for GIFs. Source videos and encoder scratch
+files stay in a private job folder and are removed after success, failure or
+cancellation; abandoned GIF job folders are cleaned on server startup.
 
 ## Troubleshooting
 

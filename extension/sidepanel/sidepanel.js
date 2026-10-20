@@ -15,6 +15,7 @@ const marks = new Set();
 let lastTabUrl = '';
 let activeJobId = null;
 let printJobId = null;
+let resultJobId = null;
 let pollTimer = null;
 let inspectToken = 0;
 
@@ -22,6 +23,7 @@ const url = () => $('url').value.trim();
 const access = () => checked('access') || 'none';
 const quality = () => checked('q') || 'best';
 const current = () => (info && infoUrl === url() ? info : null);
+OFFTUBE.initGifOptions(current, quality);
 
 /* ---------------- payload ---------------- */
 
@@ -47,7 +49,8 @@ function payload() {
   return {
     url: url(),
     quality: quality(),
-    subtitles: $('subs').checked,
+    subtitles: quality() !== 'gif' && $('subs').checked,
+    ...(quality() === 'gif' ? OFFTUBE.gifFields() : {}),
     auto_subs: true,
     sub_lang: ($('subLang').value.trim() || 'en').slice(0, 20),
     clip_from: $('clipFrom').value.trim(),
@@ -61,8 +64,7 @@ function payload() {
 
 /* ---------------- formats + notes ---------------- */
 
-// Format chips, as in the popup: video heights, then audio. Galleries hide
-// them (files are kept as posted); audio-only sources show only audio.
+// Format chips, as in the popup: video heights, GIF, then audio.
 function renderFormats(selected) {
   const i = current();
   const list = OFFTUBE.formatOptions(i, 'video').concat(
@@ -71,10 +73,24 @@ function renderFormats(selected) {
   let sel = selected || quality();
   if (i && i.media === 'audio' && !String(sel).startsWith('audio')) sel = 'audio_mp3';
   $('qualities').innerHTML = OFFTUBE.formatsHtml(list, sel, { chips: true });
+  OFFTUBE.syncGifOptions();
   syncTally();
 }
 
+function invalidateSource() {
+  inspectToken++;
+  info = null;
+  infoUrl = '';
+  marks.clear();
+  printJobId = null;
+  resultJobId = null;
+  $('gifResult').classList.add('hidden');
+  document.body.dataset.kind = '';
+  document.body.dataset.media = '';
+}
+
 function setLink(value, { edit = false, label = '' } = {}) {
+  if (value !== url()) invalidateSource();
   $('url').value = value;
   $('linkText').textContent = label || value.replace(/^https?:\/\/(www\.)?/, '') || 'No link yet';
   $('linkRow').classList.toggle('hidden', edit);
@@ -112,12 +128,13 @@ function syncTally() {
   const i = current();
   if (!i) { $('tally').textContent = ''; return; }
   let what;
-  if (marks.size) what = `<b>${marks.size} circled</b>`;
-  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>`;
-  else if (i.type === 'gallery') what = '<b>1 file</b> · kept as posted';
+  const perVideo = quality() === 'gif' ? ' · one GIF per video' : '';
+  if (marks.size) what = `<b>${marks.size} circled</b>${perVideo}`;
+  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>${perVideo}`;
+  else if (i.type === 'gallery') what = quality() === 'gif' ? '<b>1 GIF per video</b> · images are skipped' : '<b>1 file</b> · kept as posted';
   else {
     const q = (i.qualities || []).find((x) => x.id === quality());
-    what = `<b>1 ${quality().startsWith('audio') ? 'audio file' : 'video'}</b>${q && q.filesize_str ? ` · ~${esc(q.filesize_str)}` : ''}`;
+    what = `<b>1 ${quality() === 'gif' ? 'GIF' : quality().startsWith('audio') ? 'audio file' : 'video'}</b>${q && q.filesize_str ? ` · ~${esc(q.filesize_str)}` : ''}`;
   }
   $('tally').innerHTML = what;
 }
@@ -170,12 +187,13 @@ async function inspect() {
   const u = url();
   OFFTUBE.showProblem('');
   if (!u) return;
-  const my = ++inspectToken;
+  invalidateSource();
+  const my = inspectToken;
   $('stage').innerHTML = OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]);
   $('sheetTools').classList.add('hidden');
   try {
     const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessFields() });
-    if (my !== inspectToken) return;
+    if (my !== inspectToken || u !== url()) return;
     info = got;
     infoUrl = u;
     marks.clear();
@@ -189,7 +207,7 @@ async function inspect() {
     syncSheet();
     syncNotes();
   } catch (err) {
-    if (my !== inspectToken) return;
+    if (my !== inspectToken || u !== url()) return;
     info = null;
     document.body.dataset.kind = '';
     document.body.dataset.media = '';
@@ -240,6 +258,7 @@ function showJob(job, live) {
   const pct = job.progress || 0;
   $('log').textContent = (job.log || []).slice(-30).join('\n');
   const isPrint = printJobId === job.id;
+  if (resultJobId === job.id) OFFTUBE.showGifResult(job, server);
   if (job.status === 'done') {
     const files = job.files || [];
     setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`, 'done', 100);
@@ -287,13 +306,19 @@ $('dlBtn').addEventListener('click', async () => {
   const p = payload();
   OFFTUBE.showProblem('');
   if (!p.url) { OFFTUBE.showProblem('Paste a link first.'); $('url').focus(); return; }
+  const bad = OFFTUBE.trimProblem(p, current());
+  if (bad) { OFFTUBE.showProblem(bad); $('discTrim').open = true; return; }
+  const sourceToken = inspectToken;
   $('dlBtn').disabled = true;
+  $('gifResult').classList.add('hidden');
   setDeck('Starting…', 'busy', 0);
   try {
     await chrome.storage.local.set({ quality: quality(), access: access() });
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', p);
-    printJobId = current() ? id : null;
-    OFFTUBE.developPrint(0);
+    const sameSource = sourceToken === inspectToken && p.url === url();
+    printJobId = sameSource && current() ? id : null;
+    resultJobId = sameSource ? id : null;
+    if (printJobId) OFFTUBE.developPrint(0);
     pollJob(id);
     refreshQueue();
   } catch (err) {
@@ -329,7 +354,7 @@ function updateFrame(li, job, no) {
   const active = OFFTUBE.ACTIVE.includes(job.status);
   li.querySelector('.js-no').textContent = String(no).padStart(2, '0');
   const st = li.querySelector('.js-state');
-  st.textContent = job.status === 'downloading' && pct ? `Developing ${pct}%` : OFFTUBE.STATE_WORD[job.status] || job.status;
+  st.textContent = job.quality === 'gif' && job.status === 'processing' ? `Making GIF ${pct}%` : job.status === 'downloading' && pct ? `Developing ${pct}%` : OFFTUBE.STATE_WORD[job.status] || job.status;
   st.classList.toggle('edge-amber', active);
   const frame = li.querySelector('.js-frame');
   const show = OFFTUBE.jobDisplay(job, server);
@@ -390,6 +415,7 @@ $('queue').addEventListener('click', async (e) => {
     try {
       const job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(jid)}`);
       const live = OFFTUBE.ACTIVE.includes(job.status);
+      resultJobId = jid;
       showJob(job, live);
       if (live) pollJob(jid);
       $('logBox').open = job.status === 'error';
@@ -428,6 +454,14 @@ async function refreshFiles() {
 
 /* ---------------- boot + wiring ---------------- */
 
+function restorePendingOptions(options = {}) {
+  OFFTUBE.restoreGifOptions(options.gif || {});
+  $('clipFrom').value = typeof options.clip_from === 'string' ? options.clip_from : '';
+  $('clipTo').value = typeof options.clip_to === 'string' ? options.clip_to : '';
+  renderFormats(options.quality);
+  syncNotes();
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
   try { await chrome.action.setBadgeText({ text: '' }); } catch { /* ignore */ }
   const s = await OFFTUBE.getSettings();
@@ -436,17 +470,18 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('cookieBrowserName').value = s.cookiesBrowser;
   const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
   pick('access', s.access);
+  OFFTUBE.restoreGifOptions(s.gif);
   renderFormats(s.quality);
   OFFTUBE.wireLoupe();
   syncNotes();
 
   await OFFTUBE.showHealth(server);
-  const session = await chrome.storage.session.get(['pendingUrl']);
+  const session = await chrome.storage.session.get(['pendingUrl', 'pendingOptions']);
   if (session.pendingUrl) {
     setLink(session.pendingUrl);
     lastTabUrl = session.pendingUrl;
-    await chrome.storage.session.remove('pendingUrl');
-    await fillFromTab(false);
+    restorePendingOptions(session.pendingOptions);
+    await chrome.storage.session.remove(['pendingUrl', 'pendingOptions']);
   } else {
     await fillFromTab(false);
   }
@@ -466,13 +501,20 @@ chrome.storage.session.onChanged.addListener(async (changes) => {
   if (!changes.pendingUrl || !changes.pendingUrl.newValue) return;
   setLink(changes.pendingUrl.newValue);
   lastTabUrl = changes.pendingUrl.newValue;
-  await chrome.storage.session.remove('pendingUrl');
+  restorePendingOptions(changes.pendingOptions?.newValue);
+  await chrome.storage.session.remove(['pendingUrl', 'pendingOptions']);
   inspect();
 });
 
 $('linkForm').addEventListener('submit', (e) => { e.preventDefault(); inspect(); });
 $('changeLink').addEventListener('click', () => { setLink(url(), { edit: true }); $('url').select(); });
 $('url').addEventListener('paste', () => setTimeout(inspect, 150));
+$('url').addEventListener('input', () => {
+  invalidateSource();
+  $('stage').innerHTML = OFFTUBE.blankHtml('offtube', 'Preview needed', 'Preview this link.', 'Choose Preview to read the video or post.');
+  renderFormats();
+  syncSheet();
+});
 $('qualities').addEventListener('change', () => { syncTally(); chrome.storage.local.set({ quality: quality() }); });
 ['clipFrom', 'clipTo', 'plStart', 'plEnd', 'plItems', 'subLang'].forEach((id) => $(id).addEventListener('input', syncNotes));
 $$('input[name="plmode"]').forEach((r) => r.addEventListener('change', syncNotes));

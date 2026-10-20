@@ -43,10 +43,10 @@ async function keepUrl(url) {
     await setBadge('!', '#bc3d1e');
     return;
   }
-  const { serverUrl: server, quality, access, cookiesBrowser } = await OFFTUBE.getSettings();
+  const { serverUrl: server, quality, access, cookiesBrowser, gif } = await OFFTUBE.getSettings();
   // File/paste cookies live in the side panel textarea, not in the SW.
   if (access === 'upload') {
-    await chrome.storage.session.set({ pendingUrl: url });
+    await chrome.storage.session.set({ pendingUrl: url, pendingOptions: { quality, gif } });
     const win = await chrome.windows.getLastFocused();
     if (win) await chrome.sidePanel.open({ windowId: win.id });
     return;
@@ -56,7 +56,10 @@ async function keepUrl(url) {
     const cookies = access === 'browser'
       ? { cookies_mode: 'browser', cookies_browser: cookiesBrowser }
       : { cookies_mode: 'none' };
-    await OFFTUBE.api(server, '/api/download', { url, quality, ...cookies });
+    await OFFTUBE.api(server, '/api/download', {
+      url, quality, ...cookies,
+      ...(quality === 'gif' ? { gif_size: gif.gif_size ?? 480, gif_fps: gif.gif_fps ?? 15, gif_loop: gif.gif_loop ?? true } : {}),
+    });
     await setBadge('↓', '#20663c');
   } catch {
     await setBadge('!', '#bc3d1e');

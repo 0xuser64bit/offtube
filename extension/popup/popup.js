@@ -9,6 +9,7 @@ const $ = (id) => document.getElementById(id);
 let server = OFFTUBE.DEFAULT_SERVER;
 let savedBrowser = 'chrome';
 let info = null;        // last inspect for the current link
+let infoUrl = '';
 const marks = new Set(); // circled cells on a collection sheet
 let jobId = null;
 let inspectToken = 0;
@@ -17,7 +18,18 @@ const url = () => $('url').value.trim();
 
 function setStage(html) { $('stage').innerHTML = html; }
 
+function invalidateSource() {
+  inspectToken++;
+  info = null;
+  infoUrl = '';
+  marks.clear();
+  $('gifResult').classList.add('hidden');
+  document.body.dataset.kind = '';
+  document.body.dataset.media = '';
+}
+
 function setLink(value, { edit = false } = {}) {
+  if (value !== url()) invalidateSource();
   $('url').value = value;
   $('linkText').textContent = value.replace(/^https?:\/\/(www\.)?/, '') || 'No link yet';
   $('linkRow').classList.toggle('hidden', edit);
@@ -37,8 +49,10 @@ function renderChips(selected) {
   );
   const sel = info && info.media === 'audio' && !String(selected).startsWith('audio') ? 'audio_mp3' : selected;
   $('qualities').innerHTML = OFFTUBE.formatsHtml(list, sel, { chips: true });
+  OFFTUBE.syncGifOptions();
 }
 const chosenQuality = () => document.querySelector('input[name="q"]:checked')?.value || 'best';
+OFFTUBE.initGifOptions(() => info, chosenQuality, true);
 
 function setDeck(text, mode, pct) {
   $('jobStatus').textContent = text;
@@ -61,31 +75,29 @@ function syncSheet() {
   const sc = $('sheetCount');
   if (sc) sc.textContent = marks.size ? `${marks.size} circled` : `All ${all}`;
   $('sheetTools').classList.remove('hidden');
-  $('dlLabel').textContent = marks.size ? `Keep ${marks.size}` : `Keep all ${all}`;
+  $('dlLabel').textContent = chosenQuality() === 'gif' ? 'Keep as GIF' : marks.size ? `Keep ${marks.size}` : `Keep all ${all}`;
 }
 
 async function inspect() {
   const u = url();
   OFFTUBE.showProblem('');
   if (!u) return;
-  const my = ++inspectToken;
-  info = null;
-  marks.clear();
-  document.body.dataset.kind = '';
-  document.body.dataset.media = '';
+  invalidateSource();
+  const my = inspectToken;
   setStage(OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]));
   try {
     const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessPayload() });
-    if (my !== inspectToken) return;
+    if (my !== inspectToken || u !== url()) return;
     info = got;
+    infoUrl = u;
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     setStage(OFFTUBE.printHtml(info, { cells: 8 }));
     renderChips(chosenQuality());
     syncSheet();
-    if (!OFFTUBE.isCollection(info)) $('dlLabel').textContent = 'Keep';
+    if (!OFFTUBE.isCollection(info)) $('dlLabel').textContent = chosenQuality() === 'gif' ? 'Keep as GIF' : 'Keep';
   } catch (err) {
-    if (my !== inspectToken) return;
+    if (my !== inspectToken || u !== url()) return;
     setStage(OFFTUBE.blankHtml('offtube', 'No print', 'Couldn’t read this link.', 'You can still try Keep, or fix the link below.'));
     OFFTUBE.showProblem(err.message);
   }
@@ -101,7 +113,7 @@ $('stage').addEventListener('click', (e) => {
   syncSheet();
 });
 
-async function pollJob(id) {
+async function pollJob(id, sourceUrl, sourceToken) {
   for (;;) {
     await new Promise((r) => { setTimeout(r, 700); });
     if (jobId !== id) return;
@@ -109,24 +121,27 @@ async function pollJob(id) {
     try {
       job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(id)}`);
     } catch {
-      setDeck('Lost the server — retrying…', 'busy');
+      if (jobId === id) setDeck('Lost the server — retrying…', 'busy');
       continue;
     }
+    if (jobId !== id) return;
+    const isPrint = sourceUrl === url() && sourceToken === inspectToken;
     const pct = job.progress || 0;
+    if (isPrint) OFFTUBE.showGifResult(job, server);
     if (job.status === 'done') {
       const files = job.files || [];
       setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`, 'done', 100);
-      OFFTUBE.finishPrint('tick', 'Kept');
+      if (isPrint) OFFTUBE.finishPrint('tick', 'Kept');
     } else if (job.status === 'error') {
       setDeck(job.detail || 'That didn’t work.', 'error', pct);
-      OFFTUBE.finishPrint('strike', 'Failed');
-      if (OFFTUBE.NEEDS_ACCESS.test(job.detail || '')) $('problemFix').classList.remove('hidden');
+      if (isPrint) OFFTUBE.finishPrint('strike', 'Failed');
+      if (isPrint && OFFTUBE.NEEDS_ACCESS.test(job.detail || '')) $('problemFix').classList.remove('hidden');
     } else if (job.status === 'cancelled') {
       setDeck('Cancelled.', 'idle', 0);
-      OFFTUBE.finishPrint('', 'Cancelled');
+      if (isPrint) OFFTUBE.finishPrint('', 'Cancelled');
     } else {
       setDeck(job.detail || OFFTUBE.STATE_WORD[job.status] || job.status, 'busy', pct);
-      OFFTUBE.developPrint(pct);
+      if (isPrint) OFFTUBE.developPrint(pct);
       continue;
     }
     jobId = null;
@@ -141,7 +156,6 @@ async function keep() {
   OFFTUBE.showProblem('');
   // A pasted cookies file lives in the side panel, never in the popup.
   if ($('access').value === 'upload') {
-    await chrome.storage.session.set({ pendingUrl: u });
     await openPanel();
     return;
   }
@@ -149,21 +163,26 @@ async function keep() {
   const body = {
     url: u,
     quality: chosenQuality(),
+    ...(chosenQuality() === 'gif' ? { ...OFFTUBE.gifFields(), clip_from: $('clipFrom').value.trim(), clip_to: $('clipTo').value.trim() } : {}),
     playlist_mode: collection ? 'playlist' : 'single',
     playlist_items: marks.size ? OFFTUBE.ranges(marks) : '',
     ...accessPayload(),
     title: info ? info.title || '' : '',
     thumbnail: info ? info.thumbnail || '' : '',
   };
+  const bad = OFFTUBE.trimProblem(body, info);
+  if (bad) { OFFTUBE.showProblem(bad); return; }
+  const sourceToken = inspectToken;
   $('dlBtn').disabled = true;
+  $('gifResult').classList.add('hidden');
   setDeck('Starting…', 'busy', 0);
   try {
     await chrome.storage.local.set({ quality: body.quality, access: $('access').value });
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', body);
     jobId = id;
     $('cancelBtn').classList.remove('hidden');
-    OFFTUBE.developPrint(0);
-    pollJob(id);
+    if (sourceToken === inspectToken && u === url()) OFFTUBE.developPrint(0);
+    pollJob(id, u, sourceToken);
   } catch (err) {
     setDeck(err.message, 'error', 0);
     if (OFFTUBE.NEEDS_ACCESS.test(err.message)) OFFTUBE.showProblem(err.message);
@@ -173,6 +192,13 @@ async function keep() {
 }
 
 async function openPanel() {
+  if (url()) await chrome.storage.session.set({
+    pendingUrl: url(),
+    pendingOptions: {
+      quality: chosenQuality(), gif: OFFTUBE.gifFields(),
+      clip_from: $('clipFrom').value.trim(), clip_to: $('clipTo').value.trim(),
+    },
+  });
   const win = await chrome.windows.getLastFocused();
   if (win) await chrome.sidePanel.open({ windowId: win.id });
   window.close();
@@ -183,6 +209,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const s = await OFFTUBE.getSettings();
   server = s.serverUrl;
   savedBrowser = s.cookiesBrowser;
+  OFFTUBE.restoreGifOptions(s.gif);
   $('access').value = s.access;
   $('accessBrowser').textContent = `Use ${savedBrowser[0].toUpperCase()}${savedBrowser.slice(1)}’s cookies`;
   renderChips(s.quality);
@@ -214,7 +241,7 @@ $('cancelBtn').addEventListener('click', async () => {
   if (!jobId) return;
   try { await OFFTUBE.api(server, '/api/cancel', { job_id: jobId }); setDeck('Stopping…', 'busy'); } catch (err) { setDeck(err.message, 'error'); }
 });
-$('qualities').addEventListener('change', () => chrome.storage.local.set({ quality: chosenQuality() }));
+$('qualities').addEventListener('change', () => { syncSheet(); chrome.storage.local.set({ quality: chosenQuality() }); });
 $('access').addEventListener('change', async () => {
   await chrome.storage.local.set({ access: $('access').value });
   if ($('access').value !== 'upload' && url()) inspect();
@@ -231,10 +258,13 @@ $('linkForm').addEventListener('submit', (e) => {
   $('dlBtn').disabled = !url();
   inspect();
 });
-$('url').addEventListener('input', () => { $('dlBtn').disabled = !url(); });
-$('pickInPanel').addEventListener('click', async () => {
-  await chrome.storage.session.set({ pendingUrl: url() });
-  await openPanel();
+$('url').addEventListener('input', () => {
+  $('dlBtn').disabled = !url();
+  invalidateSource();
+  setStage(OFFTUBE.blankHtml('offtube', 'Preview needed', 'Preview this link.', 'Choose Preview to read the video or post.'));
+  renderChips(chosenQuality());
+  syncSheet();
 });
+$('pickInPanel').addEventListener('click', openPanel);
 $('openPanel').addEventListener('click', openPanel);
 $('openLib').addEventListener('click', () => chrome.tabs.create({ url: `${server}/` }));

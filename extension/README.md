@@ -27,6 +27,13 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
   lives in its textarea, not in the service worker).
 - Image posts and boards (gallery-dl) hide the video-only controls and keep
   the original files; audio-only sources default to MP3.
+- Choose **GIF** in the popup or side panel to turn a video into a silent
+  animation. Leave From / To empty for the whole video, enter a time range,
+  or use the 5-second shortcut. Choose the longest edge, frame rate and
+  whether it loops; these preferences also apply to right-click saves.
+  Collections create one GIF per video and skip images. Finished GIFs play
+  in the result preview, with a Save link for each file. The local server
+  needs ffmpeg and ffprobe; live streams and audio-only links cannot become GIFs.
 - Keyboard: `Alt+Shift+O` opens the side panel (Chrome may require you to
   confirm the shortcut at `chrome://extensions/shortcuts`).
 - Sign-in modes: None, Browser cookies (native server only — Docker can't

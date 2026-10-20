@@ -53,6 +53,13 @@
     </div>
 
     <div id="print" class="hidden" aria-live="polite"></div>
+    <div id="gifResult" class="gif-result hidden">
+      <div id="gifPreviewFrame" class="rebate hidden">
+        <div class="edge-row"><span class="edge">GIF preview</span><span class="edge edge-dim">offtube</span></div>
+        <div id="gifPreview" class="frame"></div>
+      </div>
+      <p class="gif-result-actions"><span id="gifReady" role="status">Your GIF is ready.</span><a id="gifSave" class="text-btn" download>Save GIF</a></p>
+    </div>
 
     <div id="infoError" class="problem hidden" role="alert">
       <svg class="mark mark-strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86"/></svg>
@@ -66,15 +73,34 @@
   <aside class="keep" aria-labelledby="keepHeading">
     <h2 id="keepHeading" class="visually-hidden">Keep options</h2>
 
-    <div class="seg video-only video-only-strict" id="otypeSeg" role="radiogroup" aria-label="What to keep">
-      <label><input type="radio" name="otype" value="video" checked /><span>Video</span></label>
-      <label><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
+    <div class="seg" id="otypeSeg" role="radiogroup" aria-label="What to keep">
+      <label><input type="radio" name="otype" value="video" checked /><span id="videoTypeLabel">Video</span></label>
+      <label id="audioTypeChoice"><input type="radio" name="otype" value="audio" /><span>Audio only</span></label>
+      <label id="gifTypeChoice"><input type="radio" name="otype" value="gif" /><span>GIF</span></label>
     </div>
 
-    <fieldset class="formats">
+    <fieldset class="formats" id="formatFieldset">
       <legend class="label">Format</legend>
       <div id="qualities" class="format-list"></div>
       <p class="hint" id="qualityNote"></p>
+    </fieldset>
+
+    <fieldset id="gifOptions" class="gif-options hidden" aria-describedby="gifHint">
+      <legend class="label">Make a GIF</legend>
+      <div class="pair">
+        <label class="field"><span class="label">Size</span><select id="gifSize">
+          <option value="320">320 px · Small</option><option value="480" selected>480 px · Balanced</option>
+          <option value="640">640 px · Large</option><option value="960">960 px · Extra large</option>
+        </select></label>
+        <label class="field"><span class="label">Motion</span><select id="gifFps">
+          <option value="10">10 fps · Compact</option><option value="15" selected>15 fps · Balanced</option>
+          <option value="20">20 fps · Smooth</option><option value="25">25 fps · Smoother</option><option value="30">30 fps · Smoothest</option>
+        </select></label>
+      </div>
+      <label class="check"><input id="gifLoop" type="checkbox" checked /><span>Loop forever</span></label>
+      <p class="hint" id="gifHint">Silent, with optimized colors. Size is the longest edge; smaller videos stay sharp at their original size.</p>
+      <p class="gif-summary num" id="gifSummary" role="status"></p>
+      <p class="hint">Short moments make smaller GIFs. <button class="text-btn" id="gifFiveSeconds" type="button">Use a 5-second clip</button></p>
     </fieldset>
 
     <div class="notes">
@@ -82,8 +108,8 @@
         <summary><span class="note-name">Trim</span><span class="note-state" id="trimState">Whole video</span><svg class="chev" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg></summary>
         <div class="note-body">
           <div class="pair">
-            <label class="field"><span class="label">From</span><input id="clipFrom" class="num" inputmode="numeric" placeholder="1:30" autocomplete="off" spellcheck="false" /></label>
-            <label class="field"><span class="label">To</span><input id="clipTo" class="num" inputmode="numeric" placeholder="2:45" autocomplete="off" spellcheck="false" /></label>
+            <label class="field"><span class="label">From</span><input id="clipFrom" class="num" inputmode="decimal" placeholder="1:30" autocomplete="off" spellcheck="false" aria-describedby="trimError" /></label>
+            <label class="field"><span class="label">To</span><input id="clipTo" class="num" inputmode="decimal" placeholder="2:45" autocomplete="off" spellcheck="false" aria-describedby="trimError" /></label>
           </div>
           <p class="hint">Seconds or m:ss / h:mm:ss. Empty keeps the whole video. <button class="text-btn" id="clearClip" type="button">Clear</button></p>
           <p id="trimError" class="field-error hidden" role="alert"></p>
@@ -192,6 +218,7 @@
         <label><input type="radio" name="kind" value="video" /><span>Video</span></label>
         <label><input type="radio" name="kind" value="audio" /><span>Audio</span></label>
         <label><input type="radio" name="kind" value="image" /><span>Images</span></label>
+        <label><input type="radio" name="kind" value="gif" /><span>GIFs</span></label>
       </div>
       <input id="fileSearch" type="search" placeholder="Find a file" aria-label="Find a kept file" autocomplete="off" />
       <button id="refreshFiles" class="icon-btn" type="button" aria-label="Refresh the list" title="Refresh">

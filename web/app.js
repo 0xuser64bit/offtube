@@ -52,11 +52,14 @@ const state = {
   marks: new Set(),    // circled item numbers on a collection sheet
   fetchToken: 0,
   activeJobId: null,   // job shown on the deck
-  printJobId: null,    // job started from the current print (develops it)
+  printJobId: null,    // job started from the current source (develops its print)
+  previewJobId: null,  // source job or session job explicitly selected for its result
   pollTimer: null,
   files: [],
   shownFiles: 60,
   diskFree: "",
+  preferredOutput: "video",
+  quality: { video: "best", audio: "audio_mp3" },
 };
 
 async function api(path, opts = {}) {
@@ -70,7 +73,7 @@ const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(bo
 /* ================= what the next Keep will send ================= */
 
 function outputType() { return checked("otype") || "video"; }
-function selectedQuality() { return checked("q") || (outputType() === "audio" ? "audio_mp3" : "best"); }
+function selectedQuality() { return outputType() === "gif" ? "gif" : checked("q") || (outputType() === "audio" ? "audio_mp3" : "best"); }
 function cookiesMode() { return checked("cmode") || "none"; }
 
 function accessFields() {
@@ -114,7 +117,8 @@ function payload() {
   return {
     url: $("url").value.trim(),
     quality: selectedQuality(),
-    subtitles: $("subs").checked,
+    subtitles: outputType() !== "gif" && $("subs").checked,
+    ...(outputType() === "gif" ? { gif_size: Number($("gifSize").value), gif_fps: Number($("gifFps").value), gif_loop: $("gifLoop").checked } : {}),
     auto_subs: true,
     sub_lang: ($("subLang").value.trim() || "en").slice(0, 20),
     clip_from: $("clipFrom").value.trim(),
@@ -142,7 +146,23 @@ function formatOptions() {
 }
 
 function renderFormats() {
-  const keep = selectedQuality();
+  const info = currentInfo();
+  const canGif = !info || (!info.is_live && !["is_live", "is_upcoming"].includes(info.live_status) && info.media !== "audio" && info.media !== "image");
+  let type = state.preferredOutput;
+  if (info?.media === "audio") type = "audio";
+  else if (info?.media === "image" || (type === "gif" && !canGif) || (type === "audio" && info?.type === "gallery")) type = "video";
+  document.querySelector(`input[name="otype"][value="${type}"]`).checked = true;
+  $("otypeSeg").classList.toggle("hidden", info?.media === "audio" || info?.media === "image");
+  $("gifTypeChoice").classList.toggle("hidden", !canGif);
+  $("audioTypeChoice").classList.toggle("hidden", info?.type === "gallery");
+  $("videoTypeLabel").textContent = info?.type === "gallery" ? "Original" : "Video";
+  const gif = outputType() === "gif";
+  document.body.dataset.output = outputType();
+  $("formatFieldset").classList.toggle("hidden", gif);
+  $("gifOptions").classList.toggle("hidden", !gif);
+  $("dlLabel").textContent = gif ? "Keep as GIF" : "Keep";
+  if (gif) $("discTrim").open = true;
+  const keep = state.quality[type];
   const list = formatOptions();
   const sel = list.some((q) => q.id === keep) ? keep : list[0].id;
   $("qualities").innerHTML = list.map((q) => `<label class="fmt">
@@ -150,13 +170,29 @@ function renderFormats() {
       <span class="fmt-name">${esc(q.name)}${markSvg("circle")}</span>
       <span class="fmt-sub">${esc(q.sub || "")}</span>
     </label>`).join("");
-  const info = currentInfo();
   $("qualityNote").textContent =
     info && info.type === "gallery" ? "Every image and clip is saved exactly as the site serves it, full size."
       : outputType() === "audio" ? "Converted with ffmpeg once the download lands."
         : info && info.qualities ? "Sizes are the site’s estimates. A height it doesn’t have falls back to the next best."
           : "Best keeps the highest stream and saves MP4.";
   syncTally();
+  syncGifSummary();
+}
+
+function syncGifSummary() {
+  const info = currentInfo();
+  const collection = state.marks.size || (checked("plmode") === "playlist" && (info?.type === "playlist" || info?.type === "gallery" || info?.part_of_playlist));
+  const bad = trimProblem(payload());
+  if (bad) { $("gifSummary").textContent = "Choose a valid timeframe to estimate your GIF."; return; }
+  const start = parseTime($("clipFrom").value) ?? 0;
+  const sourceDuration = !collection && info?.duration > 0 ? info.duration : null;
+  const end = parseTime($("clipTo").value) ?? sourceDuration;
+  const duration = end === null ? null : Math.max(0, Math.min(end, sourceDuration ?? end) - start);
+  const scope = collection ? "One GIF per video; images are skipped" : start || $("clipTo").value.trim() ? "Selected timeframe" : "Whole video";
+  const seconds = duration === null ? null : Number(duration.toFixed(2));
+  const frames = Math.ceil(duration * Number($("gifFps").value));
+  const timing = duration === null ? `${$("gifFps").value} fps` : `${seconds} second${seconds === 1 ? "" : "s"}${collection ? " per video, up to its end" : ""} · about ${frames} frame${frames === 1 ? "" : "s"}`;
+  $("gifSummary").textContent = `${scope} · ${timing} · ${$("gifLoop").checked ? "loops forever" : "plays once"}${duration > 15 ? " · Large file likely; try a shorter clip." : ""}`;
 }
 
 /* ================= option notes ================= */
@@ -185,6 +221,7 @@ function syncNotes() {
   $("cookieBrowser").classList.toggle("hidden", cm !== "browser");
   $("cookieUpload").classList.toggle("hidden", cm !== "upload");
   syncTally();
+  syncGifSummary();
 }
 
 function setNote(id, text, on) {
@@ -199,13 +236,17 @@ function syncTally() {
   const free = state.diskFree ? `${esc(state.diskFree)} free on this disk` : "";
   let what = "";
   if (info) {
+    const gif = outputType() === "gif";
+    const perVideo = gif ? " · one GIF per video" : "";
     const many = info.type === "playlist" || (info.type === "gallery" && info.count > 1);
-    if (state.marks.size) what = `<b>${state.marks.size} circled item${state.marks.size === 1 ? "" : "s"}</b>`;
-    else if (many && (checked("plmode") === "playlist")) what = `<b>${info.count || "All"}${info.more ? "+" : ""} items</b>`;
-    else if (info.type === "gallery") what = `<b>${info.count > 1 ? `${info.count} files` : "1 file"}</b>`;
+    if (state.marks.size) what = `<b>${state.marks.size} circled item${state.marks.size === 1 ? "" : "s"}</b>${perVideo}`;
+    else if (many && (checked("plmode") === "playlist")) what = `<b>${info.count || "All"}${info.more ? "+" : ""} items</b>${perVideo}`;
+    else if (info.type === "gallery") what = gif
+      ? "<b>1 GIF per video</b> · images are skipped"
+      : `<b>${info.count > 1 ? `${info.count} files` : "1 file"}</b>`;
     else {
       const size = (formatOptions().find((q) => q.id === selectedQuality()) || {}).size;
-      what = `<b>1 ${outputType() === "audio" ? "audio file" : "video"}</b>${size ? ` · ~${esc(size)}` : ""}`;
+      what = `<b>1 ${gif ? "GIF" : outputType() === "audio" ? "audio file" : "video"}</b>${size && !gif ? ` · ~${esc(size)}` : ""}`;
     }
   }
   $("tally").innerHTML = [what, free].filter(Boolean).join(" · ");
@@ -229,6 +270,7 @@ function showProblem(msg) {
 function hideProblem() { $("infoError").classList.add("hidden"); }
 
 function showBlank() {
+  $("gifResult").classList.add("hidden");
   $("blank").classList.remove("hidden");
   $("print").classList.add("hidden");
   document.body.dataset.kind = "";
@@ -236,6 +278,7 @@ function showBlank() {
 }
 
 function renderExposing(url) {
+  $("gifResult").classList.add("hidden");
   $("blank").classList.add("hidden");
   const host = (url.replace(/^https?:\/\//, "").split("/")[0] || "").replace(/^www\./, "");
   $("print").innerHTML = `<figure class="print is-exposing">
@@ -255,10 +298,10 @@ function developHtml(src, extra = "") {
 }
 
 function renderPrint(info) {
+  $("gifResult").classList.add("hidden");
   state.info = info;
   state.infoUrl = $("url").value.trim();
   state.marks.clear();
-  state.printJobId = null;
   document.body.dataset.kind = info.type === "gallery" ? "gallery" : "";
   document.body.dataset.media = info.media || "";
   const site = (info.source && info.source.label) || "Link";
@@ -357,13 +400,15 @@ async function inspect() {
   hideProblem();
   if (!url) { showProblem("Paste a link first."); $("url").focus(); return; }
   const my = ++state.fetchToken;
+  state.printJobId = null;
+  state.previewJobId = null;
   const btn = $("fetchBtn");
   btn.disabled = true;
   btn.textContent = "Reading…";
   renderExposing(url);
   try {
     const { info } = await post("/api/info", { url, ...accessFields() });
-    if (my !== state.fetchToken) return;
+    if (my !== state.fetchToken || url !== $("url").value.trim()) return;
     renderPrint(info);
   } catch (err) {
     if (my !== state.fetchToken) return;
@@ -384,8 +429,21 @@ $("pasteForm").addEventListener("submit", (e) => { e.preventDefault(); clearTime
 $("url").addEventListener("paste", () => { clearTimeout(debounce); debounce = setTimeout(inspect, 200); });
 $("url").addEventListener("input", () => {
   clearTimeout(debounce);
+  ++state.fetchToken;
+  state.info = null;
+  state.infoUrl = "";
+  state.printJobId = null;
+  state.previewJobId = null;
+  state.marks.clear();
+  $("fetchBtn").disabled = false;
+  $("fetchBtn").textContent = "Preview";
+  showBlank();
+  hideProblem();
+  setTrimError("");
+  renderFormats();
+  syncNotes();
   const v = $("url").value.trim();
-  if (!v) { state.info = null; showBlank(); hideProblem(); renderFormats(); syncNotes(); return; }
+  if (!v) return;
   debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, 700);
 });
 $("infoErrorFix").addEventListener("click", () => {
@@ -400,45 +458,62 @@ $("infoErrorFix").addEventListener("click", () => {
 function parseTime(s) {
   s = String(s || "").trim();
   if (!s) return null;
-  if (/^\d+(\.\d+)?$/.test(s)) return parseFloat(s);
+  if (!/^\d+(?::\d+){0,2}(?:\.\d+)?$/.test(s)) return null;
   const parts = s.split(":");
   if (parts.length > 3) return null;
   const nums = parts.map(Number);
-  if (nums.some((n) => Number.isNaN(n) || n < 0)) return null;
-  return nums.reduce((a, n) => a * 60 + n, 0);
+  if (nums.some((n) => !Number.isFinite(n) || n < 0)) return null;
+  const total = nums.reduce((a, n) => a * 60 + n, 0);
+  return Number.isFinite(total) ? total : null;
 }
 
 function trimProblem(p) {
   const f = p.clip_from ? parseTime(p.clip_from) : null;
   const t = p.clip_to ? parseTime(p.clip_to) : null;
   if ((p.clip_from && f === null) || (p.clip_to && t === null)) return "Those times don’t read. Use seconds or m:ss, like 1:30 → 2:45.";
-  if (f !== null && t !== null && t <= f) return "“To” has to come after “From”.";
+  if (t !== null && t <= (f ?? 0)) return "“To” has to come after “From”.";
   const info = currentInfo();
   if (info && info.is_live && (p.clip_from || p.clip_to)) return "Trim doesn’t apply to a live stream. Clear it, or wait for the stream to end.";
+  if (p.quality === "gif" && info?.duration && info.type !== "playlist" && info.type !== "gallery" && checked("plmode") !== "playlist" && f >= info.duration) return "“From” is past the end of this video. Choose an earlier time.";
   return "";
+}
+
+function setTrimError(message) {
+  $("trimError").textContent = message;
+  $("trimError").classList.toggle("hidden", !message);
+  for (const id of ["clipFrom", "clipTo"]) $(id).setAttribute("aria-invalid", String(Boolean(message)));
 }
 
 $("dlBtn").addEventListener("click", async () => {
   const p = payload();
-  $("trimError").classList.add("hidden");
+  setTrimError("");
   if (!p.url) { showProblem("Paste a link first."); $("url").focus(); return; }
   const bad = trimProblem(p);
   if (bad) {
-    $("trimError").textContent = bad;
-    $("trimError").classList.remove("hidden");
+    setTrimError(bad);
     $("discTrim").open = true;
+    $(p.clip_from && parseTime(p.clip_from) === null ? "clipFrom" : "clipTo").focus();
     return;
   }
   const btn = $("dlBtn");
+  $("gifResult").classList.add("hidden");
   btn.disabled = true;
   $("dlLabel").textContent = "Starting…";
   setDeck("Starting…", "busy", 0);
   try {
     const { job_id } = await post("/api/download", p);
     state.activeJobId = job_id;
-    state.printJobId = currentInfo() ? job_id : null;
+    state.printJobId = $("url").value.trim() === p.url ? job_id : null;
+    state.previewJobId = state.printJobId;
     $("cancelBtn").classList.remove("hidden");
-    developPrint(0);
+    if (state.printJobId && currentInfo()) {
+      const frame = $("printFig")?.querySelector(".frame");
+      if (frame?.dataset.gif) {
+        frame.innerHTML = currentInfo().thumbnail ? developHtml(currentInfo().thumbnail) : '<div class="frame-empty"><span class="mark-slot"></span></div>';
+        delete frame.dataset.gif;
+      }
+      developPrint(0);
+    }
     pollJob(job_id);
     refreshQueue();
   } catch (err) {
@@ -446,7 +521,7 @@ $("dlBtn").addEventListener("click", async () => {
     if (NEEDS_ACCESS.test(err.message)) $("discAccess").open = true;
   } finally {
     btn.disabled = false;
-    $("dlLabel").textContent = "Keep";
+    $("dlLabel").textContent = outputType() === "gif" ? "Keep as GIF" : "Keep";
   }
 });
 
@@ -500,11 +575,30 @@ function finishPrint(kind, label) {
 function showJob(job, live) {
   const pct = job.progress || 0;
   $("jobLog").textContent = (job.log || []).slice(-40).join("\n");
-  const isPrint = state.printJobId === job.id;
+  const isSource = state.printJobId === job.id;
+  const isPrint = isSource && Boolean(currentInfo());
+  const preview = isSource || state.previewJobId === job.id;
+  if (job.status !== "done" || job.quality !== "gif" || !preview) $("gifResult").classList.add("hidden");
   if (job.status === "done") {
     const files = job.files || [];
     setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || "the file"}.`, "done", 100);
     if (isPrint) finishPrint("tick", "Kept");
+    if (preview && job.quality === "gif" && files.length) {
+      const fileUrl = `/files/${encodeURIComponent(files[0])}`;
+      const frame = isPrint && $("printFig")?.querySelector(".frame");
+      if (frame && frame.dataset.gif !== fileUrl) {
+        frame.innerHTML = `<span class="develop"><img class="pos gif-preview" src="${esc(fileUrl)}" alt="Your finished GIF" /><span class="mark-slot">${markSvg("tick")}</span></span>`;
+        frame.dataset.gif = fileUrl;
+      }
+      $("gifPreviewFrame").classList.toggle("hidden", Boolean(frame));
+      if (!frame && $("gifPreview").dataset.file !== fileUrl) {
+        $("gifPreview").innerHTML = `<img class="gif-preview" src="${esc(fileUrl)}" alt="Your finished GIF" />`;
+        $("gifPreview").dataset.file = fileUrl;
+      }
+      $("gifSave").href = fileUrl;
+      $("gifReady").textContent = files.length > 1 ? `${files.length} GIFs are ready. Previewing the first; all are in Kept.` : "Your GIF is ready.";
+      $("gifResult").classList.remove("hidden");
+    }
   } else if (job.status === "error") {
     setDeck(job.detail || "That didn’t work.", "error", pct);
     if (isPrint) finishPrint("strike", "Failed");
@@ -552,6 +646,7 @@ async function viewJob(jobId) {
     const job = await api(`/api/job?id=${encodeURIComponent(jobId)}`);
     clearInterval(state.pollTimer);
     state.activeJobId = ACTIVE.includes(job.status) ? jobId : null;
+    state.previewJobId = jobId;
     showJob(job, Boolean(state.activeJobId));
     if (state.activeJobId) pollJob(jobId);
     $("logBox").open = job.status === "error";
@@ -588,7 +683,7 @@ function jobDisplay(job) {
   const tail = ((job.url || "").replace(/[?#].*$/, "").split("/").filter(Boolean).pop() || "").slice(0, 24);
   const word = { image: "image", video: "video", audio: "track" }[kind] || "post";
   return {
-    thumb: job.thumbnail || (kind === "image" ? fileUrl : ""),
+    thumb: ext === "gif" ? fileUrl : job.thumbnail || (kind === "image" ? fileUrl : ""),
     video: !job.thumbnail && kind === "video" ? fileUrl : "",
     title: job.title || `${job.source || "Saved"} ${word}`,
     meta: [job.source, job.title ? (job.quality && job.quality !== "best" ? job.quality.replace("audio_", "") : "") : tail].filter(Boolean).join(" · "),
@@ -600,7 +695,7 @@ function updateFrame(li, job, no) {
   const active = ACTIVE.includes(job.status);
   li.querySelector(".js-no").textContent = pad2(no);
   const st = li.querySelector(".js-state");
-  st.textContent = job.status === "downloading" && pct ? `${STATE_WORD.downloading} ${pct}%` : STATE_WORD[job.status] || job.status;
+  st.textContent = job.quality === "gif" && job.status === "processing" ? `Making GIF ${pct}%` : job.status === "downloading" && pct ? `${STATE_WORD.downloading} ${pct}%` : STATE_WORD[job.status] || job.status;
   st.classList.toggle("edge-amber", active);
   const frame = li.querySelector(".js-frame");
   const show = jobDisplay(job);
@@ -661,9 +756,15 @@ $("queue").addEventListener("click", async (e) => {
     e.target.disabled = true;
     try {
       const { job_id } = await post("/api/retry", { job_id: jid });
+      if (state.printJobId === jid) state.printJobId = job_id;
+      state.previewJobId = job_id;
       state.activeJobId = job_id;
+      $("gifResult").classList.add("hidden");
+      setDeck("Starting…", "busy", 0);
+      $("cancelBtn").classList.remove("hidden");
       pollJob(job_id);
     } catch (err) { setDeck(`Couldn’t retry: ${err.message}`, "error"); }
+    e.target.disabled = false;
     refreshQueue();
   } else {
     viewJob(jid);
@@ -701,7 +802,7 @@ function keptThumb(f) {
 function renderFiles() {
   const q = $("fileSearch").value.trim().toLowerCase();
   const kind = checked("kind") || "all";
-  const list = state.files.filter((f) => (kind === "all" || f.kind === kind) && (!q || f.name.toLowerCase().includes(q)));
+  const list = state.files.filter((f) => (kind === "all" || (kind === "gif" ? /\.gif$/i.test(f.name) : f.kind === kind)) && (!q || f.name.toLowerCase().includes(q)));
   const shown = list.slice(0, state.shownFiles);
   $("footFiles").textContent = state.files.length
     ? `${state.files.length} file${state.files.length === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
@@ -781,22 +882,31 @@ const PREFS = "offtube.prefs";
 function savePrefs() {
   try {
     localStorage.setItem(PREFS, JSON.stringify({
-      otype: outputType(), quality: selectedQuality(), cmode: cookiesMode(),
+      otype: state.preferredOutput, quality: selectedQuality(), qualities: state.quality, cmode: cookiesMode(),
       browser: $("cookieBrowserName").value, subLang: $("subLang").value, subs: $("subs").checked,
+      gifSize: $("gifSize").value, gifFps: $("gifFps").value, gifLoop: $("gifLoop").checked,
     }));
   } catch { /* private mode */ }
 }
 function restorePrefs() {
   let p = {};
   try { p = JSON.parse(localStorage.getItem(PREFS) || "{}"); } catch { p = {}; }
+  if (!p || typeof p !== "object") p = {};
   const pick = (name, v) => { const r = v && document.querySelector(`input[name="${name}"][value="${CSS.escape(v)}"]`); if (r) r.checked = true; };
   pick("otype", p.otype);
+  state.preferredOutput = outputType();
+  for (const type of ["video", "audio"]) {
+    const value = p.qualities?.[type] || p.quality;
+    if ((type === "audio" ? AUDIO_LADDER : VIDEO_LADDER).some((q) => q.id === value)) state.quality[type] = value;
+  }
   pick("cmode", p.cmode);
   if (p.browser) $("cookieBrowserName").value = p.browser;
   if (p.subLang) $("subLang").value = p.subLang;
   if (typeof p.subs === "boolean") $("subs").checked = p.subs;
+  if (["320", "480", "640", "960"].includes(p.gifSize)) $("gifSize").value = p.gifSize;
+  if (["10", "15", "20", "25", "30"].includes(p.gifFps)) $("gifFps").value = p.gifFps;
+  if (typeof p.gifLoop === "boolean") $("gifLoop").checked = p.gifLoop;
   renderFormats();
-  pick("q", p.quality);
 }
 
 /* ================= the loupe ================= */
@@ -850,16 +960,16 @@ function wireLoupe(zoom = 2.5) {
 
 /* ================= wiring ================= */
 
-$$('input[name="otype"]').forEach((r) => r.addEventListener("change", renderFormats));
-$("qualities").addEventListener("change", () => { syncTally(); savePrefs(); });
-["clipFrom", "clipTo", "plStart", "plEnd", "plItems", "subLang"].forEach((id) => $(id).addEventListener("input", syncNotes));
+$$('input[name="otype"]').forEach((r) => r.addEventListener("change", () => { state.preferredOutput = outputType(); renderFormats(); }));
+$("qualities").addEventListener("change", () => { state.quality[outputType()] = checked("q"); syncTally(); savePrefs(); });
+["clipFrom", "clipTo", "plStart", "plEnd", "plItems", "subLang"].forEach((id) => $(id).addEventListener("input", () => { setTrimError(""); syncNotes(); }));
 $$('input[name="plmode"], input[name="cmode"]').forEach((r) => r.addEventListener("change", syncNotes));
 $("subs").addEventListener("change", syncNotes);
 $("cookieBrowserName").addEventListener("change", syncNotes);
 $("clearClip").addEventListener("click", () => {
   $("clipFrom").value = "";
   $("clipTo").value = "";
-  $("trimError").classList.add("hidden");
+  setTrimError("");
   syncNotes();
   $("clipFrom").focus();
 });
@@ -873,6 +983,17 @@ document.addEventListener("change", (e) => {
   if (e.target.matches('input[name="otype"], input[name="cmode"], #cookieBrowserName, #subs')) savePrefs();
 });
 $("subLang").addEventListener("input", savePrefs);
+["gifSize", "gifFps", "gifLoop"].forEach((id) => $(id).addEventListener("change", () => { syncGifSummary(); savePrefs(); }));
+$("gifFiveSeconds").addEventListener("click", () => {
+  const start = parseTime($("clipFrom").value) ?? 0;
+  const duration = currentInfo()?.duration;
+  $("clipFrom").value = String(duration && start >= duration ? 0 : start);
+  $("clipTo").value = String(Math.min(Number($("clipFrom").value) + 5, duration || Infinity));
+  $("discTrim").open = true;
+  setTrimError("");
+  syncNotes();
+  $("clipFrom").focus();
+});
 
 restorePrefs();
 syncNotes();

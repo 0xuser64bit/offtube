@@ -30,7 +30,8 @@
       </div>
     </div>
 
-    <fieldset class="chips video-only" id="qualities" aria-label="Format"></fieldset>
+    <fieldset class="chips" id="qualities" aria-label="Format"></fieldset>
+    <div id="gifOptions" class="hidden"></div>
 
     <div class="keep-actions">
       <button id="dlBtn" class="keep-btn" type="button" disabled>
@@ -44,6 +45,8 @@
       <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
       <p class="deck-line"><span id="jobStatus">Kept files land in downloads/ on this machine.</span><span class="deck-pct num" id="jobPct"></span></p>
     </div>
+
+    <div id="gifResult" class="gif-result hidden" aria-live="polite"></div>
 
     <div class="access-row">
       <label class="label" for="access">Sign-in</label>

@@ -94,7 +94,7 @@ OFFTUBE.sourceOf = async function sourceOf(server, url) {
 };
 
 OFFTUBE.getSettings = async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser']);
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser', 'gif']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
   try {
     serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
@@ -107,6 +107,7 @@ OFFTUBE.getSettings = async function getSettings() {
     otype: s.otype || 'video',
     access: s.access || 'none',
     cookiesBrowser: s.cookies_browser || 'chrome',
+    gif: s.gif || {},
   };
 };
 
@@ -244,7 +245,7 @@ OFFTUBE.jobDisplay = function jobDisplay(job, server) {
   const tail = ((job.url || '').replace(/[?#].*$/, '').split('/').filter(Boolean).pop() || '').slice(0, 24);
   const word = { image: 'image', video: 'video', audio: 'track' }[kind] || 'post';
   return {
-    thumb: job.thumbnail || (kind === 'image' ? fileUrl : ''),
+    thumb: ext === 'gif' ? fileUrl : job.thumbnail || (kind === 'image' ? fileUrl : ''),
     video: !job.thumbnail && kind === 'video' ? fileUrl : '',
     title: job.title || `${job.source || 'Saved'} ${word}`,
     meta: job.title ? job.source || '' : [job.source, tail].filter(Boolean).join(' · '),
@@ -272,7 +273,10 @@ OFFTUBE.finishPrint = function finishPrint(kind, label) {
 
 /* Format choices for what was inspected (or the default ladder). */
 OFFTUBE.formatOptions = function formatOptions(info, otype) {
-  if (info && info.type === 'gallery') return [{ id: 'best', name: 'Original', sub: 'as posted' }];
+  const live = info && (info.is_live || ['is_live', 'is_upcoming'].includes(info.live_status));
+  const gif = !info || (!live && info.media !== 'audio' && info.media !== 'image')
+    ? [{ id: 'gif', name: 'GIF', sub: 'silent animation' }] : [];
+  if (info && info.type === 'gallery') return [{ id: 'best', name: 'Original', sub: 'as posted' }, ...gif];
   const audio = [
     { id: 'audio_mp3', name: 'MP3', sub: '192 kbps · plays anywhere' },
     { id: 'audio_m4a', name: 'M4A', sub: '192 kbps · Apple-friendly' },
@@ -282,7 +286,102 @@ OFFTUBE.formatOptions = function formatOptions(info, otype) {
   const video = ladder.length
     ? ladder.map((q) => (q.id === 'best' ? { id: 'best', name: 'Best', sub: 'highest stream' } : { id: q.id, name: `${q.id}p`, sub: q.filesize_str ? `~${q.filesize_str}` : '' }))
     : OFFTUBE.VIDEO_LADDER.map((id) => ({ id, name: id === 'best' ? 'Best' : `${id}p`, sub: '' }));
-  return video;
+  return [...video, ...gif];
+};
+
+OFFTUBE.gifFields = function gifFields() {
+  return {
+    gif_size: Number(document.getElementById('gifSize').value),
+    gif_fps: Number(document.getElementById('gifFps').value),
+    gif_loop: document.getElementById('gifLoop').checked,
+  };
+};
+
+OFFTUBE.parseTime = function parseTime(value) {
+  const s = String(value ?? '').trim();
+  if (!/^\d+(?::\d+){0,2}(?:\.\d+)?$/.test(s)) return null;
+  const n = s.split(':').map(Number).reduce((a, b) => a * 60 + b, 0);
+  return Number.isFinite(n) ? n : null;
+};
+
+OFFTUBE.trimProblem = function trimProblem(payload, info) {
+  const start = OFFTUBE.parseTime(payload.clip_from), end = OFFTUBE.parseTime(payload.clip_to);
+  if ((payload.clip_from && start === null) || (payload.clip_to && end === null)) return 'Use seconds or m:ss for the time range, like 1:30 → 1:35.';
+  if (end !== null && end <= (start ?? 0)) return '“To” has to come after “From”.';
+  if (info?.is_live && (payload.clip_from || payload.clip_to)) return 'Trim needs a finished video. Clear the times, or wait for the live stream to end.';
+  if (payload.quality === 'gif' && info?.duration && start >= info.duration) return '“From” is past the end of this video. Choose an earlier time.';
+  return '';
+};
+
+OFFTUBE.initGifOptions = function initGifOptions(getInfo, getQuality, includeTrim = false) {
+  const $ = (id) => document.getElementById(id);
+  $('gifOptions').innerHTML = `<fieldset class="gif-fields"><legend class="label">Make a GIF</legend>
+    ${includeTrim ? `<div class="pair">
+      <label class="field"><span class="label">From</span><input id="clipFrom" class="num" inputmode="decimal" placeholder="0:00" autocomplete="off" /></label>
+      <label class="field"><span class="label">To</span><input id="clipTo" class="num" inputmode="decimal" placeholder="End" autocomplete="off" /></label>
+    </div>` : ''}
+    <div class="pair">
+      <label class="field"><span class="label">Size</span><select id="gifSize"><option value="320">320 px · Small</option><option value="480" selected>480 px · Balanced</option><option value="640">640 px · Large</option><option value="960">960 px · Extra large</option></select></label>
+      <label class="field"><span class="label">Motion</span><select id="gifFps"><option value="10">10 fps · Compact</option><option value="15" selected>15 fps · Balanced</option><option value="20">20 fps · Smooth</option><option value="25">25 fps · Smoother</option><option value="30">30 fps · Smoothest</option></select></label>
+    </div>
+    <label class="check"><input type="checkbox" id="gifLoop" checked /><span>Loop forever</span></label>
+    <p class="hint">Silent, with optimized colors. Size is the longest edge.</p>
+    <p class="hint num" id="gifSummary" role="status"></p>
+    <div class="gif-actions"><button class="text-btn" type="button" id="gifFiveSeconds">Use a 5-second clip</button><button class="text-btn" type="button" id="gifWholeVideo">Use whole video</button></div>
+  </fieldset>`;
+  OFFTUBE.syncGifOptions = () => {
+    const gif = getQuality() === 'gif';
+    document.body.dataset.output = gif ? 'gif' : '';
+    $('gifOptions').classList.toggle('hidden', !gif);
+    if (gif && $('discTrim')) $('discTrim').open = true;
+    $('dlLabel').textContent = gif ? 'Keep as GIF' : 'Keep';
+    const info = getInfo();
+    const start = OFFTUBE.parseTime($('clipFrom').value) ?? 0;
+    const end = OFFTUBE.parseTime($('clipTo').value) ?? info?.duration;
+    const duration = Number.isFinite(end) ? Math.max(0, Math.min(end, info?.duration || end) - start) : null;
+    $('gifSummary').textContent = duration !== null
+      ? `${Number(duration.toFixed(2))} seconds · about ${Math.ceil(duration * Number($('gifFps').value))} frames${duration > 15 ? ' · Large file likely; try a shorter clip.' : ''}`
+      : `${$('clipFrom').value || $('clipTo').value ? 'Selected range' : 'Whole video'} · ${$('gifFps').value} fps · ${$('gifLoop').checked ? 'loops forever' : 'plays once'}${OFFTUBE.isCollection(info) ? '. One GIF per video; images are skipped.' : '. Set From / To for a smaller GIF.'}`;
+  };
+  ['gifSize', 'gifFps', 'gifLoop'].forEach((id) => $(id).addEventListener('change', () => {
+    OFFTUBE.syncGifOptions();
+    chrome.storage.local.set({ gif: OFFTUBE.gifFields() });
+  }));
+  ['clipFrom', 'clipTo'].forEach((id) => $(id).addEventListener('input', OFFTUBE.syncGifOptions));
+  $('qualities').addEventListener('change', OFFTUBE.syncGifOptions);
+  $('gifFiveSeconds').addEventListener('click', () => {
+    const start = OFFTUBE.parseTime($('clipFrom').value) ?? 0, duration = getInfo()?.duration;
+    $('clipFrom').value = String(duration && start >= duration ? 0 : start);
+    $('clipTo').value = String(Math.min(Number($('clipFrom').value) + 5, duration || Infinity));
+    $('clipTo').dispatchEvent(new Event('input', { bubbles: true }));
+    $('clipFrom').focus();
+  });
+  $('gifWholeVideo').addEventListener('click', () => {
+    $('clipFrom').value = '';
+    $('clipTo').value = '';
+    $('clipTo').dispatchEvent(new Event('input', { bubbles: true }));
+  });
+};
+
+OFFTUBE.restoreGifOptions = function restoreGifOptions(gif) {
+  if ([320, 480, 640, 960].includes(gif.gif_size)) document.getElementById('gifSize').value = gif.gif_size;
+  if ([10, 15, 20, 25, 30].includes(gif.gif_fps)) document.getElementById('gifFps').value = gif.gif_fps;
+  if (typeof gif.gif_loop === 'boolean') document.getElementById('gifLoop').checked = gif.gif_loop;
+};
+
+OFFTUBE.showGifResult = function showGifResult(job, server) {
+  const result = document.getElementById('gifResult');
+  const files = (job.files || []).filter((name) => /\.gif$/i.test(name));
+  if (job.quality !== 'gif' || job.status !== 'done' || !files.length) {
+    result.classList.add('hidden');
+    return;
+  }
+  if (result.dataset.job !== job.id) {
+    result.dataset.job = job.id;
+    result.innerHTML = `<img src="${esc(`${server}/files/${encodeURIComponent(files[0])}`)}" alt="Your finished GIF" />`
+      + `<div class="gif-actions">${files.map((name, i) => `<a class="text-btn" href="${esc(`${server}/files/${encodeURIComponent(name)}`)}" download target="_blank" rel="noreferrer">Save ${files.length > 1 ? `GIF ${i + 1}` : 'GIF'}</a>`).join('')}</div>`;
+  }
+  result.classList.remove('hidden');
 };
 
 /* Radio rows (side panel) or chips (popup); the chosen one gets circled. */

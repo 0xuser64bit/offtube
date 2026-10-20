@@ -32,7 +32,8 @@
     </div>
 
     <div class="keep-col">
-      <fieldset class="chips video-only" id="qualities" aria-label="Format"></fieldset>
+      <fieldset class="chips" id="qualities" aria-label="Format"></fieldset>
+      <div id="gifOptions" class="hidden"></div>
       <p class="tally num" id="tally"></p>
 
       <div class="keep-actions">
@@ -48,6 +49,7 @@
         <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
         <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" aria-label="Transfer log"></pre></details>
       </div>
+      <div id="gifResult" class="gif-result hidden" aria-live="polite"></div>
       <div class="link-row" id="linkRow"><span class="link-text" id="linkText"></span><button class="text-btn" type="button" id="changeLink">Change</button></div>
       <form class="link-edit hidden" id="linkForm" autocomplete="off">
         <label class="visually-hidden" for="url">Link to keep</label>

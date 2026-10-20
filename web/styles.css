@@ -337,6 +337,17 @@ figure { margin: 0; }
 
 .formats { min-width: 0; margin: 0; padding: 0; border: 0; }
 .formats .label { margin-bottom: 8px; }
+.gif-options { min-width: 0; margin: 0; padding: 0; border: 0; }
+.gif-options legend { margin-bottom: 16px; }
+.gif-options .check { margin-top: 16px; }
+.gif-options select { font-size: 13.5px; padding-left: 8px; }
+.gif-summary { margin: 16px 0 0; padding: 12px 0; border-block: 1px solid var(--rule); font-size: 14px; }
+.gif-result { margin-top: 18px; }
+.gif-result-actions { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+.gif-result-actions a { flex: none; }
+.gif-preview { display: block; max-width: 100%; max-height: min(64vh, 620px); object-fit: contain; }
+[data-output="gif"][data-kind="gallery"] #discTrim { display: block !important; }
+[data-output="gif"] #discSubs { display: none !important; }
 .format-list { border-top: 1px solid var(--rule); }
 .fmt { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; min-height: 48px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--rule); cursor: pointer; }
 .fmt input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
