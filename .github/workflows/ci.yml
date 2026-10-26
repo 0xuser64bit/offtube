@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Install validation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Validate backend, media encoding and clients
+        env:
+          PYTHON: python
+        run: bash tools/check.sh
+
+  container:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Build runtime image
+        run: docker build --tag offtube:ci .
+      - name: Check packaged GIF worker
+        run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/gif_source.py
+      - name: Check HTTP startup
+        run: |
+          docker run --detach --name offtube-ci --publish 127.0.0.1:18000:8000 offtube:ci
+          curl --fail --silent --show-error --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:18000/api/health
+      - name: Container diagnostics and cleanup
+        if: always()
+        run: |
+          docker logs offtube-ci || true
+          docker rm --force offtube-ci || true

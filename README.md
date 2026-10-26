@@ -95,6 +95,8 @@ docker compose down
 - Port is published on loopback only (`127.0.0.1:8000:8000`); inside the
   container `HOST=0.0.0.0` is required (a container has its own loopback).
 - Native `./run.sh` defaults to `HOST=127.0.0.1`; `HOST=0.0.0.0` is docker-only.
+- Native IPv6 loopback is supported with `HOST=::1 ./run.sh`; open
+  `http://[::1]:8000` and use that address in the extension's server setting.
 - Limitation: cookies **from browser** can't work in docker (no host browser
   profile inside the container) — use the cookies-file upload/paste instead.
   Native mode + the OS services below keep from-browser working.
@@ -138,6 +140,12 @@ The Docker image already includes Deno.
    - Tip from the field (YouTube): export in an incognito window with only `youtube.com/robots.txt` open if you hit weird auth errors; disable adblockers while exporting; make sure only the member account is signed in.
 6. **Keep** — the print develops as it downloads; queue another while one runs. Finished files get a pencil tick and appear under Kept and in `downloads/`. A running job stops itself if free disk space drops under 200 MB.
 
+Cookie files created by offtube are published atomically with owner-only
+permissions on POSIX. To reuse a manually exported file, save it as
+`cookies/session_cookies.txt` (protect it with `chmod 600` on POSIX). Every
+inspection and download gets a separate, site-filtered copy, removed when that
+request finishes; engine cookie updates never overwrite the saved export.
+
 ## Project layout
 
 ```
@@ -149,6 +157,8 @@ offtube/
   downloads/        # finished files (contents git-ignored, dir kept)
   cookies/          # per-job isolates (never committed; cleaned on boot + job end)
   deploy/           # launchd plist + systemd user unit (path-templated)
+  tools/            # isolated GIF source worker, validation gate, icon generator
+  ARCHITECTURE.md   # system map, invariants and prioritized engineering risks
   Dockerfile, docker-compose.yml
   tools/gen_icons.py
   requirements.txt  # runtime: pinned yt-dlp + gallery-dl
@@ -157,10 +167,20 @@ offtube/
 
 ## Testing
 
+For the complete local gate, install the Python dependencies below and make
+Node.js, ffmpeg and ffprobe available on PATH, then run `bash tools/check.sh`.
+It runs Python tests, real media encoding, JavaScript syntax/tests and patch
+whitespace checks. Override the interpreter with `PYTHON=/path/to/python`.
+
 ```bash
 ./.venv/bin/pip install -q -r requirements-dev.txt
 ./.venv/bin/python -m pytest tests -q   # no external network
+node --test tests/extension_gif.test.js tests/test_web_gif.mjs
 ```
+
+GitHub CI runs the full gate on Python 3.10 and 3.12, builds the Docker image,
+checks the packaged GIF worker and smoke-tests HTTP startup. See
+`ARCHITECTURE.md` for the system map and remaining production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
 stubbed `YoutubeDL` and a fake gallery-dl CLI, covering health/headers,
@@ -178,6 +198,13 @@ real generated-media encoding (when ffmpeg and ffprobe are on PATH), including
 duration, frame count, dimensions, looping and anamorphic display ratios.
 
 ## API (for scripting)
+
+Media requests validate field types before inspection or enqueueing and return
+JSON `{ok: false, error}` with HTTP 400 for malformed fields. URLs, clip times,
+quality IDs, cookie fields and subtitle languages must be strings; `subtitles`
+and `auto_subs` must be JSON booleans, not strings. Playlist bounds accept
+integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
+`none`, `browser`, `upload`, `text` or `file`. Optional null values use defaults.
 
 - `GET /api/health` → `{checks: {yt_dlp, gallery_dl, ffmpeg, deno, node, node_supported, js_runtime, js_runtime_ok}}` (cached 60s)
 - `GET /api/source?url=…` → `{supported, source: {id, label}, engines}` or `{supported: false, error}` (local extractor match, no network)
