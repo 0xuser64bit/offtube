@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -86,7 +87,25 @@ def source_job(tmp_path, monkeypatch):
 
 
 @requires_ffmpeg
-def test_real_source_range_and_cookies(source_job, source_server):
+@pytest.mark.parametrize("layout", ["checkout", "container"])
+def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monkeypatch, layout):
+    if layout == "container":
+        runtime = tmp_path / "runtime"
+        runtime.mkdir()
+        for line in (app.BASE_DIR / "Dockerfile").read_text().splitlines():
+            if not line.startswith("COPY "):
+                continue
+            source_name, destination_name = shlex.split(line)[1:]
+            source = app.BASE_DIR / source_name
+            destination = runtime / destination_name
+            if source.is_dir():
+                shutil.copytree(source, destination, dirs_exist_ok=True)
+            else:
+                if destination_name.endswith("/"):
+                    destination = destination / source.name
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+        monkeypatch.setattr(app, "BASE_DIR", runtime)
     url, _, cookies = source_server
     payload = {"url": url + "/video.mp4", "quality": "gif", "gif_size": 320, "gif_fps": 10,
                "clip_from": "0.5", "clip_to": "1.5", "cookies_mode": "text",
