@@ -1,5 +1,7 @@
 """Unit tests for app.py pure helpers. No network, no yt-dlp needed."""
 
+import os
+import stat
 import sys
 from pathlib import Path
 
@@ -38,6 +40,25 @@ def test_validate_url_accepts_youtube(url):
 def test_validate_url_rejects_bad_and_local(url):
     with pytest.raises(ValueError):
         app.validate_url(url)
+
+
+@pytest.mark.parametrize("url", [True, 42, [], ["https://youtu.be/x"], {"url": "x"}])
+def test_validate_url_rejects_non_text(url):
+    with pytest.raises(ValueError, match="text"):
+        app.validate_url(url)
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"cookies_mode": None, "playlist_mode": None, "title": None},
+    {"cookies_mode": "BROWSER", "playlist_mode": "PLAYLIST"},
+    {"playlist_start": 1, "playlist_end": "3", "subtitles": False},
+    {"playlist_start": "", "playlist_end": None},
+])
+def test_media_payload_validation_preserves_supported_values(payload):
+    original = dict(payload)
+    app.validate_media_payload(payload)
+    assert payload == original
 
 
 @pytest.mark.parametrize("url, sid, label", [
@@ -279,6 +300,47 @@ def test_resolve_cookies_persist_false_writes_nothing(tmp_path, monkeypatch):
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
+@pytest.mark.parametrize("existing", [False, True])
+def test_cookie_files_are_private(tmp_path, monkeypatch, existing):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    target = app.cookie_file_for("private")
+    if existing:
+        target.write_text("OLD")
+        target.chmod(0o644)
+    app.resolve_cookies({"cookies_mode": "text", "cookies_text": "SECRET"}, "private")
+    assert target.read_text() == "SECRET"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+    assert list(tmp_path.iterdir()) == [target]
+
+
+def test_cookie_write_does_not_follow_target_symlink(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    outside = tmp_path / "outside.txt"
+    outside.write_text("UNTOUCHED")
+    target = app.cookie_file_for("linked")
+    target.symlink_to(outside)
+    app.resolve_cookies({"cookies_mode": "text", "cookies_text": "SECRET"}, "linked")
+    assert outside.read_text() == "UNTOUCHED"
+    assert not target.is_symlink()
+    assert target.read_text() == "SECRET"
+
+
+def test_failed_cookie_publish_preserves_previous_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    target = app.cookie_file_for("atomic")
+    target.write_text("OLD")
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("Cannot publish cookie file")
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="Cannot publish"):
+        app.resolve_cookies({"cookies_mode": "text", "cookies_text": "SECRET"}, "atomic")
+    assert target.read_text() == "OLD"
+    assert list(tmp_path.iterdir()) == [target]
+
+
 # --- cookie export trimming ---------------------------------------------------
 YOUTUBE_ROW = ".youtube.com\tTRUE\t/\tFALSE\t9999999999\tLOGIN_INFO\tabc"
 GOOGLE_ROW = ".google.com\tTRUE\t/\tTRUE\t9999999999\tAPISID\tg"
@@ -287,6 +349,62 @@ FOREIGN_ROW = ".facebook.com\tTRUE\t/\tTRUE\t9999999999\tc_user\tfb"
 
 
 HTTPONLY_FOREIGN = "#HttpOnly_.facebook.com\tTRUE\t/\tTRUE\t9999999999\tc_user\tfb"
+
+
+def test_saved_session_is_copied_and_filtered_per_request(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    session = tmp_path / "session.txt"
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", session)
+    original = "# Netscape HTTP Cookie File\n" + YOUTUBE_ROW + "\n" + FOREIGN_ROW + "\n"
+    session.write_text(original)
+    payload = {"url": "https://youtu.be/abc123abc12", "cookies_mode": "file"}
+    paths = [Path(app.resolve_cookies(payload, job_id)["cookiefile"])
+             for job_id in ("download", "info-request")]
+    assert paths[0] != paths[1] and session not in paths
+    for path in paths:
+        assert "LOGIN_INFO" in path.read_text() and "facebook" not in path.read_text()
+    paths[0].write_text("UPDATED BY ENGINE")
+    assert "LOGIN_INFO" in paths[1].read_text()
+    assert session.read_text() == original
+    for job_id in ("download", "info-request"):
+        app.cleanup_job_cookies(job_id)
+    assert list(tmp_path.iterdir()) == [session]
+
+
+def test_saved_session_validation_does_not_create_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    session = tmp_path / "session.txt"
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", session)
+    session.write_text("AAA")
+    app.resolve_cookies({"cookies_mode": "file"}, "validate", persist=False)
+    assert list(tmp_path.iterdir()) == [session]
+
+
+@pytest.mark.parametrize("failure", [OSError("SECRET /private/path"), UnicodeError("SECRET")])
+def test_saved_session_read_errors_are_safe_validation_errors(tmp_path, monkeypatch, failure):
+    session = tmp_path / "session.txt"
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", session)
+    session.write_text("AAA")
+
+    def fail_read(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(Path, "read_text", fail_read)
+    with pytest.raises(ValueError, match="Could not read saved cookies") as error:
+        app.resolve_cookies({"cookies_mode": "file"}, "validate", persist=False)
+    assert "SECRET" not in str(error.value) and "/private/path" not in str(error.value)
+    assert list(tmp_path.iterdir()) == [session]
+
+
+def test_saved_session_size_is_bounded_before_copy(tmp_path, monkeypatch):
+    session = tmp_path / "session.txt"
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app, "SESSION_COOKIE_FILE", session)
+    session.write_bytes(b"x" * (app.MAX_COOKIES_TEXT + 1))
+    with pytest.raises(ValueError, match="too large"):
+        app.resolve_cookies({"cookies_mode": "file"}, "validate", persist=False)
+    assert list(tmp_path.iterdir()) == [session]
 
 
 def test_filter_cookies_keeps_youtube_drops_foreign():

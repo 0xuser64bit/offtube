@@ -43,6 +43,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import socketserver
 import subprocess
 import sys
@@ -197,6 +198,8 @@ def _is_ip(host: str) -> bool:
 def validate_url(url: str | None) -> str:
     """Syntax + host sanity: http(s) on a public-looking hostname.
     Whether the site is supported is resolve_source's call."""
+    if url is not None and not isinstance(url, str):
+        raise ValueError("URL must be text.")
     u = (url or "").strip()
     if not u:
         raise ValueError("Paste a link first.")
@@ -748,6 +751,21 @@ def cleanup_stale_files() -> None:
         pass
 
 
+def write_cookie_file(target: Path, text: str) -> None:
+    """Publish a complete, owner-only cookie file without following target symlinks."""
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=target.parent,
+                                         prefix="job-write-", suffix=".cookies.txt",
+                                         delete=False) as cookie_file:
+            temporary = Path(cookie_file.name)
+            cookie_file.write(text)
+        temporary.replace(target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = True) -> dict:
     """Return yt-dlp cookie opts from UI payload. Raises ValueError on bad input.
 
@@ -767,6 +785,13 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
         return opts
     if mode in ("upload", "text", "file"):
         text = payload.get("cookies_text") or ""
+        try:
+            if not text and SESSION_COOKIE_FILE.is_file():
+                if SESSION_COOKIE_FILE.stat().st_size > MAX_COOKIES_TEXT:
+                    raise ValueError("Saved cookies file is too large (max ~1 MB). Export just this site's cookies.")
+                text = SESSION_COOKIE_FILE.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("Could not read saved cookies. Check file permissions and export a UTF-8 cookies.txt file.") from exc
         if len(text) > MAX_COOKIES_TEXT:
             raise ValueError("Cookies paste is too large (max ~1 MB). Export just this site's cookies instead of your whole browser.")
         try:
@@ -782,13 +807,8 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
                     raise ValueError(f"No {label} cookies found in that file. Export while signed in to {label} (single account), then retry.")
             target = cookie_file_for(job_id)
             if persist:
-                target.write_text(text, encoding="utf-8")
+                write_cookie_file(target, text)
             opts["cookiefile"] = str(target)
-            return opts
-        # Manually placed session file (read-only shared use is safe).
-        # Copy your cookies.txt to cookies/session_cookies.txt to reuse it.
-        if SESSION_COOKIE_FILE.exists() and SESSION_COOKIE_FILE.stat().st_size > 0:
-            opts["cookiefile"] = str(SESSION_COOKIE_FILE)
             return opts
         raise ValueError("No cookies provided. Upload a cookies.txt file or paste its contents.")
     return opts
@@ -936,9 +956,37 @@ def _engine_error(exc: Exception) -> str:
     return msg.removeprefix("ERROR: ")
 
 
+def validate_media_payload(payload: dict) -> None:
+    """Check JSON field types before an engine or queue sees the request."""
+    text_fields = (
+        "url", "quality", "clip_from", "clip_to", "playlist_mode", "playlist_items",
+        "cookies_mode", "cookies_browser", "cookies_browser_profile", "cookies_text",
+        "sub_lang", "title", "thumbnail",
+    )
+    for field in text_fields:
+        value = payload.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ValueError(f"{field} must be text.")
+    for field in ("subtitles", "auto_subs"):
+        value = payload.get(field)
+        if value is not None and type(value) is not bool:
+            raise ValueError(f"{field} must be true or false.")
+    for field in ("playlist_start", "playlist_end"):
+        value = payload.get(field)
+        if value is not None and type(value) not in (str, int):
+            raise ValueError(f"{field} must be an integer or text.")
+    for field, allowed, default in (
+        ("cookies_mode", ("none", "browser", "upload", "text", "file"), "none"),
+        ("playlist_mode", ("single", "playlist"), "single"),
+    ):
+        if (payload.get(field) or default).lower() not in allowed:
+            raise ValueError(f"{field} must be one of: {', '.join(allowed)}.")
+
+
 def fetch_info(url: str, payload: dict) -> dict:
     """Inspect `url` with each engine that supports it, in order, and return
     the first answer, tagged with its source and engine."""
+    validate_media_payload(payload)
     url, src = check_url(url)
     if not info_sema.acquire(timeout=60):
         raise RuntimeError("Too many inspect requests. Wait a moment and retry.")
@@ -1910,6 +1958,7 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     success or (None, (message, status)) on refusal. Shared by /api/download
     and /api/retry so a retry is byte-for-byte the same code path."""
     try:
+        validate_media_payload(body)
         url, src = check_url(body.get("url"))
     except ValueError as exc:
         return None, (str(exc), 400)
@@ -2084,11 +2133,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         127.0.0.1 (DNS rebinding) and talk to offtube directly. Origin/Referer
         checks already stop the browser path; this closes non-browser clients.
         """
-        host = (self.headers.get("Host") or "").split(":", 1)[0].strip().lower()
-        if not host:
-            return True  # HTTP/1.0-style probes
-        host = host.replace("[", "").replace("]", "")
-        return host in ("127.0.0.1", "localhost", "::1")
+        values = self.headers.get_all("Host", [])
+        if not values:
+            return self.request_version == "HTTP/1.0"
+        if len(values) != 1:
+            return False
+        match = re.fullmatch(r"(?:127\.0\.0\.1|localhost|\[::1\])(?::([0-9]{1,5}))?",
+                             values[0].strip(), re.IGNORECASE)
+        return bool(match and (match[1] is None or 1 <= int(match[1]) <= 65535))
 
     def serve_static(self, rel: str):
         path = safe_child(WEB_DIR, rel)
@@ -2154,6 +2206,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # CORS preflight for the local extension client (fetch with
         # Content-Type: application/json triggers one). Untrusted origins
         # get 204 without ACAO so the browser hides the response.
+        if not self.check_host():
+            return self.send_error(403)
         self.send_response(204)
         self._apply_cors()
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -2336,6 +2390,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return self.send_error(404)
 
 
+class LocalServer(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+    def __init__(self, server_address: tuple[str, int], handler_class: type[Handler]):
+        self.address_family = socket.AF_INET6 if server_address[0] == "::1" else socket.AF_INET
+        super().__init__(server_address, handler_class)
+
+
 def main():
     try:
         port = int(os.environ.get("PORT", "8000"))
@@ -2352,15 +2415,8 @@ def main():
         print("HOST must be 127.0.0.1, localhost, ::1, or 0.0.0.0 (docker only).", file=sys.stderr)
         raise SystemExit(2)
     cleanup_stale_files()
-    # Must be set before bind; assigning on the instance afterwards is a no-op.
-    socketserver.ThreadingTCPServer.allow_reuse_address = True
-
-    class ReuseServer(socketserver.ThreadingTCPServer):
-        allow_reuse_address = True
-        daemon_threads = True
-
-    with ReuseServer((host, port), Handler) as httpd:
-        shown_host = "127.0.0.1" if host in ("0.0.0.0", "::1") else host
+    with LocalServer((host, port), Handler) as httpd:
+        shown_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::1" else host)
         print(f"\nofftube running → http://{shown_host}:{port}")
         if host == "0.0.0.0":
             print("WARNING: listening on all interfaces (docker mode). "

@@ -5,12 +5,14 @@ simulates a download by firing progress hooks and writing one output file.
 """
 
 import json
-import socketserver
+import http.client
+import socket
 import sys
 import threading
 import time
 import urllib.parse
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -77,13 +79,13 @@ def server(tmp_path, monkeypatch):
     app.COOKIES_DIR.mkdir(exist_ok=True)
     app.jobs.clear()
     app.futures.clear()
-    httpd = socketserver.ThreadingTCPServer(("127.0.0.1", 0), app.Handler)
-    httpd.daemon_threads = True
+    httpd = app.LocalServer(("127.0.0.1", 0), app.Handler)
     port = httpd.server_address[1]
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{port}"
     httpd.shutdown()
+    httpd.server_close()
     thread.join(timeout=5)
     app.jobs.clear()
     app.futures.clear()
@@ -236,6 +238,50 @@ def test_invalid_json_rejected(server):
     status, body, _ = api(server, "POST", "/api/info", raw_body=b"not json{{{")
     assert status == 400
     assert "Invalid JSON" in body.get("error", "")
+
+
+@pytest.mark.parametrize("route", ["/api/info", "/api/download"])
+def test_media_payload_types_rejected_before_work(server, monkeypatch, route):
+    def unexpected_inspection(*args, **kwargs):
+        pytest.fail("Invalid input reached an engine")
+
+    monkeypatch.setattr(app, "inspect_ytdlp", unexpected_inspection)
+    monkeypatch.setattr(app, "inspect_gallery", unexpected_inspection)
+    invalid_fields = {
+        "url": {"value": "https://youtu.be/abc123abc12"},
+        "quality": ["720"],
+        "cookies_mode": True,
+        "cookies_browser": ["chrome"],
+        "cookies_browser_profile": {},
+        "cookies_text": ["SECRET"],
+        "playlist_mode": 1,
+        "playlist_items": [1, 2],
+        "playlist_start": True,
+        "playlist_end": 2.5,
+        "clip_from": [],
+        "clip_to": 30,
+        "subtitles": "false",
+        "auto_subs": 1,
+        "sub_lang": ["en"],
+        "title": {"value": "Title"},
+        "thumbnail": ["https://example.com/image.jpg"],
+    }
+    for field, value in invalid_fields.items():
+        status, body, _ = api(server, "POST", route,
+                              {"url": "https://youtu.be/abc123abc12", field: value})
+        assert status == 400, (field, status, body)
+        assert body["ok"] is False and body["error"], (field, body)
+        assert "SECRET" not in body["error"]
+    assert not app.jobs
+
+
+@pytest.mark.parametrize("route", ["/api/info", "/api/download"])
+def test_unknown_media_modes_rejected(server, route):
+    for field in ("cookies_mode", "playlist_mode"):
+        status, body, _ = api(server, "POST", route,
+                              {"url": "https://youtu.be/abc123abc12", field: "unknown"})
+        assert status == 400 and field in body["error"]
+    assert not app.jobs
 
 
 def _acao(headers):
@@ -423,6 +469,57 @@ def test_non_loopback_host_rejected(server):
     status, body, _ = api(server, "GET", "/api/health",
                            headers={"Host": "127.0.0.1:8000"})
     assert status == 200
+
+
+def test_loopback_host_authorities(server):
+    for host in ("localhost", "LOCALHOST:8000", "127.0.0.1", "127.0.0.1:8000",
+                 "[::1]", "[::1]:8000"):
+        status, _, _ = api(server, "GET", "/api/health", headers={"Host": host})
+        assert status == 200, host
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "OPTIONS"])
+def test_invalid_host_authorities_rejected(server, method):
+    for host in ("localhost.evil.test", "localhost@evil.test", "localhost/path",
+                 "localhost:", "localhost:abc", "localhost:0", "localhost:65536",
+                 "::1", "[::1]:abc", "[::1]:8000:9000", "127.0.0.1:8000/path"):
+        status, _, headers = api(server, method, "/api/health", headers={"Host": host})
+        assert status == 403, (method, host, status)
+        assert _acao(headers) is None
+
+
+def test_missing_and_duplicate_host_headers(server):
+    host, port = urllib.parse.urlsplit(server).hostname, urllib.parse.urlsplit(server).port
+    for values in ([], ["localhost", "evil.test"], ["localhost", "localhost"]):
+        with closing(http.client.HTTPConnection(host, port, timeout=5)) as connection:
+            connection.putrequest("GET", "/api/health", skip_host=True)
+            for value in values:
+                connection.putheader("Host", value)
+            connection.endheaders()
+            response = connection.getresponse()
+            assert response.status == 403, values
+            response.read()
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(b"GET /api/health HTTP/1.0\r\n\r\n")
+        assert b" 200 " in connection.recv(4096).split(b"\r\n", 1)[0]
+
+
+def test_server_binds_ipv6_loopback():
+    if not socket.has_ipv6:
+        pytest.skip("IPv6 is unavailable")
+    with app.LocalServer(("::1", 0), app.Handler) as httpd:
+        assert httpd.address_family == socket.AF_INET6
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with closing(http.client.HTTPConnection("::1", httpd.server_address[1], timeout=5)) as connection:
+                connection.request("GET", "/api/health")
+                response = connection.getresponse()
+                assert response.status == 200
+                assert json.loads(response.read())["ok"] is True
+        finally:
+            httpd.shutdown()
+            thread.join(timeout=5)
 
 
 # --- /api/jobs/clear -------------------------------------------------------------
