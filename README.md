@@ -100,6 +100,10 @@ docker compose down
 - Limitation: cookies **from browser** can't work in docker (no host browser
   profile inside the container) — use the cookies-file upload/paste instead.
   Native mode + the OS services below keep from-browser working.
+- Stopping — Ctrl+C, `docker compose down`, `systemctl --user stop offtube`
+  or `launchctl unload` — refuses new work, cancels queued jobs, stops
+  running ones together with their processes, removes per-job cookie copies
+  and exits within about 5 seconds. A second Ctrl+C exits at once.
 
 ```bash
 # macOS (native, auto-start on login) — run from this clone

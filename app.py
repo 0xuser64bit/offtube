@@ -34,6 +34,7 @@ from __future__ import annotations
 import datetime as _dt
 import concurrent.futures
 import email.utils
+import errno
 import functools
 import http.server
 import io
@@ -54,6 +55,7 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -88,6 +90,7 @@ except ImportError:  # pragma: no cover
 jobs: dict[str, dict] = {}
 futures: dict[str, concurrent.futures.Future] = {}
 jobs_lock = threading.Lock()
+shutting_down = False  # set once by shutdown_jobs(); no job starts after it
 # Bounded concurrency: at most 2 simultaneous yt-dlp runs; the rest queue in
 # the executor instead of spawning unbounded threads.
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dl")
@@ -2153,12 +2156,61 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
         "payload": dict(body),
     }
     with jobs_lock:
+        if shutting_down:
+            return None, ("offtube is shutting down.", 503)
         if active_job_count_locked() >= MAX_ACTIVE_JOBS:
             return None, ("Too many active downloads. Wait for one to finish.", 429)
         jobs[jid] = job
         evict_jobs_locked()
         futures[jid] = executor.submit(run_download, jid, body)
     return jid, None
+
+
+SHUTDOWN_GRACE = 5.0  # seconds running jobs get to stop before the process exits anyway
+
+
+def shutdown_jobs(grace: float | None = None) -> bool:
+    """Stop all work for a server shutdown: refuse new jobs, cancel queued
+    ones, ask running ones to stop and kill their process trees, then give
+    them `grace` seconds (SHUTDOWN_GRACE). Every job's cookie copy is
+    removed either way. True when every job thread finished in time;
+    in-process yt-dlp can sit in work that fires no hook (extraction, an
+    ffmpeg merge) for longer."""
+    global shutting_down
+    grace = SHUTDOWN_GRACE if grace is None else grace
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    running: list[concurrent.futures.Future] = []
+    with jobs_lock:
+        shutting_down = True
+        for jid, job in jobs.items():
+            if is_terminal(job):
+                continue
+            future = futures.get(jid)
+            if future is not None and future.cancel():
+                job.update(status="cancelled", detail="Cancelled: offtube stopped.", finished_at=now)
+                futures.pop(jid, None)
+                continue
+            job["cancel_requested"] = True
+            job["detail"] = "Stopping: offtube is shutting down…"
+            if job.get("proc") is not None:
+                stop_process_tree(job["proc"], wait=None)
+            if future is not None:
+                running.append(future)
+    executor.shutdown(wait=False, cancel_futures=True)
+    _, late = concurrent.futures.wait(running, timeout=grace)
+    if late:
+        # A late job may have started a child after the first pass.
+        with jobs_lock:
+            for job in jobs.values():
+                if job.get("proc") is not None:
+                    stop_process_tree(job["proc"], wait=None)
+    # Credentials never outlive the server, even a job that is still busy.
+    for cookie in list(COOKIES_DIR.glob("job-*.cookies.txt")):
+        try:
+            cookie.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return not late
 
 
 # ------------------------------- HTTP layer -------------------------------
@@ -2665,24 +2717,58 @@ def main():
         print("HOST must be 127.0.0.1, localhost, ::1, or 0.0.0.0 (docker only).", file=sys.stderr)
         raise SystemExit(2)
     cleanup_stale_files()
-    with LocalServer((host, port), Handler) as httpd:
-        shown_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::1" else host)
-        print(f"\nofftube running → http://{shown_host}:{port}")
-        if host == "0.0.0.0":
-            print("WARNING: listening on all interfaces (docker mode). "
-                  "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
-        print(f"Downloads folder   → {DOWNLOAD_DIR}")
-        print("Paste a link in the page, pick quality / from-to, hit Download.\n")
-        try:
+    try:
+        httpd = LocalServer((host, port), Handler)
+    except OSError as exc:
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        print(f"Port {port} is already in use — is offtube already running? "
+              "Set PORT to use another one.", file=sys.stderr)
+        raise SystemExit(1)
+    # systemd, launchd and docker stop send SIGTERM: stop the same way as Ctrl+C.
+    signal.signal(signal.SIGTERM, _interrupt)
+    try:
+        with httpd:
+            shown_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::1" else host)
+            print(f"\nofftube running → http://{shown_host}:{port}")
+            if host == "0.0.0.0":
+                print("WARNING: listening on all interfaces (docker mode). "
+                      "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
+            print(f"Downloads folder   → {DOWNLOAD_DIR}")
+            print("Paste a link in the page, pick quality / from-to, hit Download.\n", flush=True)
             httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\nbye!")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-            with jobs_lock:
-                for job in jobs.values():
-                    if job.get("proc") is not None:
-                        stop_process_tree(job["proc"], wait=None)
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        traceback.print_exc()
+        stop_work(exit_code=1)
+    stop_work(exit_code=0)
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _exit_now(signum, frame):
+    os.write(2, b"Stopping now, without waiting for jobs.\n")
+    os._exit(1)
+
+
+def stop_work(exit_code: int) -> None:
+    """Runs once the listener is closed. A second Ctrl+C or SIGTERM exits at
+    once; otherwise jobs get SHUTDOWN_GRACE seconds to stop."""
+    signal.signal(signal.SIGINT, _exit_now)
+    signal.signal(signal.SIGTERM, _exit_now)
+    print("\nStopping…", flush=True)
+    if not shutdown_jobs():
+        # Its thread would hold the interpreter open at exit; everything
+        # else (process trees, cookie copies) is already cleaned up.
+        print("A job was still busy inside yt-dlp; exiting without it.", flush=True)
+        sys.stderr.flush()
+        os._exit(exit_code)
+    if exit_code:
+        raise SystemExit(exit_code)
+    print("bye!")
 
 
 if __name__ == "__main__":
