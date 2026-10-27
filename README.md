@@ -190,16 +190,20 @@ whitespace checks. Override the interpreter with `PYTHON=/path/to/python`.
 ./.venv/bin/pip install -q -r requirements-dev.txt
 ./.venv/bin/python -m pytest tests -q   # no external network
 node --test tests/extension_gif.test.js tests/test_web_gif.mjs
-node --test tests/browser/desk.test.mjs # Chromium; needs Playwright (+ axe-core)
+node --test tests/browser/*.test.mjs     # Chromium; needs Playwright (+ axe-core)
 ```
 
-`tests/browser/` drives the web desk in Chromium against the real server with
-a stubbed yt-dlp: keeping a video, circling a collection, searching a
-library, what a screen reader is told, and an axe-core WCAG 2.2 AA audit in
-light and dark. It is skipped when Playwright isn't installed (and the audit
-when axe-core isn't); to run it, install `playwright@1.63.0` and
+`tests/browser/` drives the web desk and the extension in Chromium against
+the real server with a stubbed yt-dlp. On the desk: keeping a video,
+circling a collection, searching a library and what a screen reader is told.
+In the extension, loaded unpacked: the popup with the server off and keeping
+a pasted link, a collection handed from the popup to the side panel, and the
+side panel's library. Both get an axe-core WCAG 2.2 AA audit in light and
+dark. The suites are skipped when Playwright isn't installed (and the audits
+when axe-core isn't); to run them, install `playwright@1.63.0` and
 `axe-core@4.14.0` where Node finds them (or point `NODE_PATH` there) and run
-`npx playwright install chromium`.
+`npx playwright install chromium`. Other axe-core versions check different
+rules, so use the pinned one.
 
 GitHub CI runs the full gate on Python 3.10 and 3.12, the browser suite with
 Playwright and axe-core required, builds the Docker image,

@@ -59,12 +59,12 @@ jobs:
           python -m pip install -r requirements.txt
           npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
           "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
-      - name: Exercise the web desk in Chromium
+      - name: Exercise the web desk and the extension in Chromium
         env:
           NODE_PATH: ${{ runner.temp }}/browser/node_modules
           OFFTUBE_BROWSER_TESTS: required
           PYTHON: python
-        run: node --test tests/browser/desk.test.mjs
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
 
   container:
     runs-on: ubuntu-24.04

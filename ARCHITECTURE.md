@@ -97,7 +97,8 @@ The gate compiles Python, runs pytest (including real generated-media
 encoding, the Docker COPY-layout regression, and `tests/test_shutdown.py`,
 which runs `main()` in a subprocess and sends it real SIGINT/SIGTERM), checks
 shipped JavaScript syntax, runs the web/extension Node tests and the
-Chromium suite in `tests/browser/` (skipped without Playwright), and checks
+Chromium suites in `tests/browser/` for the web desk and the unpacked
+extension (skipped without Playwright), and checks
 patch whitespace. It uses `.venv/bin/python` by default; set `PYTHON` to
 select another interpreter.
 
@@ -121,12 +122,14 @@ performance or browser-accessibility audit:
 2. **Constrain outbound destinations.** Refusing private and link-local
    addresses after DNS resolution, including on redirects, needs hooks into
    both engines' HTTP layers.
-3. **Expand release verification.** The web desk is exercised in Chromium
-   with an axe-core audit; the popup and side panel are not (Playwright can
-   load the unpacked extension), nor are keyboard and focus order, narrow
-   layouts, real-site failures, Windows (the exclusive port bind and
-   `taskkill` tree stop have only been unit-tested) and arm64 images. An
-   automated audit is a regression check, not accessibility certification.
+3. **Expand release verification.** The web desk, popup and side panel are
+   exercised in Chromium with axe-core audits. The extension runs there as
+   pages in tabs, so the toolbar popup's own window, opening the side panel,
+   the context menu and the background worker are not; nor are keyboard and
+   focus order, the web desk at narrow widths, real-site failures, Windows
+   (the exclusive port bind and `taskkill` tree stop have only been
+   unit-tested) and arm64 images. An automated audit is a regression check,
+   not accessibility certification.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules
