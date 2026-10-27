@@ -31,6 +31,10 @@
   <dict>
     <key>PORT</key>
     <string>8000</string>
+    <!-- launchd's own PATH is /usr/bin:/bin:/usr/sbin:/sbin, which has no
+         Homebrew: ffmpeg, deno and a current python3 would all go missing. -->
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
   </dict>
 </dict>
 </plist>

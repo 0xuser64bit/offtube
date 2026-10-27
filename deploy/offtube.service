@@ -9,17 +9,21 @@
 #   systemctl --user enable --now offtube
 # Logs: journalctl --user -u offtube -f
 [Unit]
-Description=offtube local YouTube keeper (127.0.0.1:8000)
-After=network-online.target
-Wants=network-online.target
+# No network-online.target: a user manager can't see system targets, and
+# offtube only needs the network once a link is pasted.
+Description=offtube local media keeper (127.0.0.1:8000)
 
 [Service]
 Type=simple
 WorkingDirectory=REPLACE_DIR
-ExecStart=REPLACE_DIR/run.sh
+# Quoted, so a clone path with spaces still works.
+ExecStart="REPLACE_DIR/run.sh"
 Restart=on-failure
 RestartSec=3
 Environment=PORT=8000
+# Deno's installer and pipx put tools under ~/.deno/bin and ~/.local/bin,
+# which are on a login shell's PATH but not the service manager's.
+Environment=PATH=%h/.deno/bin:%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 [Install]
 WantedBy=default.target

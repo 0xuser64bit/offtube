@@ -23,7 +23,7 @@ a product decision, not a prerequisite for reliable local operation.
 | Library | `library_name`, `library_snapshot`, `library_page`, `open_library_file`, `delete_library_file` | The regular files directly in `downloads/` - never dotfiles, temps, symlinks or special files - for listing, serving and deleting alike. The server searches and pages the whole library; clients never filter a partial list. `/files/` answers single byte ranges. Job history is intentionally in memory and clears on restart. No database migrations are needed. |
 | Web client | `web/index.html`, `web/app.js`, `web/styles.css` | Plain JS state, polling, local preferences, self-hosted fonts, restrictive CSP, escaped generated markup. |
 | Extension | `extension/shared.js`, popup, side panel, background worker | Chrome storage for preferences and pending selections; loopback server URLs only; background worker has no durable global state. |
-| Deployment | launchers, Docker/Compose, `deploy/` | Python 3.10+; pinned engine versions; native browser cookies are unavailable in Docker. Docker must package the yt-dlp worker as well as `app.py` and `web/`, and runs `tini` as PID 1. SIGTERM stops the server like Ctrl+C. |
+| Deployment | launchers, Docker/Compose, `deploy/` | Python 3.10+; pinned engine versions; native browser cookies are unavailable in Docker. Docker must package the yt-dlp worker as well as `app.py` and `web/`, and runs `tini` as PID 1. SIGTERM stops the server like Ctrl+C. Services don't get a login shell's PATH, so the launchd agent and the systemd unit set one that reaches Homebrew, `~/.deno/bin` and `~/.local/bin`. |
 
 ## Invariants to preserve
 

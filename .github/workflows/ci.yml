@@ -40,6 +40,10 @@ jobs:
         run: bash tools/check.sh
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
+      - name: Check the README's systemd unit
+        run: |
+          sed "s|REPLACE_DIR|$PWD|g" deploy/offtube.service > "$RUNNER_TEMP/offtube.service"
+          systemd-analyze --user verify "$RUNNER_TEMP/offtube.service"
 
   windows:
     # Process groups, taskkill tree stops and the exclusive port bind only
@@ -97,12 +101,29 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew install ffmpeg
+          brew install ffmpeg deno
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the backend tests on macOS
         run: python -m pytest tests -q -rs
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
+      - name: Run offtube as the README's launchd agent
+        run: |
+          # The README's install commands, then the tools must be found:
+          # launchd's own PATH has no Homebrew.
+          mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+          DIR="$(pwd)"
+          sed -e "s|REPLACE_ME|$USER|g" -e "s|REPLACE_DIR|$DIR|g" \
+            deploy/com.offtube.plist > ~/Library/LaunchAgents/com.offtube.plist
+          plutil -lint ~/Library/LaunchAgents/com.offtube.plist
+          launchctl load ~/Library/LaunchAgents/com.offtube.plist
+          trap 'launchctl unload ~/Library/LaunchAgents/com.offtube.plist || true; cat ~/Library/Logs/offtube.log || true' EXIT
+          for _ in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8000/api/health -o health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat health.json
+          python -c "import json, sys; c = json.load(open('health.json'))['checks']; sys.exit(0 if c['ffmpeg'] and c['js_runtime_ok'] else 'ffmpeg or a JS runtime is missing under launchd')"
 
   browser:
     runs-on: ubuntu-24.04
