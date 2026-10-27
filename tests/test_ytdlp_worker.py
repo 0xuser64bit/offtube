@@ -1,4 +1,5 @@
-"""GIF source isolation, real yt-dlp trimming and cancellation of its FFmpeg child."""
+"""The real yt-dlp worker against a local server: ordinary downloads, GIF
+source isolation and trimming, and stopping its whole process tree."""
 import http.server
 import json
 import os
@@ -87,6 +88,7 @@ def source_job(tmp_path, monkeypatch):
 
 
 @requires_ffmpeg
+@pytest.mark.real_worker
 @pytest.mark.parametrize("layout", ["checkout", "container"])
 def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monkeypatch, layout):
     if layout == "container":
@@ -123,17 +125,44 @@ def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monk
 
 
 @requires_ffmpeg
+@pytest.mark.real_worker
+def test_real_download_keeps_the_file_and_reports_progress(source_job, source_server, tmp_path):
+    url, _, cookies = source_server
+    source_job["quality"] = "best"
+    payload = {"url": url + "/video.mp4", "cookies_mode": "text",
+               "cookies_text": "# Netscape HTTP Cookie File\n127.0.0.1\tFALSE\t/\tFALSE\t2147483647\tsession\tfixture\n"}
+    app.run_ytdlp(source_job, payload, payload["url"], {"id": "generic"})
+    kept = sorted(app.DOWNLOAD_DIR.iterdir())
+    assert [path.name for path in kept] == ["video [video].mp4"]
+    assert kept[0].read_bytes() == (tmp_path / "video.mp4").read_bytes()
+    assert any("session=fixture" in value for value in cookies)
+    # The worker's events reached the job: progress, and the name that lets
+    # run_download tell this job's file from a concurrent job's.
+    assert source_job["progress"] == 100
+    assert "video [video].mp4" in source_job["seen_files"]
+    assert "proc" not in source_job
+
+
+@requires_ffmpeg
+@pytest.mark.real_worker
+@pytest.mark.parametrize("quality", ["gif", "best"])
 @pytest.mark.parametrize("reason", ["cancel", "disk"])
-def test_silent_source_stops_process_tree(source_job, source_server, monkeypatch, reason):
+def test_silent_download_stops_process_tree(source_job, source_server, monkeypatch, reason, quality):
+    # The server sends headers, then nothing: yt-dlp waits without a word,
+    # as it does while extracting or merging.
     url, requested, _ = source_server
-    payload = {"quality": "gif", "clip_from": "0.5", "clip_to": "1.5"}
+    source_job["quality"] = quality
+    if quality == "gif":
+        payload, run = {"quality": "gif", "clip_from": "0.5", "clip_to": "1.5"}, app.run_gif_ytdlp
+    else:
+        payload, run = {"quality": quality}, app.run_ytdlp
     errors = []
     if reason == "disk":
         monkeypatch.setattr(app, "disk_low_locked", lambda _: requested.is_set())
 
     def download():
         try:
-            app.run_gif_ytdlp(source_job, payload, url + "/slow.mp4", {"id": "generic"})
+            run(source_job, payload, url + "/slow.mp4", {"id": "generic"})
         except app.DownloadError as exc:
             errors.append(str(exc))
 

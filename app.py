@@ -1627,6 +1627,9 @@ def ytdlp_worker(request: dict) -> None:
             "id", "title", "thumbnail", "playlist_index", "playlist_count")}
         emit("progress", event)
 
+    if yt_dlp is None:
+        emit("error", "yt-dlp is not installed. Run: pip install -r requirements.txt")
+        raise SystemExit(1)
     opts = request["opts"]
     if "cookiesfrombrowser" in opts:
         opts["cookiesfrombrowser"] = tuple(opts["cookiesfrombrowser"])
@@ -1649,7 +1652,10 @@ def ytdlp_worker(request: dict) -> None:
         except DownloadError as exc:
             if request["source"] != "youtube" or not _is_session_failure(str(exc)):
                 raise
+            # Same session, different player clients, visible in the log so a
+            # repeated failure clearly means the session itself is bad.
             emit("log", "Session rejected by default players — retrying with alternate player clients…")
+            emit("detail", "Retrying with alternate players…")
             opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = FALLBACK_PLAYER_CLIENTS
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([request["url"]])
@@ -1694,8 +1700,9 @@ def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
             proc = subprocess.Popen(ytdlp_worker_cmd(), stdin=subprocess.PIPE, stdout=output,
                                     stderr=subprocess.STDOUT, text=True, encoding="utf-8", **OWN_PROCESS_GROUP)
             with jobs_lock:
-                job.update(proc=proc, status="downloading",
-                           detail="Fetching GIF source…" if gif_folder is not None else "Fetching…")
+                job["proc"] = proc
+                if gif_folder is not None:
+                    job.update(status="downloading", detail="Fetching GIF source…")
             pending = b""
             try:
                 proc.stdin.write(json.dumps(request))
@@ -1730,6 +1737,9 @@ def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
                             errors.append(str(data))
                         elif kind == "log":
                             JobLogger(job["id"]).info(data)
+                        elif kind == "detail":
+                            with jobs_lock:
+                                job["detail"] = clean_text(data, 500)
                     if proc.returncode is not None:
                         break
                 check_job(job)
@@ -1935,7 +1945,7 @@ def progress_hook(job_id: str, d: dict):
         job = jobs.get(job_id)
         if not job:
             return
-        # Cooperative cancel: run_download's hooks raise to abort yt-dlp.
+        # Raising ends the worker's event loop, which then stops the worker.
         if job.get("cancel_requested"):
             raise DownloadError("Cancelled by user.")
         if status == "downloading" and disk_low_locked(job):
@@ -2112,7 +2122,7 @@ def run_download(job_id: str, payload: dict):
             job = jobs.get(job_id)
             if job is None:
                 return
-            # Cooperative cancel lands here (hooks raise DownloadError).
+            # A cancel lands here: check_job and the hooks raise DownloadError.
             if "Cancelled by user" in msg or (job and job.get("cancel_requested")):
                 job["status"] = "cancelled"
                 job["detail"] = "Cancelled."
@@ -2153,23 +2163,14 @@ def run_download(job_id: str, payload: dict):
 
 
 def run_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
-    assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
-    opts = build_download_opts(job, payload)
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except DownloadError as exc:
-        if (src["id"] != "youtube" or not _is_session_failure(str(exc))
-                or job.get("cancel_requested")):
-            raise
-        # Same session, different player clients — visible in the UI log
-        # so a repeated failure clearly means the session itself is bad.
-        with jobs_lock:
-            job["log"].append("Session rejected by default players — retrying with alternate player clients…")
-            job["detail"] = "Retrying with alternate players…"
-        opts = build_download_opts(job, payload, player_clients=FALLBACK_PLAYER_CLIENTS)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+    """A normal download, in the worker process: a cancel or shutdown stops
+    it at once even mid-extraction or mid-merge. The worker also retries a
+    rejected YouTube session with alternate player clients."""
+    if yt_dlp is None:
+        raise DownloadError("yt-dlp is not installed. Run: pip install -r requirements.txt")
+    _, code, errors = run_ytdlp_worker(job, payload, url, src)
+    if code:
+        raise DownloadError(errors[-1] if errors else "yt-dlp stopped unexpectedly; details are in the log.")
 
 
 def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
@@ -2236,9 +2237,9 @@ def shutdown_jobs(grace: float | None = None) -> bool:
     """Stop all work for a server shutdown: refuse new jobs, cancel queued
     ones, ask running ones to stop and kill their process trees, then give
     them `grace` seconds (SHUTDOWN_GRACE). Every job's cookie copy is
-    removed either way. True when every job thread finished in time;
-    in-process yt-dlp can sit in work that fires no hook (extraction, an
-    ffmpeg merge) for longer."""
+    removed either way. True when every job thread finished in time. Child
+    processes stop at once; a thread can still be held up by something that
+    is not a child process, such as a stalled network filesystem."""
     global shutting_down
     grace = SHUTDOWN_GRACE if grace is None else grace
     now = _dt.datetime.now().isoformat(timespec="seconds")
@@ -2671,10 +2672,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     futures.pop(jid, None)
                     cleanup_job_cookies(jid)
                     return self.send_json({"ok": True, "cancelled": True})
-                # Already running: cooperative cancel via hooks. In-process
-                # yt-dlp notices on its next progress/postprocessor callback;
-                # a child process (gallery-dl, the yt-dlp worker, ffmpeg) is stopped
-                # with everything it started.
+                # Already running: its child process (the yt-dlp worker,
+                # gallery-dl, ffmpeg) is stopped with everything it started,
+                # and the job's thread sees the flag within a fraction of a
+                # second.
                 job["cancel_requested"] = True
                 if job.get("proc") is not None:
                     stop_process_tree(job["proc"], wait=None)
@@ -2841,7 +2842,7 @@ def stop_work(exit_code: int) -> None:
     if not shutdown_jobs():
         # Its thread would hold the interpreter open at exit; everything
         # else (process trees, cookie copies) is already cleaned up.
-        print("A job was still busy inside yt-dlp; exiting without it.", flush=True)
+        print("A job was still busy; exiting without it.", flush=True)
         sys.stderr.flush()
         os._exit(exit_code)
     if exit_code:

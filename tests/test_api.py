@@ -1,9 +1,10 @@
 """API integration tests against a live Handler on an ephemeral port.
 
-yt-dlp is stubbed (no network): the fake YoutubeDL answers extract_info and
-simulates a download by firing progress hooks and writing one output file.
+No network: inspection uses a fake YoutubeDL in-process, and downloads run in
+tests/fake_ytdlp_worker.py, which speaks the yt-dlp worker's event protocol.
 """
 
+import concurrent.futures
 import errno
 import json
 import http.client
@@ -23,8 +24,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
-
-BLOCK = threading.Event()
 
 
 class FakeYoutubeDL:
@@ -52,17 +51,6 @@ class FakeYoutubeDL:
             "subtitles": {"en": []}, "automatic_captions": {},
         }
 
-    def download(self, urls):
-        if "block" in urls[0]:
-            BLOCK.wait(timeout=15)
-        for hook in self.opts.get("progress_hooks", []):
-            hook({"status": "downloading", "downloaded_bytes": 5,
-                  "total_bytes": 10, "speed": 1000, "eta": 1,
-                  "filename": str(app.DOWNLOAD_DIR / "Test Video [abc123].mp4.part")})
-            hook({"status": "finished",
-                  "filename": str(app.DOWNLOAD_DIR / "Test Video [abc123].mp4")})
-        (app.DOWNLOAD_DIR / "Test Video [abc123].mp4").write_bytes(b"fake-video")
-
 
 class FakeYtDlp:
     YoutubeDL = FakeYoutubeDL
@@ -77,7 +65,8 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
     monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "cookies" / "session.txt")
     monkeypatch.setattr(app, "yt_dlp", FakeYtDlp())
-    monkeypatch.setattr(app, "shutil", app.shutil)  # no-op, clarity
+    monkeypatch.setattr(app, "executor", concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dl"))
+    monkeypatch.setattr(app, "shutting_down", False)
     app.DOWNLOAD_DIR.mkdir(exist_ok=True)
     app.COOKIES_DIR.mkdir(exist_ok=True)
     app.jobs.clear()
@@ -90,9 +79,9 @@ def server(tmp_path, monkeypatch):
     httpd.shutdown()
     httpd.server_close()
     thread.join(timeout=5)
+    app.shutdown_jobs(grace=5)  # stops whatever a test left running
     app.jobs.clear()
     app.futures.clear()
-    BLOCK.set()
 
 
 def api(base, method, path, body=None, raw_body=None, headers=None):
@@ -413,37 +402,36 @@ def test_disk_guard_refuses_when_full(server, monkeypatch):
     assert "Disk" in body.get("error", "")
 
 
-def test_cancel_queued_job(server):
-    BLOCK.clear()
-    try:
-        # Occupy both executor workers with blocking downloads.
-        first, second = [], []
-        for i in range(2):
-            s, b, _ = api(server, "POST", "/api/download",
-                           {"url": f"https://youtu.be/blockblock{i}"})
-            assert s == 200
-            first.append(b["job_id"]) if i == 0 else second.append(b["job_id"])
-        time.sleep(0.5)  # let workers pick up the blocking jobs
-        s, b, _ = api(server, "POST", "/api/download",
-                       {"url": "https://youtu.be/queuedqueue"})
+def _in_worker(jid, timeout=10):
+    deadline = time.time() + timeout
+    while app.jobs[jid].get("proc") is None:
+        assert time.time() < deadline, app.jobs[jid]
+        time.sleep(0.02)
+
+
+def test_cancel_queued_and_silent_running_jobs(server):
+    # Both executor workers busy with downloads that print nothing at all,
+    # as yt-dlp is while it extracts or merges.
+    running = []
+    for i in range(2):
+        s, b, _ = api(server, "POST", "/api/download", {"url": f"https://youtu.be/blockblock{i}"})
         assert s == 200
-        queued = b["job_id"]
-        s, b, _ = api(server, "POST", "/api/cancel", {"job_id": queued})
-        assert s == 200 and b["cancelled"] is True
-        s, job, _ = api(server, "GET", f"/api/job?id={queued}")
-        assert job["status"] == "cancelled"
-        # Cancelling a running job requests cooperative stop (hooks abort).
-        s, b, _ = api(server, "POST", "/api/cancel", {"job_id": first[0]})
-        assert s == 200 and b["cancelled"] is True
-    finally:
-        BLOCK.set()
-        for jid in list(app.jobs):
-            job = app.jobs.get(jid)
-            if job and job.get("status") not in ("done", "error", "cancelled"):
-                wait_for(server, jid, timeout=15)
-    # The running job we cancelled must end as cancelled, not done/error.
-    s, job, _ = api(server, "GET", f"/api/job?id={first[0]}")
+        running.append(b["job_id"])
+    for jid in running:
+        _in_worker(jid)
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/queuedqueue"})
+    assert s == 200
+    queued = b["job_id"]
+    s, b, _ = api(server, "POST", "/api/cancel", {"job_id": queued})
+    assert s == 200 and b["cancelled"] is True
+    s, job, _ = api(server, "GET", f"/api/job?id={queued}")
     assert job["status"] == "cancelled"
+    # A running download stops at once: its worker process is stopped.
+    started = time.time()
+    s, b, _ = api(server, "POST", "/api/cancel", {"job_id": running[0]})
+    assert s == 200 and b["cancelled"] is True
+    assert wait_for(server, running[0], timeout=10)["status"] == "cancelled"
+    assert time.time() - started < 3
 
 
 # --- public job field whitelist -------------------------------------------------
@@ -561,19 +549,20 @@ def test_retry_unknown_job(server):
 
 
 def test_retry_running_job_refused(server):
-    BLOCK.clear()
-    try:
-        s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/blockblock0"})
-        assert s == 200
-        jid = b["job_id"]
-        time.sleep(0.5)
-        s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
-        assert s == 400 and "still running" in body["error"]
-    finally:
-        BLOCK.set()
-        for j in list(app.jobs.values()):
-            if j.get("status") not in ("done", "error", "cancelled"):
-                wait_for(server, j["id"], timeout=15)
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/blockblock0"})
+    assert s == 200
+    jid = b["job_id"]
+    _in_worker(jid)
+    s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
+    assert s == 400 and "still running" in body["error"]
+
+
+def test_worker_failure_is_reported_in_plain_language(server):
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/failfailfai"})
+    assert s == 200
+    job = wait_for(server, b["job_id"])
+    assert job["status"] == "error"
+    assert job["detail"].startswith("Private video. YouTube only shows this to a signed-in account")
 
 
 def test_retry_resubmits_stored_payload(server):

@@ -1,5 +1,6 @@
 """Unit tests for app.py pure helpers. No network, no yt-dlp needed."""
 
+import json
 import os
 import stat
 import sys
@@ -635,16 +636,14 @@ def test_fetch_info_no_retry_on_non_session_error(monkeypatch):
     assert len(calls) == 1
 
 
-def test_run_download_retries_session_failure_with_fallback(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
-    (tmp_path / "cookies").mkdir()
+def test_worker_retries_a_rejected_youtube_session(monkeypatch, capsys):
+    # Normal downloads run in tools/ytdlp_worker.py; the retry with
+    # alternate player clients happens there, and the deck is told.
     seen = []
 
     class DL:
         def __init__(self, opts):
-            self.opts = opts
+            seen.append(dict(opts))
 
         def __enter__(self):
             return self
@@ -653,24 +652,17 @@ def test_run_download_retries_session_failure_with_fallback(tmp_path, monkeypatc
             return False
 
         def download(self, urls):
-            seen.append(self.opts.get("extractor_args"))
-            if not self.opts.get("extractor_args"):
+            if len(seen) == 1:
                 raise app.DownloadError("The page needs to be reloaded")
-            (tmp_path / "V [x].mp4").write_bytes(b"v")
 
-    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
-    app.jobs.clear()
-    jid = "fallback1"
-    app.jobs[jid] = {"id": jid, "status": "queued", "progress": 0,
-                     "detail": "", "log": [], "files": []}
-    try:
-        app.run_download(jid, {"url": "https://youtu.be/xxxxxxxxxxx", "quality": "best"})
-        job = app.jobs[jid]
-        assert job["status"] == "done"
-        assert seen[1] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
-        assert any("alternate player" in ln for ln in job["log"])
-    finally:
-        app.jobs.clear()
+    monkeypatch.setattr(app.yt_dlp, "YoutubeDL", DL)
+    app.ytdlp_worker({"opts": {"format": "bv*+ba/b"}, "ranges": None, "clip": None,
+                      "source": "youtube", "url": "https://youtu.be/xxxxxxxxxxx"})
+    assert len(seen) == 2
+    assert "match_filter" not in seen[0]  # GIF sources only
+    assert seen[1]["extractor_args"] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {"kind": "detail", "data": "Retrying with alternate players…"} in events
 
 
 # --- build_download_opts validation ------------------------------------------
@@ -1185,28 +1177,13 @@ def test_run_gallery_nothing_saved_raises_last_error(tmp_path, monkeypatch, fake
 
 
 def test_run_download_falls_back_to_gallery_for_photo_posts(tmp_path, monkeypatch, fake_gallery):
-    from types import SimpleNamespace
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
     (tmp_path / "cookies").mkdir()
-
-    class DL:
-        def __init__(self, opts):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def download(self, urls):
-            raise app.DownloadError("ERROR: [twitter] 1: No video could be found in this tweet")
-
-    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
     job = _gallery_job("x-photos")
     try:
-        app.run_download("x-photos", {"url": "https://x.com/user/status/1234567890"})
+        # The fake worker fails this the way yt-dlp fails an image-only tweet.
+        app.run_download("x-photos", {"url": "https://x.com/user/status/1234567890?novideo"})
         assert job["status"] == "done", job["detail"]
         assert job["files"] == ["pinterest_1.jpg", "pinterest_0.jpg"]
         assert any("trying gallery-dl" in ln for ln in job["log"])

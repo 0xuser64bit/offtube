@@ -16,9 +16,9 @@ a product decision, not a prerequisite for reliable local operation.
 | Source resolution | `validate_url`, `resolve_source`, extractor tables | Dedicated yt-dlp/gallery-dl extractors only; no generic catch-all. YouTube channel/home/search pages are refused. |
 | Inspection | `fetch_info`, `inspect_ytdlp`, `inspect_gallery` | Two concurrent inspections; request-local cookies; engine fallback; bounded gallery preview. Counts and durations reported by extractors are coerced before they reach clients. |
 | Queue | `jobs`, `futures`, `jobs_lock`, `enqueue_download`, `shutdown_jobs` | Two executor workers, five active jobs, fifty stored records; retry revalidates the original private payload. Shutdown refuses new jobs, cancels queued ones and gives running ones `SHUTDOWN_GRACE` seconds. |
-| Download engines | `run_download`, `run_ytdlp`, `run_gallery` | yt-dlp runs in-process for normal downloads; gallery-dl runs as a child process with a cancel/free-disk watchdog. Engine order depends on the source. |
+| Download engines | `run_download`, `run_ytdlp`, `run_ytdlp_worker`, `tools/ytdlp_worker.py`, `run_gallery` | Every yt-dlp download runs in the worker process, which reports JSON events (progress, files, errors) through a file the job's thread polls while it checks cancel and free disk. gallery-dl runs as a child process with the same watchdog. The server process uses yt-dlp only to inspect. Engine order depends on the source. |
 | Child processes | `OWN_PROCESS_GROUP`, `stop_process_tree`, `watch_job_process` | gallery-dl, the yt-dlp worker and ffmpeg encodes each lead their own process group, so cancel and shutdown stop everything a job started. |
-| GIF pipeline | `run_gif_ytdlp`, `run_ytdlp_worker`, `tools/ytdlp_worker.py`, FFmpeg | Sources fetched by the isolated yt-dlp worker into private job directories; two-pass palette encoding; both ffmpeg and ffprobe required. |
+| GIF pipeline | `run_gif_ytdlp`, `run_ytdlp_worker`, FFmpeg | Sources fetched by the yt-dlp worker into private job directories; two-pass palette encoding; both ffmpeg and ffprobe required. |
 | Cookies | `resolve_cookies`, `write_cookie_file` | Site-filtered, atomically published per-request copies; owner-only permissions on POSIX; removed when a request or job ends, on shutdown and at startup. Saved session exports remain separate from engine writeback. |
 | Library | `library_name`, `library_snapshot`, `library_page`, `open_library_file`, `delete_library_file` | The regular files directly in `downloads/` - never dotfiles, temps, symlinks or special files - for listing, serving and deleting alike. The server searches and pages the whole library; clients never filter a partial list. `/files/` answers single byte ranges. Job history is intentionally in memory and clears on restart. No database migrations are needed. |
 | Web client | `web/index.html`, `web/app.js`, `web/styles.css` | Plain JS state, polling, local preferences, self-hosted fonts, restrictive CSP, escaped generated markup. |
@@ -42,6 +42,9 @@ a product decision, not a prerequisite for reliable local operation.
   concurrent job's outputs. Never put source videos in the public GIF library.
 - Every child process offtube starts leads its own process group and is
   stopped with `stop_process_tree`; nothing a job started may outlive it.
+  Downloads never run yt-dlp in the server process, so a cancel or shutdown
+  never waits for yt-dlp to reach a callback. The worker's request is plain
+  JSON; hooks, loggers and filters are created inside the worker.
   `stop_process_tree(wait=None)` only signals and is the form to use while
   holding `jobs_lock`.
 - One definition of a kept file serves listing, `/files/` and delete, and a
@@ -111,20 +114,14 @@ build or multi-architecture testing.
 These are source-inspection findings, not evidence of a complete security,
 performance or browser-accessibility audit:
 
-1. **Run normal yt-dlp downloads in the worker process.** In-process yt-dlp
-   only notices a cancel at its next progress or postprocessor hook, so
-   extraction and ffmpeg merges can't be interrupted; shutdown gives up on
-   such a job after `SHUTDOWN_GRACE` and exits without it. The GIF source
-   worker (JSON events, its own process group) is the template. The API
-   tests stub `app.yt_dlp` in-process and would need a fake worker.
-2. **Decide on authentication for shared machines.** A per-install token
+1. **Decide on authentication for shared machines.** A per-install token
    issued by the server and entered once in the extension would close the
    local-account and other-extension paths above. This changes setup for
    every user, so it is a product decision.
-3. **Constrain outbound destinations.** Refusing private and link-local
+2. **Constrain outbound destinations.** Refusing private and link-local
    addresses after DNS resolution, including on redirects, needs hooks into
    both engines' HTTP layers.
-4. **Expand release verification.** The web desk is exercised in Chromium
+3. **Expand release verification.** The web desk is exercised in Chromium
    with an axe-core audit; the popup and side panel are not (Playwright can
    load the unpacked extension), nor are keyboard and focus order, narrow
    layouts, real-site failures, Windows (the exclusive port bind and

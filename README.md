@@ -208,10 +208,11 @@ container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
-stubbed `YoutubeDL` and a fake gallery-dl CLI, covering health/headers,
+stubbed `YoutubeDL` for inspection, a stand-in yt-dlp worker
+(`tests/fake_ytdlp_worker.py`) and a fake gallery-dl CLI, covering health/headers,
 traversal blocks, info validation, `/api/source`, download → files →
 delete, bad input, oversized bodies, queued + running cancel (including
-killing a gallery-dl process), origin/CORS, payload stripping, channel
+a silent yt-dlp worker and a gallery-dl process), origin/CORS, payload stripping, channel
 rejection, temp/dotfile hiding, disposition, jobs limit, disk guard, the
 public-job field whitelist, Host-header guard, `/api/retry`,
 `/api/jobs/clear`, byte ranges, the library's symlink and vanishing-file
@@ -225,6 +226,9 @@ real generated-media encoding (when ffmpeg and ffprobe are on PATH), including
 duration, frame count, dimensions, looping and anamorphic display ratios.
 `tests/test_shutdown.py` stops the server with real SIGINT and SIGTERM and
 checks that it exits promptly, cancels its jobs and removes their cookie copies.
+`tests/test_ytdlp_worker.py` runs the real worker against a local server:
+a download with its cookies, a trimmed GIF source, and stopping a silent
+download's whole process tree on cancel or low disk.
 
 ## API (for scripting)
 
@@ -240,7 +244,7 @@ integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
 - `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → metadata with `source`, `engine`, `type` (`video` | `playlist` | `gallery`) and `media` (`video` | `audio` | `image` | `mixed`); galleries carry `count`, `more` and `entries` with thumbnails (side-effect-free; pasted cookies use an ephemeral file)
 - `POST /api/download` `{url, quality, clip_from, clip_to, gif_size, gif_fps, gif_loop, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, source, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
-- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback; gallery-dl, the GIF worker and ffmpeg are stopped together with every process they started)
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; a running job's yt-dlp worker, gallery-dl or ffmpeg is stopped at once together with every process it started, even while it is extracting or merging)
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
