@@ -33,7 +33,7 @@ COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
 COPY app.py ./
-COPY tools/gif_source.py ./tools/gif_source.py
+COPY tools/ytdlp_worker.py ./tools/ytdlp_worker.py
 COPY web/ ./web/
 RUN mkdir -p downloads cookies \
     && touch cookies/.gitkeep downloads/.gitkeep

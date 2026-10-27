@@ -1587,7 +1587,9 @@ def gif_source_filter(info: dict, payload: dict, incomplete: bool = False) -> No
         raise DownloadError("The GIF start time is past the end of this video.")
 
 
-def check_gif_job(job: dict) -> None:
+def check_job(job: dict) -> None:
+    """Raise if the job was cancelled or the disk ran low; for loops that
+    watch a child process rather than being called back by yt-dlp."""
     with jobs_lock:
         if job.get("cancel_requested"):
             raise DownloadError("Cancelled by user.")
@@ -1596,8 +1598,10 @@ def check_gif_job(job: dict) -> None:
             raise DownloadError(DISK_FULL_MSG)
 
 
-def gif_source_worker(request: dict) -> None:
-    """Isolated yt-dlp API worker; stdout is a stream of JSON events."""
+def ytdlp_worker(request: dict) -> None:
+    """The yt-dlp side of tools/ytdlp_worker.py: one download from a JSON
+    request, reported as JSON events on stdout. A request with a "clip" is a
+    GIF source and refuses live streams and a start past the end."""
     def emit(kind, data):
         print(json.dumps({"kind": kind, "data": data}), flush=True)
 
@@ -1635,8 +1639,9 @@ def gif_source_worker(request: dict) -> None:
     opts.update(logger=Logger(), progress_hooks=[progress],
                 postprocessor_hooks=[lambda data: emit("postprocessor", {
                     "status": data.get("status"), "postprocessor_name": data.get("postprocessor_name")})],
-                post_hooks=[lambda filename: emit("file", filename)],
-                match_filter=lambda info, *, incomplete=False: gif_source_filter(info, request["clip"], incomplete))
+                post_hooks=[lambda filename: emit("file", filename)])
+    if request.get("clip") is not None:
+        opts["match_filter"] = lambda info, *, incomplete=False: gif_source_filter(info, request["clip"], incomplete)
     try:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1653,9 +1658,18 @@ def gif_source_worker(request: dict) -> None:
         raise SystemExit(1)
 
 
-def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
-    """Poll a private source process so silent extraction and range downloads cancel."""
-    check_gif_job(job)
+def ytdlp_worker_cmd() -> list[str]:
+    return [sys.executable, "-u", str(BASE_DIR / "tools" / "ytdlp_worker.py")]
+
+
+def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
+                     gif_folder: Path | None = None) -> tuple[list[Path], int, list[str]]:
+    """Run one yt-dlp download in the worker process and follow it: its
+    events update the job, and cancel or low disk stop its whole tree within
+    a fraction of a second, whatever yt-dlp is doing. Returns the files it
+    reported, its exit status and its error messages. A GIF source goes to
+    `gif_folder`, numbered so repeated playlist entries stay apart."""
+    check_job(job)
     opts = build_download_opts(job, payload)
     ranges = opts.pop("download_ranges", None)
     ranges = list(ranges({}, None)) if ranges is not None else None
@@ -1664,77 +1678,92 @@ def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
                   for item in ranges]
     for key in ("logger", "progress_hooks", "postprocessor_hooks", "post_hooks", "match_filter"):
         opts.pop(key, None)
-    folder = Path(job["gif_dir"]).resolve()
-    # Repeated playlist entries need separate sources until acquisition finishes.
-    opts["outtmpl"] = str(folder / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
+    root = (gif_folder or DOWNLOAD_DIR).resolve()
+    if gif_folder is not None:
+        opts["outtmpl"] = str(root / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
     request = {"opts": opts, "ranges": ranges, "url": url, "source": src["id"],
-               "clip": {"clip_from": payload.get("clip_from")}}
-    files, errors = [], []
-    log_path = folder / "source.log"
-    with log_path.open("w+b") as output, log_path.open("rb") as reader:
-        proc = subprocess.Popen([sys.executable, "-u", str(BASE_DIR / "tools" / "gif_source.py")],
-                                stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", **OWN_PROCESS_GROUP)
-        with jobs_lock:
-            job.update(proc=proc, gif_source_active=True, status="downloading", detail="Fetching GIF source…")
-        pending = b""
-        try:
-            proc.stdin.write(json.dumps(request))
-            proc.stdin.close()
-            while True:
-                check_gif_job(job)
-                try:
-                    proc.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
-                pending += reader.read()
-                lines = pending.split(b"\n")
-                pending = lines.pop()
-                for raw in lines:
-                    try:
-                        event = json.loads(raw)
-                    except ValueError:
-                        JobLogger(job["id"]).info(raw.decode("utf-8", "replace"))
-                        continue
-                    kind, data = event.get("kind"), event.get("data")
-                    if kind == "progress":
-                        progress_hook(job["id"], data)
-                    elif kind == "postprocessor":
-                        postprocessor_hook(job["id"], data)
-                    elif kind == "file":
-                        path = Path(data).resolve()
-                        if not path.is_relative_to(folder) or not path.is_file():
-                            raise DownloadError("The GIF source was not saved in its private folder.")
-                        if path not in files:
-                            files.append(path)
-                    elif kind == "error":
-                        errors.append(str(data))
-                    elif kind == "log":
-                        JobLogger(job["id"]).info(data)
-                if proc.returncode is not None:
-                    break
-            check_gif_job(job)
-        finally:
-            if proc.poll() is None or proc.returncode:
-                stop_process_tree(proc)
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
+               "clip": {"clip_from": payload.get("clip_from")} if gif_folder is not None else None}
+    files: list[Path] = []
+    errors: list[str] = []
+    # A file, not a pipe: a full pipe would stall the worker, and the loop
+    # reads it on its own schedule while checking cancel and disk.
+    descriptor, log_name = tempfile.mkstemp(prefix=f"offtube-{job['id']}-", suffix=".log")
+    os.close(descriptor)
+    try:
+        with open(log_name, "w+b") as output, open(log_name, "rb") as reader:
+            proc = subprocess.Popen(ytdlp_worker_cmd(), stdin=subprocess.PIPE, stdout=output,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", **OWN_PROCESS_GROUP)
             with jobs_lock:
-                job.pop("proc", None)
-                job.pop("gif_source_active", None)
+                job.update(proc=proc, status="downloading",
+                           detail="Fetching GIF source…" if gif_folder is not None else "Fetching…")
+            pending = b""
+            try:
+                proc.stdin.write(json.dumps(request))
+                proc.stdin.close()
+                while True:
+                    check_job(job)
+                    try:
+                        proc.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    pending += reader.read()
+                    lines = pending.split(b"\n")
+                    pending = lines.pop()
+                    for raw in lines:
+                        try:
+                            event = json.loads(raw)
+                        except ValueError:
+                            JobLogger(job["id"]).info(raw.decode("utf-8", "replace"))
+                            continue
+                        kind, data = event.get("kind"), event.get("data")
+                        if kind == "progress":
+                            progress_hook(job["id"], data)
+                        elif kind == "postprocessor":
+                            postprocessor_hook(job["id"], data)
+                        elif kind == "file":
+                            path = Path(data).resolve()
+                            if not path.is_relative_to(root) or not path.is_file():
+                                raise DownloadError("The download was not saved where offtube expected it.")
+                            if path not in files:
+                                files.append(path)
+                        elif kind == "error":
+                            errors.append(str(data))
+                        elif kind == "log":
+                            JobLogger(job["id"]).info(data)
+                    if proc.returncode is not None:
+                        break
+                check_job(job)
+            finally:
+                if proc.poll() is None or proc.returncode:
+                    stop_process_tree(proc)
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.close()
+                with jobs_lock:
+                    job.pop("proc", None)
+    finally:
+        try:
+            os.unlink(log_name)
+        except OSError:
+            pass
+    return files, proc.returncode, errors
+
+
+def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
+    """Fetch GIF sources into the job's private folder, then encode them."""
+    files, code, errors = run_ytdlp_worker(job, payload, url, src, gif_folder=Path(job["gif_dir"]))
     if not files:
-        if proc.returncode:
+        if code:
             raise DownloadError(errors[-1] if errors else "Couldn’t fetch this GIF source; details are in the log.")
         return
     convert_gif_batch(job, payload, files, trimmed=True)
-    if proc.returncode:
+    if code:
         note = errors[-1] if errors else "The GIF source ended early."
         JobLogger(job["id"]).warning(f"{note} Finished GIFs were kept.")
 
 
 def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                    start_pct: float, end_pct: float, duration: float) -> None:
-    check_gif_job(job)
+    check_job(job)
     with jobs_lock:
         job.update(status="processing", detail=detail, progress=start_pct, speed=None, eta=None)
     # A file avoids full pipes stalling cancellation while ffmpeg is silent.
@@ -1747,7 +1776,7 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
             job["proc"] = proc
         try:
             while True:
-                check_gif_job(job)
+                check_job(job)
                 try:
                     proc.wait(timeout=0.2)
                 except subprocess.TimeoutExpired:
@@ -1763,7 +1792,7 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                         job["progress"] = round(start_pct + (end_pct - start_pct) * fraction, 1)
                 if proc.returncode is not None:
                     break
-            check_gif_job(job)
+            check_job(job)
             if proc.returncode:
                 JobLogger(job["id"]).error(tail[-2000:])
                 raise DownloadError("GIF conversion failed. Try a shorter range or smaller size; details are in the log.")
@@ -1776,7 +1805,7 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
 def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False,
                 part: tuple[int, int] = (0, 1)) -> None:
     size, fps, loop = gif_settings(payload)
-    check_gif_job(job)
+    check_job(job)
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=codec_type:format=duration", "-of", "json", str(source)],
                            capture_output=True, text=True, timeout=20)
@@ -1814,7 +1843,7 @@ def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False
                         f"[0:v:0]{filters}[v];[v][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle[out]",
                         "-map", "[out]", "-an", "-loop", "0" if loop else "-1", str(output)],
                    "GIF · encoding frames…", color_end, encode_end, duration)
-    check_gif_job(job)
+    check_job(job)
     if not output.is_file() or output.stat().st_size == 0:
         raise DownloadError("No GIF frames were created. Choose a longer time range.")
     stem = source.stem.lstrip(".").encode("utf-8")[:150].decode("utf-8", "ignore") or "Video"
@@ -1835,7 +1864,7 @@ def convert_gif_batch(job: dict, payload: dict, sources: list[Path], *, trimmed:
     last = None
     count = len(sources)
     for index, source in enumerate(sources):
-        check_gif_job(job)
+        check_job(job)
         try:
             convert_gif(job, source, payload, trimmed=trimmed, part=(index, count))
         except DownloadError as exc:
@@ -2644,7 +2673,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.send_json({"ok": True, "cancelled": True})
                 # Already running: cooperative cancel via hooks. In-process
                 # yt-dlp notices on its next progress/postprocessor callback;
-                # a child process (gallery-dl, GIF worker, ffmpeg) is stopped
+                # a child process (gallery-dl, the yt-dlp worker, ffmpeg) is stopped
                 # with everything it started.
                 job["cancel_requested"] = True
                 if job.get("proc") is not None:

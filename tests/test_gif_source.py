@@ -119,7 +119,7 @@ def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monk
     stream = json.loads(probe.stdout)["streams"][0]
     assert int(stream["nb_read_frames"]) == 10
     assert float(stream["duration"]) == pytest.approx(1, abs=0.02)
-    assert "proc" not in source_job and "gif_source_active" not in source_job
+    assert "proc" not in source_job
 
 
 @requires_ffmpeg
@@ -160,7 +160,7 @@ def test_silent_source_stops_process_tree(source_job, source_server, monkeypatch
     assert not thread.is_alive() and time.monotonic() - start < 3
     assert proc.poll() is not None
     assert errors and ("Cancelled" if reason == "cancel" else "disk is almost full") in errors[0]
-    assert "proc" not in source_job and "gif_source_active" not in source_job
+    assert "proc" not in source_job
     for pid in descendants:
         state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
         assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
@@ -185,7 +185,7 @@ def test_worker_restores_options_and_retries_session(monkeypatch, capsys):
             assert urls == ["https://youtu.be/fixture"]
 
     monkeypatch.setattr(app.yt_dlp, "YoutubeDL", YoutubeDL)
-    app.gif_source_worker({"opts": {"cookiesfrombrowser": ["chrome", "Profile 2", None, None],
+    app.ytdlp_worker({"opts": {"cookiesfrombrowser": ["chrome", "Profile 2", None, None],
                                    "noplaylist": False, "playlistitems": "2-4",
                                    "js_runtimes": {"node": {}}, "remote_components": ["ejs:npm"]},
                            "ranges": [{"start_time": 3.25, "end_time": None}],

@@ -75,8 +75,8 @@ jobs:
           persist-credentials: false
       - name: Build runtime image
         run: docker build --tag offtube:ci .
-      - name: Check packaged GIF worker
-        run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/gif_source.py
+      - name: Check packaged yt-dlp worker
+        run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/ytdlp_worker.py
       - name: Check HTTP startup
         run: |
           docker run --detach --name offtube-ci --publish 127.0.0.1:18000:8000 offtube:ci

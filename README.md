@@ -171,7 +171,7 @@ offtube/
   downloads/        # finished files (contents git-ignored, dir kept)
   cookies/          # per-job isolates (never committed; cleaned on boot + job end)
   deploy/           # launchd plist + systemd user unit (path-templated)
-  tools/            # isolated GIF source worker, validation gate, icon generator
+  tools/            # isolated yt-dlp worker, validation gate, icon generator
   ARCHITECTURE.md   # system map, invariants, trust boundary and next priorities
   Dockerfile, docker-compose.yml
   tools/gen_icons.py
@@ -203,7 +203,7 @@ when axe-core isn't); to run it, install `playwright@1.63.0` and
 
 GitHub CI runs the full gate on Python 3.10 and 3.12, the browser suite with
 Playwright and axe-core required, builds the Docker image,
-checks the packaged GIF worker, smoke-tests HTTP startup, and checks that the
+checks the packaged yt-dlp worker, smoke-tests HTTP startup, and checks that the
 container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.
 

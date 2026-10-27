@@ -88,13 +88,13 @@ def test_gif_job_cleanup_on_failure(gif_job, monkeypatch):
 def test_gif_cancellation_before_conversion(gif_job):
     gif_job["cancel_requested"] = True
     with pytest.raises(app.DownloadError, match="Cancelled"):
-        app.check_gif_job(gif_job)
+        app.check_job(gif_job)
 
 
 def test_gif_stops_on_low_disk(gif_job, monkeypatch):
     monkeypatch.setattr(app, "disk_low_locked", lambda _: True)
     with pytest.raises(app.DownloadError, match="disk is almost full"):
-        app.check_gif_job(gif_job)
+        app.check_job(gif_job)
     assert gif_job["disk_full"]
 
 
