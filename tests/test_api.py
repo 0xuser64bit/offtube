@@ -718,6 +718,8 @@ def test_listing_survives_files_vanishing_mid_scan(server, monkeypatch):
         def __init__(self, path):
             with real_scandir(path) as entries:
                 self.entries = list(entries)
+            for entry in self.entries:
+                entry.stat(follow_symlinks=False)  # cached, as Windows' scandir always is
             (app.DOWNLOAD_DIR / "gone [b].mp4").unlink()
 
         def __enter__(self):

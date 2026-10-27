@@ -498,14 +498,16 @@ def library_name(name) -> str | None:
 
 def library_snapshot() -> list[tuple[str, os.stat_result]]:
     """Every kept file, newest first, from one pass with one lstat per entry.
-    A file that vanishes mid-scan (deleted, or renamed by an engine) is skipped."""
+    A file that vanishes mid-scan (deleted, or renamed by an engine) is skipped.
+    The lstat is our own: Windows' scandir answers stat() from the listing,
+    which still has a file deleted since."""
     found: list[tuple[str, os.stat_result]] = []
     with os.scandir(DOWNLOAD_DIR) as entries:
         for entry in entries:
             if library_name(entry.name) is None:
                 continue
             try:
-                info = entry.stat(follow_symlinks=False)
+                info = os.lstat(entry.path)
             except OSError:
                 continue
             if stat.S_ISREG(info.st_mode):
