@@ -1956,7 +1956,8 @@ def progress_hook(job_id: str, d: dict):
             job["speed"] = d.get("speed")
             job["eta"] = d.get("eta")
             job["filename"] = clean_text(d.get("filename") or job.get("filename"), 500)
-            file_pct = round(downloaded / total * 100, 1) if total else 0
+            # total_bytes_estimate can be low: an overshoot reads as 100%, not 140%.
+            file_pct = round(min(1.0, downloaded / total) * 100, 1) if total else 0
             pl_count_v = job.get("playlist_count")
             pl_index_v = job.get("playlist_index")
             overall = None

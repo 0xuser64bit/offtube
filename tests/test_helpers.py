@@ -1347,3 +1347,20 @@ def test_failure_message_hides_tool_framing_when_it_can_explain():
     logged = app.failure_message("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable",
                                  "YouTube", "Couldn’t keep this: ", logged=True)
     assert logged == "Couldn’t keep this: This video is unavailable"
+
+
+def test_progress_never_passes_the_estimate():
+    # total_bytes_estimate is often low; the overshoot must not read as
+    # 140% or bleed into the next playlist item's share of the meter.
+    app.jobs["est"] = {"id": "est", "status": "downloading", "progress": 0, "log": [], "files": []}
+    try:
+        app.progress_hook("est", {"status": "downloading", "downloaded_bytes": 140,
+                                  "total_bytes_estimate": 100, "filename": "/tmp/V [a].mp4"})
+        assert app.jobs["est"]["progress"] == 100
+        assert "140" not in app.jobs["est"]["detail"]
+        app.progress_hook("est", {"status": "downloading", "downloaded_bytes": 140, "total_bytes_estimate": 100,
+                                  "filename": "/tmp/V [a].mp4",
+                                  "info_dict": {"playlist_index": 2, "playlist_count": 4, "id": "a"}})
+        assert app.jobs["est"]["progress"] == 50
+    finally:
+        app.jobs.clear()
