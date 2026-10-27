@@ -877,3 +877,73 @@ def test_client_closing_mid_file_is_not_a_server_error(server, capfd):
     assert status == 200
     time.sleep(0.5)
     assert "Traceback" not in capfd.readouterr().err
+
+
+# --- admission: bounded threads, bounded time to send a request -------------------
+@pytest.fixture()
+def small_server(monkeypatch):
+    monkeypatch.setattr(app.LocalServer, "max_connections", 2)
+    monkeypatch.setattr(app, "REQUEST_READ_DEADLINE", 0.6)
+    httpd = app.LocalServer(("127.0.0.1", 0), app.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join(timeout=5)
+
+
+def _health(port):
+    with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+
+def test_connections_past_the_cap_are_refused_at_once(small_server):
+    port = small_server.server_address[1]
+    idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+    try:
+        time.sleep(0.1)  # both handlers are now waiting for a request
+        started = time.monotonic()
+        status, headers, body = _health(port)
+        assert status == 503 and time.monotonic() - started < 0.5
+        assert headers["Retry-After"] == "1"
+        assert json.loads(body)["ok"] is False
+    finally:
+        for connection in idle:
+            connection.close()
+    deadline = time.monotonic() + 3
+    while _health(port)[0] != 200:  # closed clients free their slots
+        assert time.monotonic() < deadline
+
+
+def test_slow_requests_are_cut_off_at_the_deadline(small_server):
+    port = small_server.server_address[1]
+    for opening in (b"GET /api/health HTTP/1.1\r\n",
+                    b"POST /api/info HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 50\r\n\r\n{"):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+            connection.sendall(opening)
+            started = time.monotonic()
+            with pytest.raises(OSError):
+                # A byte every 0.1 s resets any per-recv timeout; only a
+                # deadline for the whole request ends it.
+                while time.monotonic() - started < 4:
+                    connection.sendall(b"x")
+                    time.sleep(0.1)
+            assert time.monotonic() - started < 2
+    assert _health(port)[0] == 200  # and the slots came back
+
+
+def test_oversized_body_drain_is_bounded(server, monkeypatch):
+    monkeypatch.setattr(app, "MAX_JSON_BODY", 1024)
+    host, port = urllib.parse.urlsplit(server).hostname, urllib.parse.urlsplit(server).port
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(b"POST /api/info HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                           b"Content-Type: application/json\r\nContent-Length: 10000000000\r\n\r\n")
+        sent, started = 0, time.monotonic()
+        with pytest.raises(OSError):
+            while time.monotonic() - started < 5:  # a fast client claiming 10 GB
+                connection.sendall(b"x" * 65536)
+                sent += 65536
+    assert sent < 64 * 1024 * 1024

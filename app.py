@@ -43,6 +43,7 @@ import mimetypes
 import math
 import os
 import re
+import selectors
 import shutil
 import signal
 import socket
@@ -155,6 +156,7 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 # their directories.
 
 MAX_JSON_BODY = 2 * 1024 * 1024  # full-browser cookie pastes can be MBs; trimmed after parse
+REQUEST_READ_DEADLINE = 30.0  # seconds to receive a whole request, head and body
 MAX_URL_LEN = 2000
 MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; one site's rows surviving the trim are KBs
 MAX_PLAYLIST_ITEMS_LEN = 200
@@ -2156,11 +2158,41 @@ def environment_checks() -> dict:
     _health_cache.update(at=now, checks=checks)
     return checks
 
+class DeadlineReader(io.RawIOBase):
+    """Reads a request off a socket against one deadline for the whole of it.
+    A per-recv timeout restarts with every byte, so a client trickling bytes
+    could hold its worker forever; past the deadline a read raises
+    TimeoutError, which BaseHTTPRequestHandler answers by closing."""
+
+    def __init__(self, sock: socket.socket, deadline: float):
+        super().__init__()
+        self.sock, self.deadline = sock, deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        remaining = self.deadline - time.monotonic()
+        if remaining > 0:
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(self.sock, selectors.EVENT_READ)
+                if waiting.select(remaining):
+                    return self.sock.recv_into(buffer)
+        raise TimeoutError("the request took too long to arrive")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "offtube/1.0"
-    # A stalled client must not pin a worker thread forever. BaseHTTPRequestHandler
-    # checks this between requests and on socket reads.
+    # A stalled client must not pin a worker thread forever: reading the
+    # request has one overall deadline (DeadlineReader); writes, such as a
+    # long file the client pauses, get this much time per operation.
     timeout = 30
+
+    def setup(self):
+        super().setup()
+        self.rfile.close()
+        self.rfile = io.BufferedReader(
+            DeadlineReader(self.connection, time.monotonic() + REQUEST_READ_DEADLINE))
 
     def log_message(self, fmt, *args):  # stderr access log for API only
         try:
@@ -2203,9 +2235,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not length:
             return {}
         if length > MAX_JSON_BODY:
-            # Drain so the client doesn't get RST mid-send (flaky 413s).
+            # Drain so the client doesn't get RST mid-send (flaky 413s), but
+            # only so far: a client can declare any length.
             try:
-                remaining = length
+                remaining = min(length, 4 * MAX_JSON_BODY)
                 while remaining > 0:
                     chunk = self.rfile.read(min(65536, remaining))
                     if not chunk:
@@ -2517,10 +2550,60 @@ class Handler(http.server.BaseHTTPRequestHandler):
 class LocalServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+    # One thread per connection, capped: past this many, a connection is
+    # answered 503 at once rather than given a thread to wait in.
+    max_connections = 64
 
     def __init__(self, server_address: tuple[str, int], handler_class: type[Handler]):
         self.address_family = socket.AF_INET6 if server_address[0] == "::1" else socket.AF_INET
+        self.connection_slots = threading.BoundedSemaphore(self.max_connections)
+        self.refused = 0
+        self.refused_logged_at = -math.inf
         super().__init__(server_address, handler_class)
+
+    def process_request(self, request, client_address):
+        if not self.connection_slots.acquire(blocking=False):
+            self.refuse_busy(request)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connection_slots.release()
+
+    def refuse_busy(self, request: socket.socket) -> None:
+        """Say 503 without a thread or reading the request. What the client
+        already sent is drained first, so the close is a FIN its HTTP stack
+        reads the answer from, not a reset."""
+        body = b'{"ok": false, "error": "offtube is busy. Retry in a moment."}'
+        try:
+            request.setblocking(False)
+            try:
+                while request.recv(65536):
+                    pass
+            except (BlockingIOError, InterruptedError):
+                pass
+            request.settimeout(1)
+            request.sendall(b"HTTP/1.0 503 Service Unavailable\r\n"
+                            b"Content-Type: application/json; charset=utf-8\r\n"
+                            b"Retry-After: 1\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                            b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+        except OSError:
+            pass
+        # Saturation is worth knowing about, but not once per connection.
+        self.refused += 1
+        now = time.monotonic()
+        if now - self.refused_logged_at >= 10:
+            sys.stderr.write(f"{_dt.datetime.now().isoformat(timespec='seconds')} busy: refused "
+                             f"{self.refused} connection(s), all {self.max_connections} in use\n")
+            self.refused, self.refused_logged_at = 0, now
 
 
 def main():
