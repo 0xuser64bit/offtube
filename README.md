@@ -196,6 +196,7 @@ node --test tests/browser/*.test.mjs     # Chromium; needs Playwright (+ axe-cor
 `tests/browser/` drives the web desk and the extension in Chromium against
 the real server with a stubbed yt-dlp. On the desk: keeping a video,
 circling a collection, searching a library, what a screen reader is told,
+keeping a collection with the keyboard alone (focus shown at every stop),
 and reflow at 320 CSS px without sideways scrolling.
 In the extension, loaded unpacked: the popup with the server off and keeping
 a pasted link, a collection handed from the popup to the side panel, and the
