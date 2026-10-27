@@ -1092,6 +1092,10 @@ if "silent" in url:  # one large file: nothing printed for a long time
 if "fail" in url:
     print("[pinterest][error] Requested pin could not be found", flush=True)
     sys.exit(8)
+if "unicode" in url:
+    (d / "Café ☕ [1].jpg").write_bytes(b"img")
+    print(d / "Café ☕ [1].jpg", flush=True)
+    sys.exit(0)
 (d / "pinterest_1.jpg").write_bytes(b"img")
 print(d / "pinterest_1.jpg", flush=True)
 print("# " + str(d / "pinterest_0.jpg"), flush=True)
@@ -1175,6 +1179,18 @@ def test_run_gallery_collects_saved_and_existing(tmp_path, monkeypatch, fake_gal
         assert "proc" not in job
     finally:
         app.jobs.clear()
+
+
+def test_run_gallery_reads_names_in_utf8_whatever_the_platform(tmp_path, monkeypatch, fake_gallery):
+    # Python's pipes default to the ANSI code page on Windows (cp1252), as
+    # latin-1 does here: "☕" can't be written and "é" would come back garbled.
+    monkeypatch.setenv("PYTHONIOENCODING", "latin-1")
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("g-utf8")
+    try:
+        assert app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?unicode") == ["Café ☕ [1].jpg"]
+    finally:
+        app.jobs.pop("g-utf8", None)
 
 
 def test_run_gallery_partial_keeps_files_and_warns(tmp_path, monkeypatch, fake_gallery):

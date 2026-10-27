@@ -993,7 +993,8 @@ def node_meets_yt_dlp(version: str | None) -> bool:
 
 def _cmd_version(argv: list[str]) -> str | None:
     try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        out = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=5)
     except Exception:
         return None
     text = (out.stdout or out.stderr or "").strip()
@@ -1323,6 +1324,15 @@ GALLERY_INSPECT_LIMIT = 50
 VIDEO_EXTS = frozenset({"mp4", "webm", "mov", "m4v", "mkv"})
 
 
+def python_child_env() -> dict:
+    """Environment for the Python programs offtube starts (gallery-dl, the
+    yt-dlp worker): unbuffered, and UTF-8 on their standard streams, which
+    is how offtube reads and writes them. Their default is the platform's
+    encoding, the ANSI code page on Windows, which can't write every file
+    name and garbles the rest."""
+    return {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
+
+
 def gallery_cmd(payload: dict, cookie_id: str) -> list[str]:
     """gallery-dl argv prefix: ignores the user's own gallery-dl config,
     never prompts, skips text-only 'files' (story text, captions), and
@@ -1379,7 +1389,7 @@ def inspect_gallery(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
         "-j", "--range", f"1-{GALLERY_INSPECT_LIMIT}", "--", url]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                             errors="replace", timeout=90)
+                             errors="replace", timeout=90, env=python_child_env())
     except subprocess.TimeoutExpired:
         raise RuntimeError("gallery-dl took too long to list that link.")
     try:
@@ -1435,7 +1445,7 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     # Unbuffered: a piped child would otherwise hold its lines until exit.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace",
-                            env={**os.environ, "PYTHONUNBUFFERED": "1"}, **OWN_PROCESS_GROUP)
+                            env=python_child_env(), **OWN_PROCESS_GROUP)
     done = threading.Event()
     watchdog = threading.Thread(target=watch_job_process, args=(job, proc, done),
                                 name=f"watch-{job['id']}", daemon=True)
@@ -1714,7 +1724,8 @@ def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
     try:
         with open(log_name, "w+b") as output, open(log_name, "rb") as reader:
             proc = subprocess.Popen(ytdlp_worker_cmd(), stdin=subprocess.PIPE, stdout=output,
-                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", **OWN_PROCESS_GROUP)
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                    env=python_child_env(), **OWN_PROCESS_GROUP)
             with jobs_lock:
                 job["proc"] = proc
                 if gif_folder is not None:
@@ -1834,7 +1845,7 @@ def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False
     check_job(job)
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=codec_type:format=duration", "-of", "json", str(source)],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
     try:
         metadata = json.loads(probe.stdout)
         duration = float(metadata.get("format", {}).get("duration", 0))
