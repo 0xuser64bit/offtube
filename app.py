@@ -177,11 +177,13 @@ LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # In-progress / fragment files yt-dlp leaves behind mid-download. These must
 # never appear in the library or in a job's claimed outputs.
 TEMP_SUFFIXES = (".part", ".temp", ".tmp", ".ytdl", ".ydl", ".frag")
+# HLS/DASH fragments are "<name>.part-Frag<n>" while a download runs.
+FRAGMENT_RE = re.compile(r"\.part-frag\d+$")
 
 
 def is_temp_file(name: str) -> bool:
     low = name.lower()
-    return low == ".gitkeep" or any(low.endswith(s) for s in TEMP_SUFFIXES)
+    return low == ".gitkeep" or any(low.endswith(s) for s in TEMP_SUFFIXES) or bool(FRAGMENT_RE.search(low))
 
 
 class HttpError(Exception):

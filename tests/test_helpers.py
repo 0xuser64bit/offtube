@@ -708,6 +708,9 @@ def test_validate_path_writes_no_cookie_file(tmp_path, monkeypatch):
 
 def test_is_temp_file():
     assert app.is_temp_file("a.mp4.part")
+    # yt-dlp's HLS/DASH fragments: "<tmpfilename>-Frag<n>"
+    assert app.is_temp_file("Video [abc].f137.mp4.part-Frag12")
+    assert not app.is_temp_file("Notes-Frag1.txt")
     assert app.is_temp_file("a.temp")
     assert app.is_temp_file("a.ytdl")
     assert app.is_temp_file(".gitkeep")
@@ -1364,3 +1367,11 @@ def test_progress_never_passes_the_estimate():
         assert app.jobs["est"]["progress"] == 50
     finally:
         app.jobs.clear()
+
+
+def test_cleanup_job_temps_removes_fragments(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    fragment = tmp_path / "Video [abc].f137.mp4.part-Frag3"
+    fragment.write_bytes(b"partial")
+    app.cleanup_job_temps({"seen_files": ["Video [abc].f137.mp4.part"], "seen_ids": ["abc"]})
+    assert not fragment.exists()
