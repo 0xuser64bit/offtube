@@ -185,7 +185,7 @@ jobs:
             | sed 's/.*) //' | awk '$1 == "Z"' | wc -l)
           test "$zombies" -eq 0
           # SIGTERM must stop offtube cleanly, well before the SIGKILL timeout.
-          docker stop --time 10 offtube-ci
+          docker stop --timeout 10 offtube-ci
           test "$(docker inspect --format '{{.State.ExitCode}}' offtube-ci)" -eq 0
       - name: Container diagnostics and cleanup
         if: always()
