@@ -54,19 +54,7 @@ function renderChips(selected) {
 const chosenQuality = () => document.querySelector('input[name="q"]:checked')?.value || 'best';
 OFFTUBE.initGifOptions(() => info, chosenQuality, true);
 
-function setDeck(text, mode, pct) {
-  $('jobStatus').textContent = text;
-  const line = $('jobStatus').parentElement;
-  line.classList.toggle('is-error', mode === 'error');
-  line.classList.toggle('is-done', mode === 'done');
-  $('meter').classList.toggle('is-error', mode === 'error');
-  $('meter').classList.toggle('is-done', mode === 'done');
-  if (typeof pct === 'number') {
-    $('meter').style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
-    $('meter').setAttribute('aria-valuenow', String(Math.round(pct)));
-    $('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
-  }
-}
+const setDeck = OFFTUBE.setDeck;
 
 function syncSheet() {
   if (!OFFTUBE.isCollection(info)) { $('sheetTools').classList.add('hidden'); return; }
@@ -85,6 +73,7 @@ async function inspect() {
   invalidateSource();
   const my = inspectToken;
   setStage(OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]));
+  OFFTUBE.announce('Reading the link…');
   try {
     const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessPayload() });
     if (my !== inspectToken || u !== url()) return;
@@ -93,6 +82,7 @@ async function inspect() {
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     setStage(OFFTUBE.printHtml(info, { cells: 8 }));
+    OFFTUBE.announce(OFFTUBE.printSummary(info));
     renderChips(chosenQuality());
     syncSheet();
     if (!OFFTUBE.isCollection(info)) $('dlLabel').textContent = chosenQuality() === 'gif' ? 'Keep as GIF' : 'Keep';
@@ -121,12 +111,16 @@ async function pollJob(id, sourceUrl, sourceToken) {
     try {
       job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(id)}`);
     } catch {
-      if (jobId === id) setDeck('Lost the server — retrying…', 'busy');
+      if (jobId === id) {
+        setDeck('Lost the server — retrying…', 'busy');
+        OFFTUBE.speakJob('lost');
+      }
       continue;
     }
     if (jobId !== id) return;
     const isPrint = sourceUrl === url() && sourceToken === inspectToken;
     const pct = job.progress || 0;
+    OFFTUBE.speakJob(job);
     if (isPrint) OFFTUBE.showGifResult(job, server);
     if (job.status === 'done') {
       const files = job.files || [];

@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../ui.css" />
 </head>
 <body class="panel">
+  <p id="announce" class="visually-hidden" role="status"></p>
   <svg class="visually-hidden" aria-hidden="true" focusable="false"><filter id="wax" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="1.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 
   <header class="head">
@@ -20,7 +21,7 @@
 
   <main>
 
-    <div id="stage" aria-live="polite"></div>
+    <div id="stage"></div>
     <p class="print-tools hidden" id="sheetTools"><span class="count" id="markCount"></span><button class="text-btn" type="button" id="markAll">Circle all shown</button><button class="text-btn" type="button" id="markNone">Clear circles</button></p>
 
     <div id="problem" class="problem hidden" role="alert">
@@ -44,7 +45,7 @@
         <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
       </div>
 
-      <div class="deck" aria-live="polite">
+      <div class="deck">
         <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
         <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
         <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" role="region" aria-label="Transfer log"></pre></details>

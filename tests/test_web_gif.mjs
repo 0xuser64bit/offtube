@@ -277,3 +277,20 @@ test("collection ranges are only editable when they apply", async () => {
   for (const id of ["plStart", "plEnd", "plItems"]) assert.equal(ui.elements.get(id).disabled, false, id);
   assert.equal(ui.elements.get("plItemsField").classList.contains("is-off"), false);
 });
+
+test("screen readers hear what was found and each change of state once, not every tick", () => {
+  const ui = desk();
+  // The deck and the print redraw on every poll, so they are not live regions.
+  assert.doesNotMatch(html, /class="deck"[^>]*aria-live/);
+  assert.doesNotMatch(html, /id="print"[^>]*aria-live/);
+  const said = [];
+  Object.defineProperty(ui.elements.get("announce"), "textContent", { set(v) { said.push(v); }, get() { return said.at(-1) || ""; } });
+  ui.elements.get("url").value = "https://www.youtube.com/watch?v=abc123abc12";
+  ui.run(`renderPrint({ type: "video", media: "video", title: "Clip", source: { label: "YouTube" } })`);
+  ui.run(`showJob({ id: "j", status: "downloading", progress: 10, detail: "Downloading — 10%" }, true)`);
+  ui.run(`showJob({ id: "j", status: "downloading", progress: 20, detail: "Downloading — 20%" }, true)`);
+  ui.run(`showJob({ id: "j", status: "processing", progress: 99, quality: "gif" }, true)`);
+  ui.run(`showJob({ id: "j", status: "done", progress: 100, quality: "gif", files: ["a.gif"] }, true)`);
+  ui.run(`setDeck("Couldn’t cancel: gone", "error")`);
+  assert.deepEqual(said, ["YouTube video ready: Clip.", "Downloading.", "Making the GIF.", "Kept a.gif.", "Couldn’t cancel: gone"]);
+});

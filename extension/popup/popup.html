@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="../ui.css" />
 </head>
 <body class="popup">
+  <p id="announce" class="visually-hidden" role="status"></p>
   <svg class="visually-hidden" aria-hidden="true" focusable="false"><filter id="wax" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="1.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 
   <header class="head">
@@ -19,7 +20,7 @@
   </header>
 
   <main>
-    <div id="stage" aria-live="polite"></div>
+    <div id="stage"></div>
     <p class="print-tools hidden" id="sheetTools"><span class="count" id="markCount"></span><button class="text-btn" type="button" id="pickInPanel">More in the side panel</button></p>
 
     <div id="problem" class="problem hidden" role="alert">
@@ -41,7 +42,7 @@
       <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
     </div>
 
-    <div class="deck" aria-live="polite">
+    <div class="deck">
       <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
       <p class="deck-line"><span id="jobStatus">Kept files land in downloads/ on this machine.</span><span class="deck-pct num" id="jobPct"></span></p>
     </div>

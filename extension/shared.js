@@ -394,6 +394,66 @@ OFFTUBE.formatsHtml = function formatsHtml(list, selected, { chips = false } = {
     </label>`).join('');
 };
 
+/* ---------------- the deck and what is spoken ---------------- */
+
+/* One polite announcer per surface (#announce). The deck and the stage
+ * redraw on every poll; reading each redraw aloud would drown a screen
+ * reader, so only what a link turned out to be, each change of a job's
+ * state and failures are spoken. */
+OFFTUBE.announce = function announce(text) {
+  const el = document.getElementById('announce');
+  if (el) el.textContent = text;
+};
+
+OFFTUBE.SPOKEN = { queued: 'Waiting to start.', starting: 'Starting.', downloading: 'Downloading.', processing: 'Finishing the file.' };
+let spokenJob = '';
+
+OFFTUBE.jobSpeech = function jobSpeech(job) {
+  if (job.status === 'done') {
+    const files = job.files || [];
+    return files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`;
+  }
+  if (job.status === 'cancelled') return 'Cancelled.';
+  if (job.status === 'processing' && job.quality === 'gif') return 'Making the GIF.';
+  return OFFTUBE.SPOKEN[job.status] || '';
+};
+
+/* Speaks a job once per state ('lost' marks a server outage). */
+OFFTUBE.speakJob = function speakJob(job) {
+  const said = job === 'lost' ? 'lost' : `${job.id}:${job.status}`;
+  if (said === spokenJob) return;
+  spokenJob = said;
+  if (job === 'lost') OFFTUBE.announce('Lost the server — retrying…');
+  else if (job.status !== 'error') OFFTUBE.announce(OFFTUBE.jobSpeech(job)); // setDeck speaks every failure
+};
+
+OFFTUBE.printSummary = function printSummary(info) {
+  const site = (info.source && info.source.label) || 'Link';
+  const title = info.title || 'Untitled';
+  if (OFFTUBE.isCollection(info)) {
+    const count = `${info.count || (info.entries || []).length}${info.more ? '+' : ''}`;
+    return `${site} ${info.type === 'playlist' ? 'playlist' : 'collection'} ready, ${count} items: ${title}.`;
+  }
+  const kind = (OFFTUBE.MEDIA_WORD[info.media] || (info.type === 'gallery' ? 'Post' : 'Video')).toLowerCase();
+  return `${site} ${kind} ready: ${title}.`;
+};
+
+OFFTUBE.setDeck = function setDeck(text, mode, pct) {
+  const status = document.getElementById('jobStatus');
+  const meter = document.getElementById('meter');
+  status.textContent = text;
+  status.parentElement.classList.toggle('is-error', mode === 'error');
+  status.parentElement.classList.toggle('is-done', mode === 'done');
+  meter.classList.toggle('is-error', mode === 'error');
+  meter.classList.toggle('is-done', mode === 'done');
+  if (typeof pct === 'number') {
+    meter.style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
+    meter.setAttribute('aria-valuenow', String(Math.round(pct)));
+    document.getElementById('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
+  }
+  if (mode === 'error') OFFTUBE.announce(text);
+};
+
 /* Problem block: struck mark + message (+ optional fix button). */
 OFFTUBE.showProblem = function showProblem(msg) {
   const box = document.getElementById('problem');

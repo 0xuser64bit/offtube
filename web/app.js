@@ -32,6 +32,42 @@ const MARKS = {
 const markSvg = (kind) =>
   `<svg class="mark mark-${kind}" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${MARKS[kind]}"/></svg>`;
 
+// One polite announcer for the desk (#announce). The deck and the print
+// redraw on every poll; reading each redraw aloud would drown a screen
+// reader, so only what a link turned out to be, each change of a job's
+// state and failures are spoken.
+function announce(text) { $("announce").textContent = text; }
+
+const SPOKEN = { queued: "Waiting to start.", starting: "Starting.", downloading: "Downloading.", processing: "Finishing the file." };
+
+function jobSpeech(job) {
+  if (job.status === "done") {
+    const files = job.files || [];
+    return files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || "the file"}.`;
+  }
+  if (job.status === "cancelled") return "Cancelled.";
+  if (job.status === "processing" && job.quality === "gif") return "Making the GIF.";
+  return SPOKEN[job.status] || "";
+}
+
+function speakJob(job) {
+  const said = `${job.id}:${job.status}`;
+  if (said === state.spoken) return;
+  state.spoken = said;
+  if (job.status !== "error") announce(jobSpeech(job)); // setDeck speaks every failure
+}
+
+function printSummary(info) {
+  const site = (info.source && info.source.label) || "Link";
+  const title = info.title || "Untitled";
+  if (info.type === "playlist" || (info.type === "gallery" && info.count > 1)) {
+    const count = `${info.count || (info.entries || []).length}${info.more ? "+" : ""}`;
+    return `${site} ${info.type === "playlist" ? "playlist" : "collection"} ready, ${count} items: ${title}.`;
+  }
+  const kind = (info.type === "gallery" ? MEDIA_WORD[info.media] || "Post" : MEDIA_WORD[info.media] || "Video").toLowerCase();
+  return `${site} ${kind} ready: ${title}.`;
+}
+
 const VIDEO_LADDER = [
   { id: "best", name: "Best available", sub: "highest stream" },
   { id: "2160", name: "2160p", sub: "4K" },
@@ -52,6 +88,7 @@ const state = {
   marks: new Set(),    // circled item numbers on a collection sheet
   fetchToken: 0,
   activeJobId: null,   // job shown on the deck
+  spoken: "",          // the job state last announced ("id:status")
   printJobId: null,    // job started from the current source (develops its print)
   previewJobId: null,  // source job or session job explicitly selected for its result
   pollTimer: null,
@@ -283,6 +320,7 @@ function showBlank() {
 }
 
 function renderExposing(url) {
+  announce("Reading the link…");
   $("gifResult").classList.add("hidden");
   $("blank").classList.add("hidden");
   const host = (url.replace(/^https?:\/\//, "").split("/")[0] || "").replace(/^www\./, "");
@@ -363,6 +401,7 @@ function renderPrint(info) {
   }
   if (info.media === "audio") document.querySelector('input[name="otype"][value="audio"]').checked = true;
   box.classList.remove("hidden");
+  announce(printSummary(info));
   renderFormats();
   syncNotes();
 }
@@ -557,6 +596,7 @@ function setDeck(text, mode, pct) {
     $("meter").setAttribute("aria-valuenow", String(Math.round(pct)));
     $("jobPct").textContent = mode === "busy" && pct > 0 ? `${Math.round(pct)}%` : "";
   }
+  if (mode === "error") announce(text);
 }
 
 // The print in the stage develops while its own job runs.
@@ -580,6 +620,7 @@ function finishPrint(kind, label) {
 
 function showJob(job, live) {
   const pct = job.progress || 0;
+  speakJob(job);
   $("jobLog").textContent = (job.log || []).slice(-40).join("\n");
   const isSource = state.printJobId === job.id;
   const isPrint = isSource && Boolean(currentInfo());
@@ -640,7 +681,10 @@ function pollJob(jobId) {
         refreshQueue();
       }
     } catch {
-      if (state.activeJobId === jobId) setDeck("Lost the server — retrying…", "busy");
+      if (state.activeJobId === jobId) {
+        setDeck("Lost the server — retrying…", "busy");
+        if (state.spoken !== "lost") { state.spoken = "lost"; announce("Lost the server — retrying…"); }
+      }
     } finally {
       inFlight = false;
     }

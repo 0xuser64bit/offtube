@@ -194,6 +194,7 @@ async function inspect() {
   invalidateSource();
   const my = inspectToken;
   $('stage').innerHTML = OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]);
+  OFFTUBE.announce('Reading the link…');
   $('sheetTools').classList.add('hidden');
   try {
     const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessFields() });
@@ -205,6 +206,7 @@ async function inspect() {
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     $('stage').innerHTML = OFFTUBE.printHtml(info);
+    OFFTUBE.announce(OFFTUBE.printSummary(info));
     setLink(u, { label: `${(info.source && info.source.label) || 'Link'} · ${u.replace(/^https?:\/\/(www\.)?/, '')}` });
     document.querySelector(`input[name="plmode"][value="${OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
     renderFormats();
@@ -244,22 +246,11 @@ $('markNone').addEventListener('click', () => {
 
 /* ---------------- keep + job ---------------- */
 
-function setDeck(text, mode, pct) {
-  $('jobStatus').textContent = text;
-  const line = $('jobStatus').parentElement;
-  line.classList.toggle('is-error', mode === 'error');
-  line.classList.toggle('is-done', mode === 'done');
-  $('meter').classList.toggle('is-error', mode === 'error');
-  $('meter').classList.toggle('is-done', mode === 'done');
-  if (typeof pct === 'number') {
-    $('meter').style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
-    $('meter').setAttribute('aria-valuenow', String(Math.round(pct)));
-    $('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
-  }
-}
+const setDeck = OFFTUBE.setDeck;
 
 function showJob(job, live) {
   const pct = job.progress || 0;
+  OFFTUBE.speakJob(job);
   $('log').textContent = (job.log || []).slice(-30).join('\n');
   const isPrint = printJobId === job.id;
   if (resultJobId === job.id) OFFTUBE.showGifResult(job, server);
@@ -299,7 +290,10 @@ function pollJob(id) {
         refreshQueue();
       }
     } catch {
-      if (activeJobId === id) setDeck('Lost the server — retrying…', 'busy');
+      if (activeJobId === id) {
+        setDeck('Lost the server — retrying…', 'busy');
+        OFFTUBE.speakJob('lost');
+      }
     } finally {
       inFlight = false;
     }
