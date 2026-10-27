@@ -788,3 +788,92 @@ def test_delete_failure_names_the_reason_not_the_path(server, monkeypatch):
     assert body["error"] == "Could not delete: Permission denied."
     status, body, _ = api(server, "POST", "/api/files/delete", {"name": ["locked [l].mp4"]})
     assert status == 400
+
+
+# --- byte ranges: media elements read what they need and can stop cleanly --------
+def _fetch(base, path, headers=None, method="GET"):
+    host, port = urllib.parse.urlsplit(base).hostname, urllib.parse.urlsplit(base).port
+    with closing(http.client.HTTPConnection(host, port, timeout=5)) as connection:
+        connection.request(method, path, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+
+@pytest.fixture()
+def kept_bytes(server):
+    data = bytes(range(256)) * 4  # 1024 distinguishable bytes
+    (app.DOWNLOAD_DIR / "clip [r].mp4").write_bytes(data)
+    return server, "/files/" + urllib.parse.quote("clip [r].mp4"), data
+
+
+@pytest.mark.parametrize("spec, first, last", [
+    ("bytes=2-5", 2, 5), ("bytes=1000-", 1000, 1023), ("bytes=-24", 1000, 1023),
+    ("bytes=1020-99999", 1020, 1023), ("bytes=-5000", 0, 1023), ("BYTES = 7 - 7", 7, 7),
+])
+def test_single_byte_range_is_partial_content(kept_bytes, spec, first, last):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": spec})
+    assert status == 206
+    assert headers["Content-Range"] == f"bytes {first}-{last}/{len(data)}"
+    assert int(headers["Content-Length"]) == last - first + 1
+    assert body == data[first:last + 1]
+    assert headers["Accept-Ranges"] == "bytes"
+
+
+def test_whole_file_advertises_ranges_and_validators(kept_bytes):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path)
+    assert status == 200 and body == data
+    assert headers["Accept-Ranges"] == "bytes"
+    assert headers["ETag"].startswith('"') and headers["Last-Modified"].endswith("GMT")
+
+
+@pytest.mark.parametrize("spec", ["bytes=0-1,4-5", "bytes=5-2", "bytes=-", "items=0-1", "bytes=x-",
+                                  "bytes=" + "9" * 30 + "-"])
+def test_unsupported_or_malformed_ranges_get_the_whole_file(kept_bytes, spec):
+    base, path, data = kept_bytes
+    status, _, body = _fetch(base, path, {"Range": spec})
+    assert status == 200 and body == data
+
+
+@pytest.mark.parametrize("spec", ["bytes=1024-", "bytes=5000-6000", "bytes=-0"])
+def test_unsatisfiable_range_is_416_with_the_length(kept_bytes, spec):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": spec})
+    assert status == 416
+    assert headers["Content-Range"] == f"bytes */{len(data)}"
+    assert body == b""
+
+
+def test_if_range_only_resumes_the_same_file(kept_bytes):
+    base, path, data = kept_bytes
+    _, headers, _ = _fetch(base, path)
+    for validator in (headers["ETag"], headers["Last-Modified"]):
+        status, _, body = _fetch(base, path, {"Range": "bytes=10-19", "If-Range": validator})
+        assert status == 206 and body == data[10:20]
+    for stale in ('"0-0"', "W/" + headers["ETag"], "Thu, 01 Jan 1970 00:00:00 GMT"):
+        status, _, body = _fetch(base, path, {"Range": "bytes=10-19", "If-Range": stale})
+        assert status == 200 and body == data
+
+
+def test_head_ignores_ranges(kept_bytes):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": "bytes=0-9"}, method="HEAD")
+    assert status == 200 and body == b""
+    assert int(headers["Content-Length"]) == len(data)
+
+
+def test_client_closing_mid_file_is_not_a_server_error(server, capfd):
+    big = app.DOWNLOAD_DIR / "big [b].mp4"
+    with big.open("wb") as fh:
+        fh.truncate(64 * 1024 * 1024)  # sparse: cheap to create, too big to buffer
+    host, port = urllib.parse.urlsplit(server).hostname, urllib.parse.urlsplit(server).port
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(b"GET /files/big%20%5Bb%5D.mp4 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        assert connection.recv(64).startswith(b"HTTP/1.0 200")
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+    # The handler finishes on its own; the abort must not print a traceback.
+    status, _, _ = api(server, "GET", "/api/health")
+    assert status == 200
+    time.sleep(0.5)
+    assert "Traceback" not in capfd.readouterr().err

@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import concurrent.futures
+import email.utils
 import functools
 import http.server
 import io
@@ -520,6 +521,26 @@ def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
         pass
     handle.close()
     return None
+
+
+def byte_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """The one byte range a Range header asks of a `size`-byte file, as an
+    inclusive (first, last), or None to send it whole: no header, an empty
+    file, several ranges or a malformed one (RFC 9110 lets a server ignore
+    those). Raises HttpError(416) for a range that starts past the end."""
+    match = re.fullmatch(r"\s*bytes\s*=\s*(\d{0,20})\s*-\s*(\d{0,20})\s*", header or "", re.IGNORECASE)
+    if not match or size <= 0 or not (match[1] or match[2]):
+        return None
+    if not match[1]:  # a suffix: the final N bytes
+        if int(match[2]) == 0:
+            raise HttpError(416, "Range not satisfiable.")
+        return max(0, size - int(match[2])), size - 1
+    first = int(match[1])
+    if match[2] and int(match[2]) < first:
+        return None  # an invalid spec, not an unsatisfiable one
+    if first >= size:
+        raise HttpError(416, "Range not satisfiable.")
+    return first, min(int(match[2]), size - 1) if match[2] else size - 1
 
 
 def delete_library_file(name) -> str | None:
@@ -2261,14 +2282,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         handle, info = opened
         with handle:
+            size = info.st_size
+            etag = f'"{size:x}-{info.st_mtime_ns:x}"'
+            modified = email.utils.formatdate(info.st_mtime, usegmt=True)
+            # Media elements read the index and the frames they need as
+            # ranges. Ranges are GET-only, and If-Range resumes only the
+            # file it names: a replaced file is sent whole.
+            ranged = (self.command == "GET"
+                      and self.headers.get("If-Range", etag).strip() in (etag, modified))
+            try:
+                span = byte_range(self.headers.get("Range"), size) if ranged else None
+            except HttpError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            first, last = span or (0, size - 1)
             ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
             # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
             fallback = re.sub(r'["\r\n]', "_", name)
             fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
             encoded = urllib.parse.quote(name, safe="")
-            self.send_response(200)
+            self.send_response(206 if span else 200)
             self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(info.st_size))
+            self.send_header("Content-Length", str(last - first + 1))
+            if span:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", modified)
             self.send_header(
                 "Content-Disposition",
                 f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
@@ -2277,7 +2320,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
             if not getattr(self, "_omit_body", False):
-                shutil.copyfileobj(handle, self.wfile)
+                self.send_file_body(handle, first, last - first + 1)
+
+    def send_file_body(self, handle: io.BufferedReader, offset: int, count: int) -> None:
+        """Send `count` bytes of `handle` from `offset` (zero-copy where the
+        OS allows). A client that stops reading - a media element that has
+        what it needs, a cancelled Save - ends the response quietly."""
+        if count <= 0:
+            return
+        try:
+            self.connection.sendfile(handle, offset, count)
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
 
     # -- routes ------------------------------------------------------------
     def do_HEAD(self):
