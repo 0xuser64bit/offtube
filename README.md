@@ -208,10 +208,11 @@ when axe-core isn't); to run them, install `playwright@1.63.0` and
 rules, so use the pinned one.
 
 GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests on
-Windows, the browser suite with Playwright and axe-core required, builds the
-Docker image, checks the packaged yt-dlp worker, smoke-tests HTTP startup, and
-checks that the container reaps orphaned processes and stops cleanly on
-`docker stop`. See `ARCHITECTURE.md` for the system map and remaining
+Windows and macOS, the browser suite with Playwright and axe-core required,
+starts offtube from a fresh checkout with `run.sh` (Linux, macOS; it must stop
+cleanly on SIGTERM) and `run.bat` (Windows), builds the Docker image, checks the
+packaged yt-dlp worker, smoke-tests HTTP startup, and checks that the container
+reaps orphaned processes and stops cleanly on `docker stop`. See `ARCHITECTURE.md` for the system map and remaining
 production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a

@@ -38,6 +38,8 @@ jobs:
         env:
           PYTHON: python
         run: bash tools/check.sh
+      - name: Start and stop offtube with run.sh
+        run: bash tools/launcher_smoke.sh
 
   windows:
     # Process groups, taskkill tree stops and the exclusive port bind only
@@ -57,6 +59,26 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the backend tests on Windows
         run: python -m pytest tests -q -rs
+      - name: Start offtube with run.bat
+        run: |
+          # run.bat builds its venv on first run, then starts offtube.
+          $env:PORT = "18123"
+          $server = Start-Process cmd.exe -ArgumentList "/c", "run.bat" -NoNewWindow -PassThru `
+            -RedirectStandardOutput launcher.out -RedirectStandardError launcher.err
+          $up = $false
+          for ($i = 0; $i -lt 180 -and -not $up; $i++) {
+            try {
+              Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:18123/api/health" -TimeoutSec 2 | Out-Null
+              $up = $true
+            } catch {
+              if ($server.HasExited) { break }
+              Start-Sleep -Seconds 1
+            }
+          }
+          taskkill /PID $server.Id /T /F | Out-Null
+          Get-Content launcher.out, launcher.err
+          if (-not $up) { throw "run.bat never got offtube answering /api/health" }
+          exit 0
 
   macos:
     # launchd service mode makes macOS a supported host: its process groups
@@ -79,6 +101,8 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the backend tests on macOS
         run: python -m pytest tests -q -rs
+      - name: Start and stop offtube with run.sh
+        run: bash tools/launcher_smoke.sh
 
   browser:
     runs-on: ubuntu-24.04

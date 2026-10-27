@@ -104,7 +104,9 @@ select another interpreter.
 
 GitHub CI runs the gate on Python 3.10 and 3.12, pytest on Windows (process
 trees stopped with `taskkill`, the exclusive port bind, Windows file and
-encoding behavior), the browser suite with
+encoding behavior) and macOS, the launchers from a fresh checkout
+(`tools/launcher_smoke.sh` for `run.sh`; `run.bat` on Windows), the browser
+suite with
 pinned Playwright and axe-core (required there, never skipped), a Docker build,
 packaged-worker check, HTTP startup smoke test, and a check that the
 container reaps an orphaned child and stops on SIGTERM with exit status 0.
@@ -128,11 +130,11 @@ performance or browser-accessibility audit:
    exercised in Chromium with axe-core audits. The extension runs there as
    pages in tabs, so the toolbar popup's own window, opening the side panel,
    the context menu and the background worker are not; nor are the
-   extension's keyboard paths, real-site failures, the Windows launcher and
-   the web and extension tests on Windows and macOS, and arm64 images. The
-   desk is checked for keyboard-only use and reflow at 320 CSS px; text
-   spacing and screen readers themselves are not. An automated audit is a
-   regression check, not accessibility certification.
+   extension's keyboard paths, real-site failures, the web and extension
+   tests on Windows and macOS, the systemd and launchd units, and arm64
+   Docker images. The desk is checked for keyboard-only use and reflow at
+   320 CSS px; text spacing and screen readers themselves are not. An
+   automated audit is a regression check, not accessibility certification.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules
