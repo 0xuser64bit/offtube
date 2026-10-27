@@ -210,7 +210,11 @@ function syncNotes() {
     pl = it ? `Items ${it}` : s || e ? `#${s || 1}–${e || "last"}` : "Whole collection";
   }
   setNote("plState", pl, Boolean(state.marks.size) || mode === "playlist");
-  $("plRangeRow").classList.toggle("is-off", mode !== "playlist");
+  // A range only applies to the whole collection; "This item" ignores it.
+  const ranged = mode === "playlist";
+  for (const id of ["plStart", "plEnd", "plItems"]) $(id).disabled = !ranged;
+  $("plRangeRow").classList.toggle("is-off", !ranged);
+  $("plItemsField").classList.toggle("is-off", !ranged);
 
   const subs = $("subs").checked;
   setNote("subsState", subs ? ($("subLang").value.trim() || "en") : "Off", subs);

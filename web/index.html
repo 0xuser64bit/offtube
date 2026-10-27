@@ -49,7 +49,7 @@
           <p class="blank-sub">You see exactly what’s there before anything is kept.</p>
         </div>
       </div>
-      <p class="sources" aria-label="Works with">YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
+      <p class="sources"><span class="visually-hidden">Works with: </span>YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
     </div>
 
     <div id="print" class="hidden" aria-live="polite"></div>
@@ -127,8 +127,8 @@
             <label class="field"><span class="label">Start #</span><input id="plStart" class="num" type="number" min="1" placeholder="1" /></label>
             <label class="field"><span class="label">End #</span><input id="plEnd" class="num" type="number" min="1" placeholder="last" /></label>
           </div>
-          <label class="field"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
-          <p class="hint" id="plHint">Playlists, boards, albums, profiles and multi-photo posts. Circle prints on the sheet to keep only those.</p>
+          <label class="field" id="plItemsField"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
+          <p class="hint" id="plHint">Playlists, boards, albums, profiles and multi-photo posts. Choose Whole collection to set a range, or circle prints on the sheet to keep only those.</p>
         </div>
       </details>
 
@@ -192,7 +192,7 @@
       <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
       <details class="log" id="logBox">
         <summary>Log</summary>
-        <pre id="jobLog" tabindex="0" aria-label="Transfer log"></pre>
+        <pre id="jobLog" tabindex="0" role="region" aria-label="Transfer log"></pre>
       </details>
     </div>
   </aside>

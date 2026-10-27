@@ -47,7 +47,7 @@
       <div class="deck" aria-live="polite">
         <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
         <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
-        <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" aria-label="Transfer log"></pre></details>
+        <details class="log" id="logBox"><summary>Log</summary><pre id="log" tabindex="0" role="region" aria-label="Transfer log"></pre></details>
       </div>
       <div id="gifResult" class="gif-result hidden" aria-live="polite"></div>
       <div class="link-row" id="linkRow"><span class="link-text" id="linkText"></span><button class="text-btn" type="button" id="changeLink">Change</button></div>
@@ -80,8 +80,8 @@
               <label class="field"><span class="label">Start #</span><input id="plStart" class="num" type="number" min="1" placeholder="1" /></label>
               <label class="field"><span class="label">End #</span><input id="plEnd" class="num" type="number" min="1" placeholder="last" /></label>
             </div>
-            <label class="field"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
-            <p class="hint">Playlists, boards, albums, profiles, multi-photo posts. Circle prints on the sheet to keep only those.</p>
+            <label class="field" id="plItemsField"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
+            <p class="hint">Playlists, boards, albums, profiles, multi-photo posts. Choose Whole collection to set a range, or circle prints on the sheet to keep only those.</p>
           </div>
         </details>
 

@@ -190,3 +190,13 @@ test('side panel tallies print a collection count as text, never markup', () => 
   s.run(`info = { type: 'playlist', media: 'video', count: '<img src=x>' }; infoUrl = url(); syncTally();`);
   assert.match(s.node('tally').innerHTML, /&lt;img src=x&gt; items/);
 });
+
+test('side panel collection ranges are only editable when they apply', () => {
+  const s = surface('sidepanel/sidepanel.js');
+  s.chosen.plmode = 'single';
+  s.run('syncNotes()');
+  for (const id of ['plStart', 'plEnd', 'plItems']) assert.equal(s.node(id).disabled, true, id);
+  s.chosen.plmode = 'playlist';
+  s.run('syncNotes()');
+  for (const id of ['plStart', 'plEnd', 'plItems']) assert.equal(s.node(id).disabled, false, id);
+});

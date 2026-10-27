@@ -267,3 +267,13 @@ test("the library is searched and paged by the server, not the page", async () =
   await ui.choose("kind", "gif");
   assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip&kind=gif");
 });
+
+test("collection ranges are only editable when they apply", async () => {
+  const ui = desk();
+  ui.info({ type: "video", media: "video", part_of_playlist: true });
+  ui.run("syncNotes()");
+  for (const id of ["plStart", "plEnd", "plItems"]) assert.equal(ui.elements.get(id).disabled, true, id);
+  await ui.choose("plmode", "playlist");
+  for (const id of ["plStart", "plEnd", "plItems"]) assert.equal(ui.elements.get(id).disabled, false, id);
+  assert.equal(ui.elements.get("plItemsField").classList.contains("is-off"), false);
+});
