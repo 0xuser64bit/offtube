@@ -2817,6 +2817,12 @@ class LocalServer(socketserver.ThreadingTCPServer):
 
 
 def main():
+    # A log file or a pipe on Windows gets the ANSI code page, which can't
+    # write the banner's "→" or every folder name: a character it lacks is
+    # printed as "?" instead of stopping the server. (stderr already
+    # escapes what it can't write.)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     try:
         port = int(os.environ.get("PORT", "8000"))
     except ValueError:

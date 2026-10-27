@@ -171,6 +171,18 @@ def _free_port():
         return probe.getsockname()[1]
 
 
+def _wait_until_serving(port, server):
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1)
+            return
+        except OSError:
+            assert server.poll() is None, server.stdout.read()
+            assert time.monotonic() < deadline
+            time.sleep(0.1)
+
+
 def _post(port, path, body):
     request = urllib.request.Request(f"http://127.0.0.1:{port}{path}", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json"}, method="POST")
@@ -193,15 +205,7 @@ def test_server_process_exits_promptly_and_cleans_up(tmp_path, sig, work, url, w
                               env={**os.environ, "PORT": str(port)},
                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
-        deadline = time.monotonic() + 15
-        while True:
-            try:
-                urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=1)
-                break
-            except OSError:
-                assert server.poll() is None, server.stdout.read()
-                assert time.monotonic() < deadline
-                time.sleep(0.1)
+        _wait_until_serving(port, server)
         jid = _post(port, "/api/download", {"url": url, "cookies_mode": "text", "cookies_text": COOKIES})["job_id"]
         cookie = tmp_path / "cookies" / f"job-{jid}.cookies.txt"
         deadline = time.monotonic() + 5
@@ -221,3 +225,25 @@ def test_server_process_exits_promptly_and_cleans_up(tmp_path, sig, work, url, w
     assert elapsed < within, output
     assert not cookie.exists(), "a job's cookie copy outlived the server"
     assert "Traceback" not in output, output
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signals")
+def test_server_starts_when_its_output_cannot_write_every_character(tmp_path):
+    # On Windows a log file or a pipe gets the ANSI code page, which has no
+    # "→" (nor many folder names): printing must not stop the server.
+    boot = tmp_path / "boot.py"
+    boot.write_text(BOOT)
+    port = _free_port()
+    server = subprocess.Popen([sys.executable, str(boot), str(app.BASE_DIR), str(tmp_path), "chatty", *FAKE_WORKER],
+                              env={**os.environ, "PORT": str(port), "PYTHONIOENCODING": "cp1252"},
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        _wait_until_serving(port, server)
+        server.send_signal(signal.SIGTERM)
+        output, _ = server.communicate(timeout=10)
+    finally:
+        if server.poll() is None:
+            server.kill()
+            server.wait()
+    assert server.returncode == 0, output
+    assert b"Traceback" not in output and b"offtube running ? http" in output, output
