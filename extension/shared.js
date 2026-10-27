@@ -188,6 +188,11 @@ OFFTUBE.exposingHtml = function exposingHtml(label) {
   </figure>`;
 };
 
+// A cell is named by its visible text ("03 · Video"), which speech input
+// users say aloud, so it must stay in the name (WCAG 2.5.3). Where a
+// thumbnail stands in for the title, the title follows for screen readers.
+const hiddenTitle = (e) => (e.thumbnail && e.title ? `<span class="visually-hidden">, ${esc(e.title)}</span>` : '');
+
 /* The inspected link as a print (one item) or a sheet of circle-able cells
  * (a collection). `cells` caps how many cells a narrow surface shows. */
 OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {}) {
@@ -200,9 +205,9 @@ OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {})
       <div class="rebate">
         <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? '+' : ''} items</span></div>
         <ol class="contact">${entries.map((e, i) => `<li>
-          <${circle ? 'button type="button"' : 'span'} class="cell"${circle ? ` aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ''}"` : ''}>
+          <${circle ? 'button type="button"' : 'span'} class="cell"${circle ? ` aria-pressed="false" data-i="${i + 1}"` : ''}>
             <span class="cell-frame"><span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>${circle ? OFFTUBE.markSvg('circle') : ''}</span>
-            <span class="edge edge-dim cell-no">${pad2(i + 1)}${e.is_video ? ' · Video' : ''}</span>
+            <span class="edge edge-dim cell-no">${pad2(i + 1)}${e.is_video ? ' · Video' : ''}</span>${hiddenTitle(e)}
           </${circle ? 'button' : 'span'}></li>`).join('')}</ol>
         <div class="edge-row"><span class="edge edge-dim">${circle ? 'Circle prints to keep only those' : `${esc(site)}`}</span><span class="edge" id="sheetCount">All ${esc(count)}${info.more ? '+' : ''}</span></div>
       </div>
