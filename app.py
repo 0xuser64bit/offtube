@@ -699,20 +699,25 @@ def cleanup_job_temps(job: dict | None) -> None:
     """
     if not job:
         return
+    with jobs_lock:
+        others = [j for j in jobs.values()
+                  if j.get("id") != job.get("id") and not is_terminal(j)]
     try:
-        with jobs_lock:
-            others = [j for j in jobs.values()
-                      if j.get("id") != job.get("id") and not is_terminal(j)]
-        for p in DOWNLOAD_DIR.iterdir():
-            if not p.is_file() or not is_temp_file(p.name):
-                continue
-            if not _job_claims_name(job, p.name):
-                continue
-            if any(_job_claims_name(o, p.name) for o in others):
-                continue
-            p.unlink(missing_ok=True)
+        entries = list(DOWNLOAD_DIR.iterdir())
     except OSError:
-        pass
+        return
+    for p in entries:
+        if not is_temp_file(p.name) or not _job_claims_name(job, p.name):
+            continue
+        if any(_job_claims_name(o, p.name) for o in others):
+            continue
+        # One file that can't go (on Windows, one a just-stopped process
+        # still holds) must not keep the others; the startup sweep retries.
+        try:
+            if p.is_file():
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # Full-browser exports carry MBs of unrelated sites (bank, mail, ...), so a

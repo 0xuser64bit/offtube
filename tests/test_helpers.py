@@ -800,6 +800,24 @@ def test_public_job_log_limit():
 
 
 # --- cross-job temp protection -------------------------------------------------
+def test_cleanup_job_temps_goes_on_past_a_file_it_cannot_remove(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    names = ["Clip [abc].f137.mp4.part", "Clip [abc].f251.webm.part", "Clip [abc].mp4.part"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+    unlink, held = Path.unlink, []
+
+    def busy(path, missing_ok=False):
+        if not held:  # the first one tried, as Windows refuses while a process holds it
+            held.append(path.name)
+            raise PermissionError(13, "The process cannot access the file")
+        return unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", busy)
+    app.cleanup_job_temps({"seen_files": names, "seen_ids": ["abc"]})
+    assert [p.name for p in tmp_path.iterdir()] == held
+
+
 def test_cleanup_job_temps_skips_file_another_live_job_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     (tmp_path / "Video [abc].f137.mp4.part").write_bytes(b"partial")
