@@ -2737,6 +2737,7 @@ class LocalServer(socketserver.ThreadingTCPServer):
     # One thread per connection, capped: past this many, a connection is
     # answered 503 at once rather than given a thread to wait in.
     max_connections = 64
+    refusal_read_wait = 0.2  # seconds a refused client gets to send its request
 
     def __init__(self, server_address: tuple[str, int], handler_class: type[Handler]):
         self.address_family = socket.AF_INET6 if server_address[0] == "::1" else socket.AF_INET
@@ -2768,11 +2769,15 @@ class LocalServer(socketserver.ThreadingTCPServer):
             self.connection_slots.release()
 
     def refuse_busy(self, request: socket.socket) -> None:
-        """Say 503 without a thread or reading the request. What the client
-        already sent is drained first, so the close is a FIN its HTTP stack
-        reads the answer from, not a reset."""
+        """Say 503 without a thread or parsing the request. The request is
+        read first, waiting a moment for it if need be: closing a socket on
+        unread bytes sends a reset, and Windows then discards the answer the
+        client already received."""
         body = b'{"ok": false, "error": "offtube is busy. Retry in a moment."}'
         try:
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(request, selectors.EVENT_READ)
+                waiting.select(timeout=self.refusal_read_wait)
             request.setblocking(False)
             try:
                 while request.recv(65536):

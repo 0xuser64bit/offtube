@@ -10,6 +10,7 @@ import json
 import http.client
 import mimetypes
 import os
+import selectors
 import socket
 import sys
 import threading
@@ -924,6 +925,25 @@ def test_connections_past_the_cap_are_refused_at_once(small_server):
     deadline = time.monotonic() + 3
     while _health(port)[0] != 200:  # closed clients free their slots
         assert time.monotonic() < deadline
+
+
+def test_a_refused_client_is_answered_after_its_request_arrives(small_server):
+    # Closing on request bytes the server never read sends a reset, and
+    # Windows then throws away the 503 the client had already received.
+    port = small_server.server_address[1]
+    idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+    try:
+        time.sleep(0.1)
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as late:
+            time.sleep(0.05)  # a client that takes a moment to send
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(late, selectors.EVENT_READ)
+                assert not waiting.select(timeout=0), "answered before the request arrived"
+            late.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            assert late.recv(65536).startswith(b"HTTP/1.0 503 ")
+    finally:
+        for connection in idle:
+            connection.close()
 
 
 def test_slow_requests_are_cut_off_at_the_deadline(small_server):

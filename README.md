@@ -265,8 +265,8 @@ otherwise, also for IP/LAN hosts and DRM services). YouTube channel, home,
 and search pages are rejected. Inspect treats `watch?v=&list=` as a single
 video; only `/playlist?list=` is a playlist. Bodies are capped at ~2 MB (413).
 A request must arrive whole within 30 seconds, and the server serves 64
-connections at once; past that it answers 503 with `Retry-After: 1` at once
-instead of queueing. Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
+connections at once; past that it answers 503 with `Retry-After: 1` as soon
+as the request arrives (waiting at most 0.2 s for it) instead of queueing. Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
 `/api/download` returns 507. Cross-site POSTs with a foreign `Origin`/`Referer`
 return 403, as do non-loopback `Host` headers. JSON responses reflect
 `Access-Control-Allow-Origin` only for localhost and `chrome-extension://` —

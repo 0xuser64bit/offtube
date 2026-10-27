@@ -12,7 +12,7 @@ a product decision, not a prerequisite for reliable local operation.
 
 | Area | Implementation | Important constraints |
 | --- | --- | --- |
-| HTTP and configuration | `app.py`, `LocalServer`, `Handler`, `DeadlineReader`, `main` | `HOST` defaults to IPv4 loopback; `::1` selects IPv6; `PORT` defaults to 8000. Docker alone binds all interfaces internally. At most 64 connections get a thread; past that the accept loop answers 503 at once. A request must arrive whole within 30 s. The port is claimed exclusively on Windows. |
+| HTTP and configuration | `app.py`, `LocalServer`, `Handler`, `DeadlineReader`, `main` | `HOST` defaults to IPv4 loopback; `::1` selects IPv6; `PORT` defaults to 8000. Docker alone binds all interfaces internally. At most 64 connections get a thread; past that the accept loop reads the request (waiting at most 0.2 s) and answers 503. A request must arrive whole within 30 s. The port is claimed exclusively on Windows. |
 | Source resolution | `validate_url`, `resolve_source`, extractor tables | Dedicated yt-dlp/gallery-dl extractors only; no generic catch-all. YouTube channel/home/search pages are refused. |
 | Inspection | `fetch_info`, `inspect_ytdlp`, `inspect_gallery` | Two concurrent inspections; request-local cookies; engine fallback; bounded gallery preview. Counts and durations reported by extractors are coerced before they reach clients. |
 | Queue | `jobs`, `futures`, `jobs_lock`, `enqueue_download`, `shutdown_jobs` | Two executor workers, five active jobs, fifty stored records; retry revalidates the original private payload. Shutdown refuses new jobs, cancels queued ones and gives running ones `SHUTDOWN_GRACE` seconds. |
