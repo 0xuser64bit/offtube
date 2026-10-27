@@ -656,7 +656,7 @@ def test_worker_retries_a_rejected_youtube_session(monkeypatch, capsys):
                 raise app.DownloadError("The page needs to be reloaded")
 
     monkeypatch.setattr(app.yt_dlp, "YoutubeDL", DL)
-    app.ytdlp_worker({"opts": {"format": "bv*+ba/b"}, "ranges": None, "clip": None,
+    app.ytdlp_worker({"opts": {"format": "bv*+ba/b"}, "clip": None,
                       "source": "youtube", "url": "https://youtu.be/xxxxxxxxxxx"})
     assert len(seen) == 2
     assert "match_filter" not in seen[0]  # GIF sources only

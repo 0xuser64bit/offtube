@@ -195,6 +195,29 @@ def test_silent_download_stops_process_tree(source_job, source_server, monkeypat
         assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
 
 
+@pytest.mark.parametrize("payload", [
+    {},
+    {"quality": "720", "playlist_mode": "playlist", "playlist_items": "1-3,5",
+     "playlist_start": "2", "playlist_end": "9"},
+    {"quality": "audio_mp3", "clip_from": "0:30"},
+    {"quality": "audio_m4a", "subtitles": True, "auto_subs": True, "sub_lang": "en,de"},
+    {"quality": "gif", "clip_from": "1", "clip_to": "2"},
+    {"cookies_mode": "text",
+     "cookies_text": "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tFALSE\t9999999999\tSID\tx\n"},
+    {"cookies_mode": "browser", "cookies_browser": "firefox", "cookies_browser_profile": "default"},
+], ids=["defaults", "playlist", "mp3-from", "m4a-subs", "gif", "cookie-text", "cookie-browser"])
+def test_worker_request_is_plain_json(payload, tmp_path, monkeypatch):
+    # The request crosses a process boundary: a callable, an object or an
+    # infinite end time in it would fail the download before it starts.
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app.shutil, "which", lambda _: "/ffmpeg")
+    gif_folder = tmp_path / "gif" if payload.get("quality") == "gif" else None
+    request = app.worker_request({"id": "plain"}, payload, "https://youtu.be/abc123abc12",
+                                 {"id": "youtube"}, gif_folder)
+    assert json.loads(json.dumps(request, allow_nan=False))["url"] == "https://youtu.be/abc123abc12"
+
+
 def test_worker_restores_options_and_retries_session(monkeypatch, capsys):
     seen = []
 
@@ -215,10 +238,10 @@ def test_worker_restores_options_and_retries_session(monkeypatch, capsys):
 
     monkeypatch.setattr(app.yt_dlp, "YoutubeDL", YoutubeDL)
     app.ytdlp_worker({"opts": {"cookiesfrombrowser": ["chrome", "Profile 2", None, None],
-                                   "noplaylist": False, "playlistitems": "2-4",
-                                   "js_runtimes": {"node": {}}, "remote_components": ["ejs:npm"]},
-                           "ranges": [{"start_time": 3.25, "end_time": None}],
-                           "clip": {"clip_from": "3.25"}, "source": "youtube", "url": "https://youtu.be/fixture"})
+                               "noplaylist": False, "playlistitems": "2-4",
+                               "js_runtimes": {"node": {}}, "remote_components": ["ejs:npm"],
+                               "download_ranges": [{"start_time": 3.25, "end_time": None}]},
+                      "clip": {"clip_from": "3.25"}, "source": "youtube", "url": "https://youtu.be/fixture"})
     assert len(seen) == 2
     assert seen[-1]["cookiesfrombrowser"] == ("chrome", "Profile 2", None, None)
     assert seen[-1]["noplaylist"] is False and seen[-1]["playlistitems"] == "2-4"

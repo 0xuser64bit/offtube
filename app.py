@@ -1467,16 +1467,17 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     return files
 
 
-def build_download_opts(job: dict, payload: dict, persist: bool = True,
-                        player_clients: list[str] | None = None) -> dict:
+def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
+    """yt-dlp options for a download, as plain data for the worker process,
+    which adds the hooks, logger and filters. Raises ValueError for a bad
+    request, which is also how enqueue_download validates one."""
     quality = payload.get("quality") or "best"
     fmt = quality_to_format(quality)
     # Titles on TikTok/X/Instagram are whole captions; cap the bytes so the
     # name stays under the 255-byte filesystem limit and keeps its [id].
     outtmpl = str(DOWNLOAD_DIR / "%(title).150B [%(id)s].%(ext)s")
 
-    opts = base_ydl_opts(payload, job.get("id"), persist=persist,
-                         player_clients=player_clients)
+    opts = base_ydl_opts(payload, job.get("id"), persist=persist)
     opts.update(
         {
             "format": fmt,
@@ -1485,17 +1486,10 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True,
             "writethumbnail": False,
             "writeinfojson": False,
             "continuedl": True,
-            "progress_hooks": [lambda d, jid=job["id"]: progress_hook(jid, d)],
-            "postprocessor_hooks": [lambda d, jid=job["id"]: postprocessor_hook(jid, d)],
-            "logger": JobLogger(job["id"]),
         }
     )
     if quality == "gif":
         gif_settings(payload)
-        opts["match_filter"] = lambda info, *, incomplete=False: gif_source_filter(info, payload, incomplete)
-        if job.get("gif_dir"):
-            opts["outtmpl"] = str(Path(job["gif_dir"]) / "%(title).150B [%(id)s].%(ext)s")
-            opts["post_hooks"] = [lambda filename: convert_gif(job, Path(filename), payload, trimmed=True)]
     if quality == "audio_mp3":
         opts["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
@@ -1506,19 +1500,16 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True,
         ]
 
     # Clip trim (from-to) — same as --download-sections "*from-to" (needs ffmpeg).
-    # NOTE: the Python API needs a callback, not a plain list (see yt-dlp __init__).
     clip_from = parse_time_to_seconds(payload.get("clip_from")) if (payload.get("clip_from") or "").strip() else None
     clip_to = parse_time_to_seconds(payload.get("clip_to")) if (payload.get("clip_to") or "").strip() else None
     if clip_to is not None and clip_to <= (clip_from or 0):
         raise ValueError("'To' must be after 'From'.")
     if clip_from is not None or clip_to is not None:
-        try:
-            from yt_dlp.utils import download_range_func
-        except ImportError:
+        if yt_dlp is None:
             raise ValueError("Trimming needs yt-dlp installed: pip install -r requirements.txt")
-        start = clip_from if clip_from is not None else 0
-        end = clip_to if clip_to is not None else float("inf")
-        opts["download_ranges"] = download_range_func([], [(start, end)])
+        # The worker turns this into yt-dlp's range callback; no end is None.
+        opts["download_ranges"] = [{"start_time": clip_from if clip_from is not None else 0,
+                                    "end_time": clip_to}]
         opts["force_keyframes_at_cuts"] = True
 
     # Playlist controls
@@ -1633,8 +1624,9 @@ def ytdlp_worker(request: dict) -> None:
     opts = request["opts"]
     if "cookiesfrombrowser" in opts:
         opts["cookiesfrombrowser"] = tuple(opts["cookiesfrombrowser"])
-    ranges = request.get("ranges")
+    ranges = opts.get("download_ranges")
     if ranges is not None:
+        # yt-dlp's Python API takes a callback here, not a list.
         from yt_dlp.utils import download_range_func
         opts["download_ranges"] = download_range_func([], [
             (item["start_time"], item["end_time"] if item["end_time"] is not None else float("inf"))
@@ -1668,27 +1660,27 @@ def ytdlp_worker_cmd() -> list[str]:
     return [sys.executable, "-u", str(BASE_DIR / "tools" / "ytdlp_worker.py")]
 
 
+def worker_request(job: dict, payload: dict, url: str, src: dict,
+                   gif_folder: Path | None = None) -> dict:
+    """What the worker process is asked to do, as JSON. A GIF source goes to
+    `gif_folder`, numbered so repeated playlist entries stay apart, and the
+    worker refuses one that can't make a GIF."""
+    opts = build_download_opts(job, payload)
+    if gif_folder is not None:
+        opts["outtmpl"] = str(gif_folder.resolve() / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
+    return {"opts": opts, "url": url, "source": src["id"],
+            "clip": {"clip_from": payload.get("clip_from")} if gif_folder is not None else None}
+
+
 def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
                      gif_folder: Path | None = None) -> tuple[list[Path], int, list[str]]:
     """Run one yt-dlp download in the worker process and follow it: its
     events update the job, and cancel or low disk stop its whole tree within
     a fraction of a second, whatever yt-dlp is doing. Returns the files it
-    reported, its exit status and its error messages. A GIF source goes to
-    `gif_folder`, numbered so repeated playlist entries stay apart."""
+    reported, its exit status and its error messages."""
     check_job(job)
-    opts = build_download_opts(job, payload)
-    ranges = opts.pop("download_ranges", None)
-    ranges = list(ranges({}, None)) if ranges is not None else None
-    if ranges is not None:
-        ranges = [{**item, "end_time": item["end_time"] if math.isfinite(item["end_time"]) else None}
-                  for item in ranges]
-    for key in ("logger", "progress_hooks", "postprocessor_hooks", "post_hooks", "match_filter"):
-        opts.pop(key, None)
+    request = worker_request(job, payload, url, src, gif_folder)
     root = (gif_folder or DOWNLOAD_DIR).resolve()
-    if gif_folder is not None:
-        opts["outtmpl"] = str(root / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
-    request = {"opts": opts, "ranges": ranges, "url": url, "source": src["id"],
-               "clip": {"clip_from": payload.get("clip_from")} if gif_folder is not None else None}
     files: list[Path] = []
     errors: list[str] = []
     # A file, not a pipe: a full pipe would stall the worker, and the loop

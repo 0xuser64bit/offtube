@@ -46,19 +46,25 @@ def test_invalid_range_rejected_before_queue(extra, monkeypatch):
     assert jid is None and error[1] == 400
 
 
-def test_gif_options_use_private_source_and_disable_subtitles(tmp_path, monkeypatch):
+def test_gif_source_request_uses_private_folder_and_disables_subtitles(tmp_path, monkeypatch):
     monkeypatch.setattr(app.shutil, "which", lambda _: "/ffmpeg")
-    opts = app.build_download_opts({"id": "gif", "gif_dir": str(tmp_path)},
-                                   {"quality": "gif", "subtitles": True, "clip_from": "1.25", "clip_to": "2.5"})
-    assert str(tmp_path) in opts["outtmpl"]
+    payload = {"quality": "gif", "subtitles": True, "clip_from": "1.25", "clip_to": "2.5"}
+    request = app.worker_request({"id": "gif"}, payload, "https://youtu.be/abc123abc12",
+                                 {"id": "youtube"}, gif_folder=tmp_path)
+    opts = request["opts"]
+    assert Path(opts["outtmpl"]).parent.parent == tmp_path.resolve()
     assert opts["format"] == "bv/b[vcodec!=none]/b"
     assert not opts.get("writesubtitles")
-    assert len(opts["post_hooks"]) == 1
-    assert list(opts["download_ranges"]({}, None)) == [{"start_time": 1.25, "end_time": 2.5}]
+    assert opts["download_ranges"] == [{"start_time": 1.25, "end_time": 2.5}]
+    assert request["clip"] == {"clip_from": "1.25"}  # the worker's GIF-source filter
+
+
+def test_gif_source_filter_refuses_live_and_late_starts():
     with pytest.raises(app.DownloadError, match="finished video"):
-        opts["match_filter"]({"is_live": True}, incomplete=True)
+        app.gif_source_filter({"is_live": True}, {}, incomplete=True)
     with pytest.raises(app.DownloadError, match="past the end"):
-        opts["match_filter"]({"duration": 1})
+        app.gif_source_filter({"duration": 1}, {"clip_from": "1.25"})
+    assert app.gif_source_filter({"duration": 5}, {"clip_from": "1.25"}) is None
 
 
 @pytest.fixture
