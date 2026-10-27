@@ -554,6 +554,8 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
   .contact { grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
   .kept-tools { margin-left: 0; width: 100%; }
   .kept-tools .seg { flex: 1 1 100%; }
+  /* Five kinds must fit a 320 px column (WCAG 1.4.10 reflow). */
+  .kept-tools .seg span { padding-inline: 8px; }
   .kept-tools input[type="search"] { flex: 1; width: auto; }
   .sheet-grid { grid-template-columns: repeat(2, 1fr); gap: 22px 10px; padding: 28px 12px 30px; }
   .strip-frame { flex-basis: 172px; }

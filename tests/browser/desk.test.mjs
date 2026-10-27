@@ -111,6 +111,32 @@ test("a screen reader hears what was found and each change of state, not every t
   }
 });
 
+test("reflows at 320 CSS px without scrolling sideways (WCAG 1.4.10)", { skip }, async () => {
+  // 320 px is also a 1280 px window zoomed to 400%.
+  const server = await startServer(["Song [b].mp3", "pin_1.jpg", "Loop [c].gif",
+    "A file name long enough to need wrapping in a narrow column of the sheet [abcdefghijk].mp4"]);
+  const { page, problems, close } = await openDesk(server, { viewport: { width: 320, height: 800 } });
+  const sideways = () => page.evaluate(() => [...document.querySelectorAll("body *")]
+    .filter((el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.right > innerWidth + 1; })
+    .map((el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${el.getAttribute("aria-label") ? ` "${el.getAttribute("aria-label")}"` : ""}`));
+  try {
+    await page.waitForSelector(".kept-cell");
+    assert.deepEqual(await sideways(), [], "blank desk");
+    await preview(page, "https://www.youtube.com/watch?v=abc123abc12");
+    await page.waitForSelector("#printFig .print-title");
+    await page.evaluate(() => { for (const note of document.querySelectorAll("details.note")) note.open = true; });
+    assert.deepEqual(await sideways(), [], "print with every note open");
+    await preview(page, "https://www.youtube.com/playlist?list=PLabc");
+    await page.waitForSelector("#printFig.sheet .cell");
+    assert.deepEqual(await sideways(), [], "contact sheet");
+    assert.equal(await page.evaluate(() => document.scrollingElement.scrollWidth), 320);
+    assert.deepEqual(problems, []);
+  } finally {
+    await close();
+    await server.stop();
+  }
+});
+
 test("meets WCAG 2.2 AA in light and dark (axe-core)", { skip: skipAudit }, async () => {
   // Videos come from the keep step: the stub's clip is real media.
   const server = await startServer(["Song [b].mp3", "pin_1.jpg", "Loop [c].gif", "notes.srt"]);
