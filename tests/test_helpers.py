@@ -3,6 +3,7 @@
 import os
 import stat
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1015,6 +1016,14 @@ if "-j" in args:
 d = pathlib.Path(args[args.index("-D") + 1])
 if "slow" in url:
     time.sleep(30)
+if "child" in url:  # an HLS pin: gallery-dl's yt-dlp runs ffmpeg under it
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    (d / "child.pid").write_text(str(child.pid))
+    print("[pinterest][info] merging fragments", flush=True)
+    time.sleep(60)
+if "silent" in url:  # one large file: nothing printed for a long time
+    time.sleep(60)
 if "fail" in url:
     print("[pinterest][error] Requested pin could not be found", flush=True)
     sys.exit(8)
@@ -1182,6 +1191,20 @@ def test_run_download_disk_full_is_error_not_engine_fallback(tmp_path, monkeypat
         assert job["status"] == "error"
         assert "disk is almost full" in job["detail"]
         assert not any("trying yt-dlp" in ln for ln in job["log"])
+    finally:
+        app.jobs.clear()
+
+
+def test_silent_gallery_work_stops_when_the_disk_runs_low(tmp_path, monkeypatch, fake_gallery):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "disk_low_locked", lambda job: True)
+    job = _gallery_job("g-silent")
+    started = time.monotonic()
+    try:
+        with pytest.raises(app.DownloadError, match="disk is almost full"):
+            app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?silent")
+        assert time.monotonic() - started < 5
+        assert "proc" not in job
     finally:
         app.jobs.clear()
 

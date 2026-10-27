@@ -8,6 +8,7 @@ import json
 import http.client
 import os
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -947,3 +948,28 @@ def test_oversized_body_drain_is_bounded(server, monkeypatch):
                 connection.sendall(b"x" * 65536)
                 sent += 65536
     assert sent < 64 * 1024 * 1024
+
+
+def _process_gone(pid):
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return not state.stdout.strip() or state.stdout.strip().startswith("Z")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_cancelling_a_gallery_job_stops_what_gallery_dl_started(server, fake_gallery):
+    status, body, _ = api(server, "POST", "/api/download",
+                          {"url": "https://www.pinterest.com/pin/664281013778109217/?child"})
+    assert status == 200, body
+    pid_file = app.DOWNLOAD_DIR / "child.pid"
+    deadline = time.time() + 10
+    while not pid_file.exists() or not pid_file.read_text():
+        assert time.time() < deadline
+        time.sleep(0.05)
+    child = int(pid_file.read_text())
+    status, _, _ = api(server, "POST", "/api/cancel", {"job_id": body["job_id"]})
+    assert status == 200
+    assert wait_for(server, body["job_id"], timeout=10)["status"] == "cancelled"
+    deadline = time.time() + 5
+    while not _process_gone(child):
+        assert time.time() < deadline, "gallery-dl's child outlived the cancelled job"
+        time.sleep(0.05)

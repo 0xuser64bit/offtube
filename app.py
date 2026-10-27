@@ -1199,6 +1199,61 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
     }
 
 
+# ------------------------------- child processes -------------------------------
+# Every child offtube starts leads its own process group, so stopping a job
+# stops everything under it: gallery-dl's ffmpeg for an HLS pin, the GIF
+# source worker's ffmpeg for a range. A terminal's Ctrl+C therefore no
+# longer reaches them by itself; shutdown stops each job's tree instead.
+
+OWN_PROCESS_GROUP = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                     else {"start_new_session": True})
+
+
+def stop_process_tree(proc: subprocess.Popen, wait: float | None = 5) -> None:
+    """Kill a child started with OWN_PROCESS_GROUP and everything it spawned.
+    With wait=None it only signals, so it is safe under jobs_lock; the
+    thread that owns `proc` reaps it."""
+    if proc.pid <= 0:
+        return  # killpg(0) would mean our own group
+    if os.name == "nt":
+        kill = ["taskkill", "/PID", str(proc.pid), "/T", "/F"]
+        quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if wait is None:
+            subprocess.Popen(kill, **quiet)
+        else:
+            subprocess.run(kill, timeout=5, **quiet)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # the group is gone, or holds only zombies (macOS: EPERM)
+    if wait is not None:
+        proc.wait(timeout=wait)
+
+
+def job_must_stop_locked(job: dict) -> bool:
+    """True once a job is cancelled or the disk runs low (which also marks it
+    disk_full). Call with jobs_lock held."""
+    if job.get("cancel_requested"):
+        return True
+    if disk_low_locked(job):
+        job["disk_full"] = True
+        return True
+    return False
+
+
+def watch_job_process(job: dict, proc: subprocess.Popen, done: threading.Event) -> None:
+    """Stop `proc`'s tree once its job must stop, checked on a timer: a child
+    busy with one large file can be silent for minutes, so this can't wait
+    for its next line of output."""
+    while not done.wait(0.25):
+        with jobs_lock:
+            stop = job_must_stop_locked(job)
+        if stop:
+            stop_process_tree(proc, wait=None)
+            return
+
+
 # ------------------------------- gallery-dl engine -------------------------------
 # Runs as a subprocess, not via the Python API: gallery-dl's config is
 # process-global, so two jobs with different cookies would trample each
@@ -1320,11 +1375,15 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     # Unbuffered: a piped child would otherwise hold its lines until exit.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace",
-                            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+                            env={**os.environ, "PYTHONUNBUFFERED": "1"}, **OWN_PROCESS_GROUP)
+    done = threading.Event()
+    watchdog = threading.Thread(target=watch_job_process, args=(job, proc, done),
+                                name=f"watch-{job['id']}", daemon=True)
     with jobs_lock:
-        job["proc"] = proc  # internal: /api/cancel terminates it
+        job["proc"] = proc  # internal: /api/cancel and shutdown stop its tree
         job["status"] = "downloading"
         job["detail"] = "Fetching…"
+    watchdog.start()
     root = destination.resolve()
     files: list[str] = []
     errors: list[str] = []
@@ -1344,17 +1403,17 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
                     job["log"] = job["log"][-200:]
                     if "][error]" in line:
                         errors.append(line.split("][error]", 1)[1].strip())
-                # ponytail: checked per output line, so one huge file can
-                # overshoot; poll on a timer if that ever bites.
-                if job.get("cancel_requested"):
-                    proc.terminate()
-                elif disk_low_locked(job):
-                    job["disk_full"] = True
-                    proc.terminate()
+                # Lines answer as fast as gallery-dl talks; the watchdog
+                # covers its silences.
+                if job_must_stop_locked(job):
+                    stop_process_tree(proc, wait=None)
         proc.wait()
     finally:
-        if proc.poll() is None:
-            proc.kill()
+        done.set()
+        watchdog.join()
+        # Finished or stopped, nothing gallery-dl started may outlive the job.
+        stop_process_tree(proc)
+        proc.stdout.close()
         with jobs_lock:
             job.pop("proc", None)
     if job.get("cancel_requested"):
@@ -1558,19 +1617,6 @@ def gif_source_worker(request: dict) -> None:
         raise SystemExit(1)
 
 
-def stop_gif_source(proc: subprocess.Popen) -> None:
-    """The source worker can own an FFmpeg child while downloading a range."""
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-    else:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    proc.wait(timeout=5)
-
-
 def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
     """Poll a private source process so silent extraction and range downloads cancel."""
     check_gif_job(job)
@@ -1587,14 +1633,12 @@ def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
     opts["outtmpl"] = str(folder / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
     request = {"opts": opts, "ranges": ranges, "url": url, "source": src["id"],
                "clip": {"clip_from": payload.get("clip_from")}}
-    creation = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                else {"start_new_session": True})
     files, errors = [], []
     log_path = folder / "source.log"
     with log_path.open("w+b") as output, log_path.open("rb") as reader:
         proc = subprocess.Popen([sys.executable, "-u", str(BASE_DIR / "tools" / "gif_source.py")],
                                 stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", **creation)
+                                text=True, encoding="utf-8", **OWN_PROCESS_GROUP)
         with jobs_lock:
             job.update(proc=proc, gif_source_active=True, status="downloading", detail="Fetching GIF source…")
         pending = b""
@@ -1636,7 +1680,7 @@ def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
             check_gif_job(job)
         finally:
             if proc.poll() is None or proc.returncode:
-                stop_gif_source(proc)
+                stop_process_tree(proc)
             if proc.stdin and not proc.stdin.closed:
                 proc.stdin.close()
             with jobs_lock:
@@ -1662,7 +1706,7 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
     with log_path.open("w+b") as progress, log_path.open("rb") as reader:
         proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                                  "-nostats", "-progress", "pipe:1", "-y", *args],
-                                stdout=progress, stderr=subprocess.STDOUT)
+                                stdout=progress, stderr=subprocess.STDOUT, **OWN_PROCESS_GROUP)
         with jobs_lock:
             job["proc"] = proc
         try:
@@ -1688,9 +1732,7 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                 JobLogger(job["id"]).error(tail[-2000:])
                 raise DownloadError("GIF conversion failed. Try a shorter range or smaller size; details are in the log.")
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            stop_process_tree(proc)
             with jobs_lock:
                 job.pop("proc", None)
 
@@ -2510,12 +2552,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     futures.pop(jid, None)
                     cleanup_job_cookies(jid)
                     return self.send_json({"ok": True, "cancelled": True})
-                # Already running: cooperative cancel via hooks. The worker
-                # notices on its next progress/postprocessor callback; a
-                # gallery-dl process is simply terminated.
+                # Already running: cooperative cancel via hooks. In-process
+                # yt-dlp notices on its next progress/postprocessor callback;
+                # a child process (gallery-dl, GIF worker, ffmpeg) is stopped
+                # with everything it started.
                 job["cancel_requested"] = True
                 if job.get("proc") is not None:
-                    job["proc"].terminate()
+                    stop_process_tree(job["proc"], wait=None)
                 job["detail"] = "Cancelling…"
                 return self.send_json({"ok": True, "cancelled": True, "stopping": True})
 
@@ -2639,7 +2682,7 @@ def main():
             with jobs_lock:
                 for job in jobs.values():
                     if job.get("proc") is not None:
-                        job["proc"].terminate()
+                        stop_process_tree(job["proc"], wait=None)
 
 
 if __name__ == "__main__":

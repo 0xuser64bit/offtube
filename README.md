@@ -211,7 +211,7 @@ integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
 - `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → metadata with `source`, `engine`, `type` (`video` | `playlist` | `gallery`) and `media` (`video` | `audio` | `image` | `mixed`); galleries carry `count`, `more` and `entries` with thumbnails (side-effect-free; pasted cookies use an ephemeral file)
 - `POST /api/download` `{url, quality, clip_from, clip_to, gif_size, gif_fps, gif_loop, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, source, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
-- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback, gallery-dl processes are terminated)
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback; gallery-dl, the GIF worker and ffmpeg are stopped together with every process they started)
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)

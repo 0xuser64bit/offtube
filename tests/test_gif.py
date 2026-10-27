@@ -307,7 +307,7 @@ def test_gif_source_keeps_finished_gifs_when_the_worker_exits_early(gif_job, tmp
     gif_job["gif_dir"] = str(folder)
     video = folder / "clip.mp4"
     video.write_bytes(b"v")
-    monkeypatch.setattr(app, "stop_gif_source", lambda proc: None)
+    monkeypatch.setattr(app, "stop_process_tree", lambda proc, wait=5: None)
     monkeypatch.setattr(app, "build_download_opts", lambda job, payload: {"outtmpl": str(folder / "x.mp4")})
     monkeypatch.setattr(app.subprocess, "Popen", _source_proc([
         json.dumps({"kind": "file", "data": str(video)}),
@@ -325,7 +325,7 @@ def test_gif_source_error_is_kept_when_nothing_was_fetched(gif_job, tmp_path, mo
     folder = tmp_path / "src"
     folder.mkdir()
     gif_job["gif_dir"] = str(folder)
-    monkeypatch.setattr(app, "stop_gif_source", lambda proc: None)
+    monkeypatch.setattr(app, "stop_process_tree", lambda proc, wait=5: None)
     monkeypatch.setattr(app, "build_download_opts", lambda job, payload: {"outtmpl": str(folder / "x.mp4")})
     monkeypatch.setattr(app.subprocess, "Popen", _source_proc([
         json.dumps({"kind": "error", "data": "playlist item failed"}),
