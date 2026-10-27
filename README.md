@@ -199,8 +199,8 @@ circling a collection, searching a library, what a screen reader is told,
 keeping a collection with the keyboard alone (focus shown at every stop),
 and reflow at 320 CSS px without sideways scrolling.
 In the extension, loaded unpacked: the popup with the server off and keeping
-a pasted link, a collection handed from the popup to the side panel, and the
-side panel's library. Both get an axe-core WCAG 2.2 AA audit in light and
+a pasted link, a collection handed from the popup to the side panel, the
+side panel's library, and both surfaces used with the keyboard alone. Both get an axe-core WCAG 2.2 AA audit in light and
 dark. The suites are skipped when Playwright isn't installed (and the audits
 when axe-core isn't); to run them, install `playwright@1.63.0` and
 `axe-core@4.14.0` where Node finds them (or point `NODE_PATH` there) and run

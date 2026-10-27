@@ -3,7 +3,7 @@
 // (see harness.mjs for when they may be missing).
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { axeViolations, playwright, skip, skipAudit, startServer, watchProblems } from "./harness.mjs";
+import { axeViolations, playwright, skip, skipAudit, startServer, tabTo, watchProblems } from "./harness.mjs";
 
 let browser;
 before(async () => { if (playwright) browser = await playwright.chromium.launch(); });
@@ -114,33 +114,16 @@ test("a screen reader hears what was found and each change of state, not every t
 test("a keyboard alone can preview, circle and keep, with focus always shown", { skip }, async () => {
   const server = await startServer();
   const { page, problems, close } = await openDesk(server);
-  // Tab until `selector` has focus; each stop on the way must show focus.
-  const tabTo = async (selector, most = 40) => {
-    for (let i = 0; i < most; i++) {
-      await page.keyboard.press("Tab");
-      const stop = await page.evaluate((target) => {
-        const el = document.activeElement;
-        // Ring on the element, its radio's label text, a print's frame, or
-        // the box around the paste field.
-        const ringed = [el, el.matches("input") && el.nextElementSibling, el.querySelector(".cell-img, .frame"),
-          el.closest(".paste")].filter(Boolean).some((part) => getComputedStyle(part).outlineStyle !== "none");
-        return { here: el.matches(target), ringed, what: el.outerHTML.slice(0, 80) };
-      }, selector);
-      assert.ok(stop.ringed, `no visible focus on ${stop.what}`);
-      if (stop.here) return;
-    }
-    assert.fail(`Tab never reached ${selector}`);
-  };
   try {
-    await tabTo("#url", 5);
+    await tabTo(page, "#url", { most: 5 });
     await page.keyboard.type("https://www.youtube.com/playlist?list=PLabc");
     await page.keyboard.press("Enter");
     await page.waitForSelector("#printFig.sheet .cell");
-    await tabTo('.cell[data-i="2"]');
+    await tabTo(page, '.cell[data-i="2"]');
     await page.keyboard.press("Space");
     assert.equal(await page.getAttribute('.cell[data-i="2"]', "aria-pressed"), "true");
     assert.equal(await page.textContent("#markCount"), "1 circled — only these are kept");
-    await tabTo("#dlBtn");
+    await tabTo(page, "#dlBtn");
     await page.keyboard.press("Enter");
     await page.waitForFunction(() => /^Kept /.test(document.getElementById("jobStatus").textContent), null, { timeout: 15000 });
     assert.deepEqual(problems, []);

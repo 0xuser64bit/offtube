@@ -93,3 +93,30 @@ export async function axeViolations(page) {
     runOnly: { type: "tag", values: ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"] },
   })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`));
 }
+
+// Press Tab (Shift+Tab with `back`) until `selector` has focus, requiring
+// a visible focus ring at every stop on the way: on the control itself,
+// its radio's label text or label, a print's frame, or the box drawn
+// around a link field.
+export async function tabTo(page, selector, { most = 40, back = false } = {}) {
+  for (let i = 0; i < most; i++) {
+    await page.keyboard.press(back ? "Shift+Tab" : "Tab");
+    const stop = await page.evaluate((target) => {
+      const el = document.activeElement;
+      const parts = [el, el.matches("input") && el.nextElementSibling, el.closest(".fmt"),
+        el.querySelector(".cell-img, .frame"), el.closest(".paste, .link-edit")];
+      // An outline counts only where it can be seen: a radio drawn as a
+      // chip is itself transparent, so its ring must be on the chip.
+      const shows = (part) => {
+        const style = getComputedStyle(part);
+        const box = part.getBoundingClientRect();
+        return style.outlineStyle !== "none" && parseFloat(style.outlineWidth) > 0
+          && Number(style.opacity) > 0 && box.width > 1 && box.height > 1;
+      };
+      return { here: el.matches(target), ringed: parts.filter(Boolean).some(shows), what: el.outerHTML.slice(0, 80) };
+    }, selector);
+    if (!stop.ringed) throw new Error(`no visible focus on ${stop.what}`);
+    if (stop.here) return;
+  }
+  throw new Error(`Tab never reached ${selector}`);
+}

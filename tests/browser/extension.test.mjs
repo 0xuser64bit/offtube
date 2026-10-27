@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { axeViolations, freePort, playwright, root, skip, skipAudit, startServer, watchProblems } from "./harness.mjs";
+import { axeViolations, freePort, playwright, root, skip, skipAudit, startServer, tabTo, watchProblems } from "./harness.mjs";
 
 let context;
 let worker;
@@ -159,6 +159,47 @@ test("the side panel shows the newest kept files and the library's size", { skip
     assert.equal(await page.$$eval(".kept-cell", (els) => els.length), 12);
     assert.equal(await page.textContent(".kept-name"), "pin_14.jpg");
     assert.match(await page.textContent("#filesCount"), /^15( · |$)/);
+    assert.deepEqual(problems, []);
+  } finally {
+    await page.close();
+    await server.stop();
+  }
+});
+
+test("the popup and the side panel work from the keyboard alone, with focus always shown", { skip }, async () => {
+  const server = await startServer();
+  await useServer(server.base);
+  let { page, problems } = await openSurface("popup");
+  try {
+    // The popup opens with focus in its link field when the tab has nothing.
+    await page.waitForFunction(() => document.activeElement?.id === "url");
+    await page.keyboard.type("https://www.youtube.com/watch?v=abc123abc12");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#stage .print-title");
+    // The link field is the popup's last control: Keep and the formats
+    // are above it.
+    await tabTo(page, "#dlBtn", { back: true });
+    await tabTo(page, 'input[name="q"]:checked', { back: true });
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await page.isChecked('input[name="q"][value="720"]'), true);
+    await tabTo(page, "#dlBtn");
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(() => /^Kept /.test(document.getElementById("jobStatus").textContent), null, { timeout: 15000 });
+    assert.deepEqual(problems, []);
+    await page.close();
+
+    ({ page, problems } = await openSurface("sidepanel"));
+    await page.waitForSelector(".kept-cell");
+    await tabTo(page, "#url");
+    await page.keyboard.type("https://www.youtube.com/playlist?list=PLabc");
+    await page.keyboard.press("Enter");
+    await page.waitForSelector("#stage .cell");
+    await tabTo(page, '.cell[data-i="3"]', { back: true });  // the sheet is above the link field
+    await page.keyboard.press("Enter");
+    assert.equal(await page.getAttribute('.cell[data-i="3"]', "aria-pressed"), "true");
+    await tabTo(page, "#discTrim > summary");
+    await page.keyboard.press("Enter");
+    assert.equal(await page.evaluate(() => document.getElementById("discTrim").open), true);
     assert.deepEqual(problems, []);
   } finally {
     await page.close();

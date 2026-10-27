@@ -129,12 +129,13 @@ performance or browser-accessibility audit:
 3. **Expand release verification.** The web desk, popup and side panel are
    exercised in Chromium with axe-core audits. The extension runs there as
    pages in tabs, so the toolbar popup's own window, opening the side panel,
-   the context menu and the background worker are not; nor are the
-   extension's keyboard paths, real-site failures, the web and extension
-   tests on Windows and macOS, the systemd and launchd units, and arm64
-   Docker images. The desk is checked for keyboard-only use and reflow at
-   320 CSS px; text spacing and screen readers themselves are not. An
-   automated audit is a regression check, not accessibility certification.
+   the context menu and the background worker are not; nor are real-site
+   failures, the web and extension tests on Windows and macOS, a running
+   systemd service (its unit is only verified), and arm64 Docker images.
+   All three surfaces are checked for keyboard-only use, and the desk for
+   reflow at 320 CSS px; text spacing and screen readers themselves are
+   not. An automated audit is a regression check, not accessibility
+   certification.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules
