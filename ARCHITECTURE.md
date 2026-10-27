@@ -20,7 +20,7 @@ a product decision, not a prerequisite for reliable local operation.
 | Child processes | `OWN_PROCESS_GROUP`, `stop_process_tree`, `watch_job_process` | gallery-dl, the GIF source worker and ffmpeg encodes each lead their own process group, so cancel and shutdown stop everything a job started. |
 | GIF pipeline | `run_gif_ytdlp`, `tools/gif_source.py`, FFmpeg | Isolated source process; private job directories; two-pass palette encoding; both ffmpeg and ffprobe required. |
 | Cookies | `resolve_cookies`, `write_cookie_file` | Site-filtered, atomically published per-request copies; owner-only permissions on POSIX; removed when a request or job ends, on shutdown and at startup. Saved session exports remain separate from engine writeback. |
-| Library | `library_name`, `library_listing`, `open_library_file`, `delete_library_file` | The regular files directly in `downloads/` - never dotfiles, temps, symlinks or special files - for listing, serving and deleting alike. `/files/` answers single byte ranges. Job history is intentionally in memory and clears on restart. No database migrations are needed. |
+| Library | `library_name`, `library_snapshot`, `library_page`, `open_library_file`, `delete_library_file` | The regular files directly in `downloads/` - never dotfiles, temps, symlinks or special files - for listing, serving and deleting alike. The server searches and pages the whole library; clients never filter a partial list. `/files/` answers single byte ranges. Job history is intentionally in memory and clears on restart. No database migrations are needed. |
 | Web client | `web/index.html`, `web/app.js`, `web/styles.css` | Plain JS state, polling, local preferences, self-hosted fonts, restrictive CSP, escaped generated markup. |
 | Extension | `extension/shared.js`, popup, side panel, background worker | Chrome storage for preferences and pending selections; loopback server URLs only; background worker has no durable global state. |
 | Deployment | launchers, Docker/Compose, `deploy/` | Python 3.10+; pinned engine versions; native browser cookies are unavailable in Docker. Docker must package the GIF worker as well as `app.py` and `web/`, and runs `tini` as PID 1. SIGTERM stops the server like Ctrl+C. |
@@ -128,8 +128,6 @@ performance or browser-accessibility audit:
    exclusive port bind and `taskkill` tree stop have only been unit-tested)
    and arm64 images. Existing Node DOM fixtures are useful regressions, not
    end-to-end browser or accessibility certification.
-5. **Page the library.** `/api/files` returns the newest 500 files without a
-   total, and both clients show the returned count as the library size.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules

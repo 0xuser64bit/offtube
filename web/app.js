@@ -55,8 +55,9 @@ const state = {
   printJobId: null,    // job started from the current source (develops its print)
   previewJobId: null,  // source job or session job explicitly selected for its result
   pollTimer: null,
-  files: [],
-  shownFiles: 60,
+  files: [],           // kept files loaded so far, newest first
+  total: 0,            // files in the library
+  matched: 0,          // files matching the current search and kind
   diskFree: "",
   preferredOutput: "video",
   quality: { video: "best", audio: "audio_mp3" },
@@ -800,17 +801,19 @@ function keptThumb(f) {
   return `<span class="edge">${esc(ext || "File")}</span>`;
 }
 
+const FILES_PAGE = 60;
+let filesRequest = 0; // the latest library request; older answers are dropped
+let searchTimer = null;
+
 function renderFiles() {
-  const q = $("fileSearch").value.trim().toLowerCase();
-  const kind = checked("kind") || "all";
-  const list = state.files.filter((f) => (kind === "all" || (kind === "gif" ? /\.gif$/i.test(f.name) : f.kind === kind)) && (!q || f.name.toLowerCase().includes(q)));
-  const shown = list.slice(0, state.shownFiles);
-  $("footFiles").textContent = state.files.length
-    ? `${state.files.length} file${state.files.length === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
+  const list = state.files;
+  $("footFiles").textContent = state.total
+    ? `${state.total} file${state.total === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
     : "";
-  $("filesEmpty").textContent = state.files.length ? "Nothing matches." : "Nothing kept yet. Files you keep land in downloads/.";
+  $("filesEmpty").textContent = state.total ? "Nothing matches." : "Nothing kept yet. Files you keep land in downloads/.";
   $("filesEmpty").classList.toggle("hidden", list.length > 0);
-  $("files").innerHTML = shown.map((f, i) => {
+  const more = state.matched - list.length;
+  $("files").innerHTML = list.map((f, i) => {
     const ext = (f.name.split(".").pop() || "").toUpperCase();
     const when = f.modified ? dateFmt.format(new Date(f.modified)) : "";
     return `<li class="kept-cell">
@@ -820,26 +823,51 @@ function renderFiles() {
       <p class="kept-meta">${esc(when)}</p>
       <div class="kept-actions"><a href="${esc(f.url)}" download>Save</a><button class="text-btn" type="button" data-del="${esc(f.name)}">Delete</button></div>
     </li>`;
-  }).join("") + (list.length > shown.length
-    ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(60, list.length - shown.length)} more</button></li>` : "");
+  }).join("") + (more > 0
+    ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(FILES_PAGE, more)} more</button></li>` : "");
   $$("video[data-src]", $("files")).forEach((v) => { if (lazyVideos) lazyVideos.observe(v); else v.src = v.dataset.src; });
 }
 
-async function loadFiles() {
+// The server searches and pages the whole library. A refresh keeps as many
+// rows as are showing, `more` appends the next page, and `reset` starts over
+// for a new search or kind.
+async function loadFiles({ more = false, reset = false } = {}) {
+  const my = ++filesRequest;
+  const shown = state.files.length;
+  const params = new URLSearchParams({
+    offset: String(more ? shown : 0),
+    limit: String(more || reset ? FILES_PAGE : Math.min(500, Math.max(FILES_PAGE, shown))),
+  });
+  const q = $("fileSearch").value.trim();
+  const kind = checked("kind") || "all";
+  if (q) params.set("q", q);
+  if (kind !== "all") params.set("kind", kind);
   try {
-    const { files, disk_free_str } = await api("/api/files");
-    state.files = files || [];
-    state.diskFree = disk_free_str || "";
+    const data = await api(`/api/files?${params}`);
+    if (my !== filesRequest) return;
+    const page = data.files || [];
+    if (more) {
+      const have = new Set(state.files.map((f) => f.name));
+      state.files = state.files.concat(page.filter((f) => !have.has(f.name)));
+    } else {
+      state.files = page;
+    }
+    state.total = data.total ?? state.files.length;
+    state.matched = data.matched ?? state.files.length;
+    state.diskFree = data.disk_free_str || "";
     renderFiles();
     syncTally();
   } catch { /* server down */ }
 }
 
-$("refreshFiles").addEventListener("click", loadFiles);
-$("fileSearch").addEventListener("input", () => { state.shownFiles = 60; renderFiles(); });
-$$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => { state.shownFiles = 60; renderFiles(); }));
+$("refreshFiles").addEventListener("click", () => loadFiles());
+$("fileSearch").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadFiles({ reset: true }), 200);
+});
+$$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => loadFiles({ reset: true })));
 $("files").addEventListener("click", async (e) => {
-  if (e.target.closest("#moreFiles")) { state.shownFiles += 60; renderFiles(); return; }
+  if (e.target.closest("#moreFiles")) { e.target.disabled = true; loadFiles({ more: true }); return; }
   const btn = e.target.closest("[data-del]");
   if (!btn) return;
   const name = btn.dataset.del;

@@ -435,11 +435,12 @@ $('clearQueue').addEventListener('click', async () => {
 
 async function refreshFiles() {
   try {
-    const { files, disk_free_str: free } = await OFFTUBE.apiGet(server, '/api/files');
-    const list = files || [];
-    $('filesCount').textContent = list.length ? `${list.length}${free ? ` · ${free} free` : ''}` : '';
+    const { files, total, disk_free_str: free } = await OFFTUBE.apiGet(server, '/api/files?limit=12');
+    const list = (files || []).slice(0, 12);
+    const count = total ?? list.length; // a server before paging sent no total
+    $('filesCount').textContent = count ? `${count}${free ? ` · ${free} free` : ''}` : '';
     $('filesEmpty').classList.toggle('hidden', list.length > 0);
-    $('files').innerHTML = list.slice(0, 12).map((f, i) => {
+    $('files').innerHTML = list.map((f, i) => {
       const href = esc(server + f.url);
       const ext = (f.name.split('.').pop() || '').toUpperCase();
       const thumb = f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`

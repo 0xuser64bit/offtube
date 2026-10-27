@@ -1011,3 +1011,54 @@ def test_a_second_server_on_the_same_port_is_refused():
         with pytest.raises(OSError) as error:
             app.LocalServer(("127.0.0.1", first.server_address[1]), app.Handler)
         assert error.value.errno == errno.EADDRINUSE
+
+
+# --- the library is paged and searched on the server ------------------------------
+@pytest.fixture()
+def library(server):
+    names = ["Clip one [a].mp4", "Song [b].mp3", "board_1.jpg", "Loop [c].gif",
+             "clip TWO [d].mp4", "notes.srt", "board_2.jpg"]
+    for age, name in enumerate(names):
+        path = app.DOWNLOAD_DIR / name
+        path.write_bytes(b"x")
+        os.utime(path, (1_700_000_000 - age * 60,) * 2)  # listed newest first
+    return server, names
+
+
+def test_library_pages_newest_first_with_totals(library):
+    server, names = library
+    status, page, _ = api(server, "GET", "/api/files?limit=3")
+    assert status == 200
+    assert [f["name"] for f in page["files"]] == names[:3]
+    assert page["total"] == page["matched"] == 7
+    status, page, _ = api(server, "GET", "/api/files?limit=3&offset=6")
+    assert [f["name"] for f in page["files"]] == names[6:]
+    status, page, _ = api(server, "GET", "/api/files")  # older clients: one big page
+    assert len(page["files"]) == 7 and page["disk_free_str"]
+
+
+@pytest.mark.parametrize("query, expected", [
+    ("q=clip", ["Clip one [a].mp4", "clip TWO [d].mp4"]),
+    ("kind=image", ["board_1.jpg", "Loop [c].gif", "board_2.jpg"]),
+    ("kind=gif", ["Loop [c].gif"]),
+    ("kind=audio", ["Song [b].mp3"]),
+    ("kind=video&q=two", ["clip TWO [d].mp4"]),
+    ("q=%5Bc%5D", ["Loop [c].gif"]),
+    ("q=nothing", []),
+])
+def test_library_search_covers_every_file(library, query, expected):
+    server, _ = library
+    status, page, _ = api(server, "GET", f"/api/files?{query}&limit=1")
+    assert status == 200
+    assert [f["name"] for f in page["files"]] == expected[:1]
+    assert page["matched"] == len(expected) and page["total"] == 7
+
+
+@pytest.mark.parametrize("query", [
+    pytest.param("kind=movies", id="unknown-kind"), pytest.param("limit=ten", id="text-limit"),
+    pytest.param("offset=-", id="text-offset"), pytest.param("limit=" + "9" * 5000, id="huge-limit"),
+])
+def test_library_rejects_bad_paging(library, query):
+    server, _ = library
+    status, body, _ = api(server, "GET", f"/api/files?{query}")
+    assert status == 400 and body["ok"] is False

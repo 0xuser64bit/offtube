@@ -464,7 +464,8 @@ def safe_child(base: Path, name: str) -> Path | None:
 # private .gif-* folders), in-progress temps, symlinks or special files.
 # Listing, serving and deleting share this one definition, so a listed name
 # is exactly what /files/ serves and nothing else is reachable.
-LIBRARY_LISTING_LIMIT = 500
+LIBRARY_PAGE_MAX = 500
+LIBRARY_KINDS = ("all", "video", "audio", "image", "gif")
 
 
 def library_name(name) -> str | None:
@@ -476,9 +477,9 @@ def library_name(name) -> str | None:
     return name
 
 
-def library_listing(limit: int = LIBRARY_LISTING_LIMIT) -> list[dict]:
-    """Kept files, newest first, from one pass with one lstat per entry. A
-    file that vanishes mid-scan (deleted, or renamed by an engine) is skipped."""
+def library_snapshot() -> list[tuple[str, os.stat_result]]:
+    """Every kept file, newest first, from one pass with one lstat per entry.
+    A file that vanishes mid-scan (deleted, or renamed by an engine) is skipped."""
     found: list[tuple[str, os.stat_result]] = []
     with os.scandir(DOWNLOAD_DIR) as entries:
         for entry in entries:
@@ -491,14 +492,32 @@ def library_listing(limit: int = LIBRARY_LISTING_LIMIT) -> list[dict]:
             if stat.S_ISREG(info.st_mode):
                 found.append((entry.name, info))
     found.sort(key=lambda item: (-item[1].st_mtime, item[0]))
-    return [{
-        "name": name,
-        "size": info.st_size,
-        "size_str": format_bytes(info.st_size) or "?",
-        "modified": _dt.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds"),
-        "url": f"/files/{urllib.parse.quote(name)}",
-        "kind": file_kind(name),
-    } for name, info in found[:limit]]
+    return found
+
+
+def library_page(query: str = "", kind: str = "all", offset: int = 0,
+                 limit: int = LIBRARY_PAGE_MAX) -> dict:
+    """One page of the library, filtered by a name fragment and a kind, with
+    the library's total and how many files match. Searching here, not in the
+    client, reaches every file however large the library grows."""
+    snapshot = library_snapshot()
+    needle = query.casefold()
+    matched = [(name, info) for name, info in snapshot
+               if needle in name.casefold()
+               and (kind == "all" or (name.lower().endswith(".gif") if kind == "gif"
+                                      else file_kind(name) == kind))]
+    return {
+        "files": [{
+            "name": name,
+            "size": info.st_size,
+            "size_str": format_bytes(info.st_size) or "?",
+            "modified": _dt.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds"),
+            "url": f"/files/{urllib.parse.quote(name)}",
+            "kind": file_kind(name),
+        } for name, info in matched[offset:offset + limit]],
+        "total": len(snapshot),
+        "matched": len(matched),
+    }
 
 
 def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
@@ -2536,19 +2555,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "Unknown job id."}, 404)
             return self.send_json(snapshot)
         if route == "/api/files":
+            kind = (qs.get("kind") or ["all"])[0]
+            if kind not in LIBRARY_KINDS:
+                return self.send_json({"ok": False, "error": f"kind must be one of: {', '.join(LIBRARY_KINDS)}."}, 400)
             try:
-                files = library_listing()
+                offset = max(0, int((qs.get("offset") or ["0"])[0]))
+                limit = max(1, min(LIBRARY_PAGE_MAX, int((qs.get("limit") or [str(LIBRARY_PAGE_MAX)])[0])))
+            except ValueError:
+                return self.send_json({"ok": False, "error": "offset and limit must be whole numbers."}, 400)
+            try:
+                page = library_page((qs.get("q") or [""])[0][:200], kind, offset, limit)
             except OSError:
                 return self.send_json({"ok": False, "error": "Can't read the downloads folder."}, 500)
             try:
                 free = shutil.disk_usage(DOWNLOAD_DIR).free
             except OSError:
                 free = None
-            return self.send_json({
-                "files": files,
-                "disk_free": free,
-                "disk_free_str": format_bytes(free),
-            })
+            return self.send_json({**page, "disk_free": free, "disk_free_str": format_bytes(free)})
         if route.startswith("/files/"):
             return self.serve_download_file(route[len("/files/"):])
         if route.startswith("/api/"):

@@ -81,7 +81,7 @@ function desk() {
   elements.get("subLang").value = "en";
   elements.get("gifResult").classList.add("hidden");
   const context = vm.createContext({
-    document, window: {}, CSS: { escape: String }, Intl,
+    document, window: {}, CSS: { escape: String }, Intl, URLSearchParams,
     localStorage: { getItem: (key) => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) },
     setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; },
     clearTimeout: (id) => timers.delete(id), setInterval: () => 1, clearInterval() {},
@@ -234,4 +234,36 @@ test("a pasted link previews promptly; typing still waits for a pause", async ()
   url.value = "https://www.youtube.com/watch?v=abc";
   await url.dispatch("input", { inputType: "insertText" });
   assert.deepEqual([...ui.timers.values()].map((t) => t.ms), [700]);
+});
+
+test("the library is searched and paged by the server, not the page", async () => {
+  const ui = desk();
+  const asked = [];
+  const file = (name) => ({ name, kind: "video", url: `/files/${name}`, size_str: "1 KB", modified: "2026-01-01T00:00:00" });
+  ui.context.fetch = async (url) => {
+    asked.push(url);
+    const offset = Number(new URLSearchParams(url.split("?")[1]).get("offset"));
+    return { ok: true, json: async () => ({ files: [file(`f${offset}.mp4`)], total: 900, matched: 2, disk_free_str: "1 GB" }) };
+  };
+  await ui.run("loadFiles()");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60");
+  assert.equal(ui.elements.get("footFiles").textContent, "900 files · 1 GB free");
+  assert.match(ui.elements.get("files").innerHTML, /Show 1 more/);
+  await ui.run("loadFiles({ more: true })");
+  assert.equal(asked.at(-1), "/api/files?offset=1&limit=60");
+  assert.match(ui.elements.get("files").innerHTML, /f1\.mp4/);
+  assert.doesNotMatch(ui.elements.get("files").innerHTML, /Show \d+ more/);
+  // A refresh keeps the rows already showing.
+  await ui.run("loadFiles()");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60");
+  // A search waits for a pause in typing, then starts from the first page.
+  ui.timers.clear();
+  ui.elements.get("fileSearch").value = "clip";
+  await ui.elements.get("fileSearch").dispatch("input");
+  const [pending] = [...ui.timers.values()];
+  assert.equal(pending.ms, 200);
+  await pending.fn();
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip");
+  await ui.choose("kind", "gif");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip&kind=gif");
 });

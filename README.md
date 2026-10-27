@@ -234,7 +234,7 @@ integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
-- `GET /api/files` → `{files, disk_free, disk_free_str}`, newest first (up to 500); `GET /files/<name>` downloads one (RFC 5987 filename). A single `Range: bytes=…` is answered with `206` (or `416` past the end), so media elements fetch only the index and frames they need; `ETag`/`Last-Modified` let `If-Range` resume only an unchanged file
+- `GET /api/files?q=&kind=&offset=&limit=` → `{files, total, matched, disk_free, disk_free_str}`, newest first. `q` matches part of a name (case-insensitive), `kind` is `all`, `video`, `audio`, `image` or `gif`, and `limit` is 1–500 (default 500); `total` counts the whole library and `matched` the files that fit the search. `GET /files/<name>` downloads one (RFC 5987 filename). A single `Range: bytes=…` is answered with `206` (or `416` past the end), so media elements fetch only the index and frames they need; `ETag`/`Last-Modified` let `If-Range` resume only an unchanged file
 - `POST /api/files/delete` `{name}` → `{deleted}` (the exact file name; 404 if it isn't a kept file)
 
 The library is the regular files directly in `downloads/`. Dotfiles,
