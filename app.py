@@ -2655,7 +2655,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class LocalServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    # POSIX needs SO_REUSEADDR to rebind right after a restart (TIME_WAIT).
+    # On Windows the same option makes the port shareable: any process, under
+    # any account, could bind it too and receive offtube's requests, pasted
+    # cookies included. There the port is claimed exclusively instead.
+    exclusive_port = os.name == "nt"
+    allow_reuse_address = not exclusive_port
     daemon_threads = True
     # One thread per connection, capped: past this many, a connection is
     # answered 503 at once rather than given a thread to wait in.
@@ -2667,6 +2672,11 @@ class LocalServer(socketserver.ThreadingTCPServer):
         self.refused = 0
         self.refused_logged_at = -math.inf
         super().__init__(server_address, handler_class)
+
+    def server_bind(self):
+        if self.exclusive_port:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
 
     def process_request(self, request, client_address):
         if not self.connection_slots.acquire(blocking=False):
@@ -2732,7 +2742,8 @@ def main():
     try:
         httpd = LocalServer((host, port), Handler)
     except OSError as exc:
-        if exc.errno != errno.EADDRINUSE:
+        # Windows may report a port held exclusively as WSAEACCES.
+        if exc.errno not in (errno.EADDRINUSE, getattr(errno, "WSAEACCES", errno.EADDRINUSE)):
             raise
         print(f"Port {port} is already in use — is offtube already running? "
               "Set PORT to use another one.", file=sys.stderr)

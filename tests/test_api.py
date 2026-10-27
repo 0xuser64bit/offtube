@@ -4,6 +4,7 @@ yt-dlp is stubbed (no network): the fake YoutubeDL answers extract_info and
 simulates a download by firing progress hooks and writing one output file.
 """
 
+import errno
 import json
 import http.client
 import os
@@ -980,3 +981,33 @@ def test_unknown_quality_is_refused_before_queueing(server):
                           {"url": "https://youtu.be/abc123abc12", "quality": "GIF"})
     assert status == 400 and "quality" in body["error"]
     assert not app.jobs
+
+
+def test_windows_claims_the_port_exclusively(monkeypatch):
+    monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", -1, raising=False)
+    calls = []
+
+    class FakeSocket:
+        def setsockopt(self, *args):
+            calls.append(("setsockopt", *args))
+
+        def bind(self, address):
+            calls.append(("bind", address))
+
+        def getsockname(self):
+            return ("127.0.0.1", 8000)
+
+    server = app.LocalServer.__new__(app.LocalServer)
+    server.socket, server.server_address, server.address_family = FakeSocket(), ("127.0.0.1", 8000), socket.AF_INET
+    server.exclusive_port, server.allow_reuse_address = True, False
+    server.server_bind()
+    assert calls == [("setsockopt", socket.SOL_SOCKET, -1, 1), ("bind", ("127.0.0.1", 8000))]
+    # Elsewhere the port stays rebindable right after a restart.
+    assert app.LocalServer.allow_reuse_address is (os.name != "nt")
+
+
+def test_a_second_server_on_the_same_port_is_refused():
+    with app.LocalServer(("127.0.0.1", 0), app.Handler) as first:
+        with pytest.raises(OSError) as error:
+            app.LocalServer(("127.0.0.1", first.server_address[1]), app.Handler)
+        assert error.value.errno == errno.EADDRINUSE
