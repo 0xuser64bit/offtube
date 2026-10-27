@@ -105,14 +105,15 @@ select another interpreter.
 GitHub CI runs the gate on Python 3.10 and 3.12, pytest on Windows (process
 trees stopped with `taskkill`, the exclusive port bind, Windows file and
 encoding behavior) and macOS, the launchers from a fresh checkout
-(`tools/launcher_smoke.sh` for `run.sh`; `run.bat` on Windows), the browser
-suite with
-pinned Playwright and axe-core (required there, never skipped), a Docker build,
-packaged-worker check, HTTP startup smoke test, and a check that the
-container reaps an orphaned child and stops on SIGTERM with exit status 0.
-Actions are commit-pinned and the workflow has read-only repository
-permissions. A COPY-layout test is not a substitute for the actual container
-build or multi-architecture testing.
+(`tools/launcher_smoke.sh` for `run.sh`; `run.bat` on Windows), the README's
+launchd agent under `launchctl` (it must find ffmpeg and a JS runtime),
+`systemd-analyze verify` on the systemd unit, the browser suite with pinned
+Playwright and axe-core (required there, never skipped), and, on amd64 and
+arm64, a Docker build, packaged-worker check, HTTP startup smoke test, and a
+check that the container reaps an orphaned child and stops on SIGTERM with
+exit status 0. Actions are commit-pinned and the workflow has read-only
+repository permissions. A COPY-layout test is not a substitute for the actual
+container build.
 
 ## Next priorities
 
@@ -130,8 +131,8 @@ performance or browser-accessibility audit:
    exercised in Chromium with axe-core audits. The extension runs there as
    pages in tabs, so the toolbar popup's own window, opening the side panel,
    the context menu and the background worker are not; nor are real-site
-   failures, the web and extension tests on Windows and macOS, a running
-   systemd service (its unit is only verified), and arm64 Docker images.
+   failures, the web and extension tests on Windows and macOS, and a
+   running systemd service (its unit is only verified).
    All three surfaces are checked for keyboard-only use, and the desk for
    reflow at 320 CSS px; text spacing and screen readers themselves are
    not. An automated audit is a regression check, not accessibility

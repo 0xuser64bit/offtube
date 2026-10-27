@@ -210,10 +210,12 @@ rules, so use the pinned one.
 GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests on
 Windows and macOS, the browser suite with Playwright and axe-core required,
 starts offtube from a fresh checkout with `run.sh` (Linux, macOS; it must stop
-cleanly on SIGTERM) and `run.bat` (Windows), builds the Docker image, checks the
-packaged yt-dlp worker, smoke-tests HTTP startup, and checks that the container
-reaps orphaned processes and stops cleanly on `docker stop`. See `ARCHITECTURE.md` for the system map and remaining
-production-hardening work.
+cleanly on SIGTERM) and `run.bat` (Windows), loads the macOS service above with
+`launchctl` (it must find ffmpeg and a JS runtime), checks the systemd unit
+with `systemd-analyze verify`, and on amd64 and arm64 builds the Docker image,
+checks the packaged yt-dlp worker, smoke-tests HTTP startup, and checks that
+the container reaps orphaned processes and stops cleanly on `docker stop`. See
+`ARCHITECTURE.md` for the system map and remaining production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
 stubbed `YoutubeDL` for inspection, a stand-in yt-dlp worker
