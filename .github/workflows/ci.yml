@@ -153,7 +153,13 @@ jobs:
         run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
 
   container:
-    runs-on: ubuntu-24.04
+    # Built natively on both architectures the image ships for: the Deno
+    # download is picked per architecture inside the build.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
