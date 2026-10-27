@@ -10,7 +10,6 @@ import json
 import http.client
 import os
 import socket
-import subprocess
 import sys
 import threading
 import time
@@ -24,6 +23,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
+from conftest import process_gone  # noqa: E402
 
 
 class FakeYoutubeDL:
@@ -940,12 +940,6 @@ def test_oversized_body_drain_is_bounded(server, monkeypatch):
     assert sent < 64 * 1024 * 1024
 
 
-def _process_gone(pid):
-    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
-    return not state.stdout.strip() or state.stdout.strip().startswith("Z")
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_cancelling_a_gallery_job_stops_what_gallery_dl_started(server, fake_gallery):
     status, body, _ = api(server, "POST", "/api/download",
                           {"url": "https://www.pinterest.com/pin/664281013778109217/?child"})
@@ -960,7 +954,7 @@ def test_cancelling_a_gallery_job_stops_what_gallery_dl_started(server, fake_gal
     assert status == 200
     assert wait_for(server, body["job_id"], timeout=10)["status"] == "cancelled"
     deadline = time.time() + 5
-    while not _process_gone(child):
+    while not process_gone(child):
         assert time.time() < deadline, "gallery-dl's child outlived the cancelled job"
         time.sleep(0.05)
 

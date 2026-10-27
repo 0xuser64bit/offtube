@@ -382,7 +382,10 @@ def test_cookie_write_does_not_follow_target_symlink(tmp_path, monkeypatch):
     outside = tmp_path / "outside.txt"
     outside.write_text("UNTOUCHED")
     target = app.cookie_file_for("linked")
-    target.symlink_to(outside)
+    try:
+        target.symlink_to(outside)
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"symlinks are unavailable: {exc}")
     app.resolve_cookies({"cookies_mode": "text", "cookies_text": "SECRET"}, "linked")
     assert outside.read_text() == "UNTOUCHED"
     assert not target.is_symlink()

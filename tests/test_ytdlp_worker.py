@@ -16,6 +16,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app
+from conftest import process_gone
 
 
 requires_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
@@ -191,8 +192,7 @@ def test_silent_download_stops_process_tree(source_job, source_server, monkeypat
     assert errors and ("Cancelled" if reason == "cancel" else "disk is almost full") in errors[0]
     assert "proc" not in source_job
     for pid in descendants:
-        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
-        assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
+        assert process_gone(pid)
 
 
 @pytest.mark.parametrize("payload", [

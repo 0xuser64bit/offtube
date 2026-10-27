@@ -22,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app  # noqa: E402
-from conftest import FAKE_WORKER  # noqa: E402
+from conftest import FAKE_WORKER, process_gone  # noqa: E402
 
 COOKIES = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tFALSE\t9999999999\tSID\tsecret\n"
 CHATTY = "https://youtu.be/chattychat1"  # reports progress until stopped
@@ -122,7 +122,6 @@ def test_shutdown_reports_work_that_does_not_stop_in_time(fresh_queue, monkeypat
         release.set()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_shutdown_stops_child_process_trees(fresh_queue, monkeypatch):
     from test_helpers import FAKE_GALLERY
     monkeypatch.setattr(app, "gallery_cmd", lambda payload, cookie_id: [sys.executable, "-c", FAKE_GALLERY])
@@ -137,10 +136,7 @@ def test_shutdown_stops_child_process_trees(fresh_queue, monkeypatch):
     assert app.shutdown_jobs(grace=5) is True
     assert app.jobs[jid]["status"] == "cancelled"
     deadline = time.monotonic() + 5
-    while True:
-        state = subprocess.run(["ps", "-o", "stat=", "-p", str(child)], capture_output=True, text=True)
-        if not state.stdout.strip() or state.stdout.strip().startswith("Z"):
-            break
+    while not process_gone(child):
         assert time.monotonic() < deadline, "gallery-dl's child survived shutdown"
         time.sleep(0.05)
 

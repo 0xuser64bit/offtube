@@ -2,6 +2,8 @@
 would reach the network. Every test gets tests/fake_ytdlp_worker.py instead;
 a test that drives the real worker against local fixtures says so with
 @pytest.mark.real_worker."""
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -11,6 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app  # noqa: E402
 
 FAKE_WORKER = [sys.executable, str(Path(__file__).resolve().parent / "fake_ytdlp_worker.py")]
+
+
+def process_gone(pid: int) -> bool:
+    """True once `pid` no longer runs. A zombie counts as gone: only its
+    parent, not the test, can reap it."""
+    if os.name == "nt":
+        listed = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
+                                capture_output=True, text=True)
+        return f'"{pid}"' not in listed.stdout
+    state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return not state.stdout.strip() or state.stdout.strip().startswith("Z")
 
 
 def pytest_configure(config):

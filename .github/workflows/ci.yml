@@ -39,6 +39,25 @@ jobs:
           PYTHON: python
         run: bash tools/check.sh
 
+  windows:
+    # Process groups, taskkill tree stops and the exclusive port bind only
+    # exist here; POSIX-only tests skip themselves.
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Install validation dependencies
+        run: |
+          choco install ffmpeg --no-progress --yes
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the backend tests on Windows
+        run: python -m pytest tests -q -rs
+
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
