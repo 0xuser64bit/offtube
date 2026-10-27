@@ -76,10 +76,13 @@ def _enqueue(url="https://youtu.be/abc123abc12"):
     return jid
 
 
-def _started(jid, timeout=5):
+def _inside_yt_dlp(jid, timeout=10):
+    """Wait until the job's thread has written its cookie copy, the last step
+    before it enters yt-dlp. Its status leaves "queued" earlier than that,
+    before URL checks and runtime probes that can take a while on CI."""
     deadline = time.monotonic() + timeout
-    while app.jobs[jid]["status"] == "queued":
-        assert time.monotonic() < deadline
+    while not app.cookie_file_for(jid).exists():
+        assert time.monotonic() < deadline, app.jobs[jid]
         time.sleep(0.02)
 
 
@@ -88,8 +91,7 @@ def test_shutdown_cancels_queued_and_stops_running_jobs(fresh_queue, monkeypatch
     running = [_enqueue(), _enqueue()]
     queued = _enqueue()
     for jid in running:
-        _started(jid)
-    assert app.cookie_file_for(running[0]).exists()
+        _inside_yt_dlp(jid)
 
     started = time.monotonic()
     assert app.shutdown_jobs(grace=5) is True
@@ -105,7 +107,7 @@ def test_shutdown_cancels_queued_and_stops_running_jobs(fresh_queue, monkeypatch
 def test_shutdown_reports_work_that_does_not_stop_in_time(fresh_queue, monkeypatch):
     monkeypatch.setattr(app, "yt_dlp", type("Stub", (), {"YoutubeDL": SilentDL}))
     jid = _enqueue()
-    _started(jid)
+    _inside_yt_dlp(jid)
     started = time.monotonic()
     assert app.shutdown_jobs(grace=0.5) is False
     assert 0.5 <= time.monotonic() - started < 2
