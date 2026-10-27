@@ -426,8 +426,7 @@ async function inspect() {
 
 let debounce = null;
 $("pasteForm").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(debounce); inspect(); });
-$("url").addEventListener("paste", () => { clearTimeout(debounce); debounce = setTimeout(inspect, 200); });
-$("url").addEventListener("input", () => {
+$("url").addEventListener("input", (e) => {
   clearTimeout(debounce);
   ++state.fetchToken;
   state.info = null;
@@ -444,7 +443,9 @@ $("url").addEventListener("input", () => {
   syncNotes();
   const v = $("url").value.trim();
   if (!v) return;
-  debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, 700);
+  // A paste or drop delivers the whole link at once; typing gets a pause to finish.
+  const whole = e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop";
+  debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, whole ? 150 : 700);
 });
 $("infoErrorFix").addEventListener("click", () => {
   const d = $("discAccess");

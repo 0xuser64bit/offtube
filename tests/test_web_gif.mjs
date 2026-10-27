@@ -13,6 +13,8 @@ function desk() {
   const elements = new Map();
   const groups = new Map();
   const saved = new Map();
+  const timers = new Map();  // pending setTimeout callbacks, never run on their own
+  let timerId = 0;
   class Element {
     constructor(id = "") {
       this.id = id;
@@ -44,7 +46,7 @@ function desk() {
     setAttribute(name, value) { this.attrs[name] = value; }
     getAttribute(name) { return this.attrs[name]; }
     addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }
-    async dispatch(type) { for (const handler of this.listeners[type] || []) await handler({ target: this, preventDefault() {} }); }
+    async dispatch(type, detail = {}) { for (const handler of this.listeners[type] || []) await handler({ target: this, preventDefault() {}, ...detail }); }
     querySelector() { return null; }
     querySelectorAll() { return []; }
     focus() { this.focused = true; }
@@ -81,7 +83,8 @@ function desk() {
   const context = vm.createContext({
     document, window: {}, CSS: { escape: String }, Intl,
     localStorage: { getItem: (key) => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) },
-    setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; },
+    clearTimeout: (id) => timers.delete(id), setInterval: () => 1, clearInterval() {},
     fetch: async () => ({ ok: true, json: async () => ({}) }),
   });
   vm.runInContext(script, context);
@@ -91,7 +94,7 @@ function desk() {
     elements.get("url").value = "https://example.com/video";
     run(`state.info = ${JSON.stringify(value)}; state.infoUrl = $("url").value; renderFormats();`);
   };
-  return { elements, context, run, choose, info, saved };
+  return { elements, context, run, choose, info, saved, timers };
 }
 
 test("GIF keeps whole videos or fractional timeframes with its own settings and no subtitles", async () => {
@@ -217,4 +220,18 @@ test("counts reported by a site are printed as text, never markup", async () => 
   await ui.choose("plmode", "single");
   ui.run("syncTally()");
   assert.doesNotMatch(ui.elements.get("tally").innerHTML, /<i>/);
+});
+
+test("a pasted link previews promptly; typing still waits for a pause", async () => {
+  const ui = desk();
+  const url = ui.elements.get("url");
+  // A browser fires paste, then input once the value has changed.
+  url.value = "https://www.youtube.com/watch?v=abc123abc12";
+  await url.dispatch("paste");
+  await url.dispatch("input", { inputType: "insertFromPaste" });
+  assert.deepEqual([...ui.timers.values()].map((t) => t.ms), [150]);
+  ui.timers.clear();
+  url.value = "https://www.youtube.com/watch?v=abc";
+  await url.dispatch("input", { inputType: "insertText" });
+  assert.deepEqual([...ui.timers.values()].map((t) => t.ms), [700]);
 });
