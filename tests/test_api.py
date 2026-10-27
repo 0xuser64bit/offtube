@@ -8,6 +8,7 @@ import concurrent.futures
 import errno
 import json
 import http.client
+import mimetypes
 import os
 import socket
 import sys
@@ -679,6 +680,20 @@ def test_fonts_are_served_and_traversal_blocked(server):
         raise AssertionError("traversal should 404")
     except urllib.error.HTTPError as exc:
         assert exc.code == 404
+
+
+def test_media_types_do_not_depend_on_the_platform(server, monkeypatch):
+    # As on a Windows machine whose registry maps .js to text/plain: with
+    # nosniff, a browser would refuse to run the desk's script.
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *args, **kwargs: ("text/plain", None))
+    (app.DOWNLOAD_DIR / "Clip [a].mkv").write_bytes(b"v")
+    served = {}
+    for path in ("/", "/app.js", "/styles.css", "/favicon.svg", "/fonts/archivo.woff2", "/files/Clip%20%5Ba%5D.mkv"):
+        with urllib.request.urlopen(server + path, timeout=10) as res:
+            served[path] = res.headers["Content-Type"]
+    assert served == {"/": "text/html", "/app.js": "text/javascript", "/styles.css": "text/css",
+                      "/favicon.svg": "image/svg+xml", "/fonts/archivo.woff2": "font/woff2",
+                      "/files/Clip%20%5Ba%5D.mkv": "video/x-matroska"}
 
 
 # --- library snapshots: what is listed is exactly what is served -----------------

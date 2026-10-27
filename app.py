@@ -269,9 +269,26 @@ def display_thumbnail(value) -> str | None:
     return s if s.startswith(("https://", "http://")) and len(s) <= MAX_URL_LEN else None
 
 
+# One table on every platform. mimetypes' module functions also read
+# /etc/mime.types or, on Windows, the registry, where .js can be text/plain
+# (which nosniff then refuses to run) and .woff2 or .mkv can be missing.
+MEDIA_TYPES = mimetypes.MimeTypes()
+for _ext, _type in {
+    ".js": "text/javascript", ".mjs": "text/javascript", ".woff2": "font/woff2", ".woff": "font/woff",
+    ".mkv": "video/x-matroska", ".m4v": "video/x-m4v", ".m4a": "audio/mp4", ".ogg": "audio/ogg",
+    ".opus": "audio/opus", ".flac": "audio/flac", ".webp": "image/webp", ".avif": "image/avif",
+    ".heic": "image/heic", ".vtt": "text/vtt", ".srt": "application/x-subrip",
+}.items():
+    MEDIA_TYPES.add_type(_type, _ext)
+
+
+def media_type(name: str) -> str:
+    return MEDIA_TYPES.guess_type(name)[0] or "application/octet-stream"
+
+
 def file_kind(name: str) -> str:
     """'video' | 'audio' | 'image' | 'other', for library thumbnails."""
-    major = (mimetypes.guess_type(name)[0] or "").split("/")[0]
+    major = media_type(name).split("/")[0]
     return major if major in ("video", "audio", "image") else "other"
 
 
@@ -2444,7 +2461,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path is None or not path.is_file():
             self.send_error(404)
             return
-        ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        ctype = media_type(path.name)
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -2487,7 +2504,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             first, last = span or (0, size - 1)
-            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            ctype = media_type(name)
             # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
             fallback = re.sub(r'["\r\n]', "_", name)
             fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"

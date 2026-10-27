@@ -1303,10 +1303,14 @@ def test_display_thumbnail_only_http():
 
 
 @pytest.mark.parametrize("name, kind", [
-    ("Clip [abc].mp4", "video"), ("Song [x].mp3", "audio"), ("Track [x].m4a", "audio"),
-    ("pinterest_1.jpg", "image"), ("pin.png", "image"), ("subs.en.srt", "other"),
+    ("Clip [abc].mp4", "video"), ("Clip [abc].webm", "video"), ("Clip [abc].mkv", "video"),
+    ("Song [x].mp3", "audio"), ("Track [x].m4a", "audio"), ("Voice [x].opus", "audio"),
+    ("Take [x].flac", "audio"), ("pinterest_1.jpg", "image"), ("pin.png", "image"),
+    ("pin.webp", "image"), ("Loop [c].gif", "image"), ("subs.en.srt", "other"),
 ])
-def test_file_kind(name, kind):
+def test_file_kind(name, kind, monkeypatch):
+    # The same answer whatever the platform's own MIME database says.
+    monkeypatch.setattr(app.mimetypes, "guess_type", lambda *args, **kwargs: (None, None))
     assert app.file_kind(name) == kind
 
 
