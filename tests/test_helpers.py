@@ -225,6 +225,26 @@ def test_library_name(name, ok):
     assert app.library_name(name) == (name if ok else None)
 
 
+@pytest.mark.parametrize("quality", [None, "", "best", "2160", "720", "4320", "audio_mp3", "audio_m4a", "gif"])
+def test_quality_ids_accepted(quality):
+    app.validate_media_payload({"quality": quality})
+
+
+@pytest.mark.parametrize("quality", ["GIF", "Best", "4k", "720p", " 720", "99", "12345", "audio", "<b>x</b>"])
+def test_quality_ids_rejected(quality):
+    # "GIF" used to pick GIF's stream format but skip GIF encoding.
+    with pytest.raises(ValueError, match="quality"):
+        app.validate_media_payload({"quality": quality})
+
+
+def test_browser_profile_is_bounded_text():
+    payload = {"cookies_mode": "browser", "cookies_browser": "chrome"}
+    assert app.resolve_cookies({**payload, "cookies_browser_profile": "Profile 2"})["cookiesfrombrowser"][1] == "Profile 2"
+    for profile in ("x" * (app.MAX_PROFILE_LEN + 1), "Default\nother"):
+        with pytest.raises(ValueError, match="profile"):
+            app.resolve_cookies({**payload, "cookies_browser_profile": profile})
+
+
 # --- time parsing -----------------------------------------------------------
 @pytest.mark.parametrize("raw, want", [
     ("90", 90.0), ("1:30", 90.0), ("01:30", 90.0), ("1:02:03", 3723.0),

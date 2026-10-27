@@ -973,3 +973,10 @@ def test_cancelling_a_gallery_job_stops_what_gallery_dl_started(server, fake_gal
     while not _process_gone(child):
         assert time.time() < deadline, "gallery-dl's child outlived the cancelled job"
         time.sleep(0.05)
+
+
+def test_unknown_quality_is_refused_before_queueing(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                          {"url": "https://youtu.be/abc123abc12", "quality": "GIF"})
+    assert status == 400 and "quality" in body["error"]
+    assert not app.jobs

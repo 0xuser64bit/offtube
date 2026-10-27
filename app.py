@@ -164,6 +164,7 @@ MAX_URL_LEN = 2000
 MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; one site's rows surviving the trim are KBs
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
+MAX_PROFILE_LEN = 256  # a profile name, or the path to one
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
 DISK_CHECK_EVERY = 5.0  # seconds between free-space probes per running job
 DISK_FULL_MSG = "Stopped: the disk is almost full (<200 MB free). Free space and retry."
@@ -894,6 +895,8 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
         if browser not in allowed:
             raise ValueError(f"Unsupported browser '{browser}'. Use one of: {', '.join(sorted(allowed))}.")
         profile = (payload.get("cookies_browser_profile") or "").strip() or None
+        if profile and (len(profile) > MAX_PROFILE_LEN or any(ord(ch) < 32 for ch in profile)):
+            raise ValueError("That browser profile name doesn't look right.")
         # yt-dlp python API expects a tuple: (browser, profile, keyring, container)
         opts["cookiesfrombrowser"] = (browser, profile, None, None)
         return opts
@@ -1095,6 +1098,10 @@ def validate_media_payload(payload: dict) -> None:
     ):
         if (payload.get(field) or default).lower() not in allowed:
             raise ValueError(f"{field} must be one of: {', '.join(allowed)}.")
+    # Exact ids: "GIF" would pick GIF's stream format but skip its encoding.
+    quality = payload.get("quality")
+    if quality and quality not in QUALITY_FORMATS and not re.fullmatch(r"[1-9]\d{2,3}", quality):
+        raise ValueError("quality must be best, a height such as 720, audio_mp3, audio_m4a or gif.")
 
 
 def fetch_info(url: str, payload: dict) -> dict:
