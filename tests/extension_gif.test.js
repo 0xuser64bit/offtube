@@ -183,3 +183,10 @@ test('completed GIF preview uses the actual animation, with escaped links for ea
   s.api.showGifResult({ ...job, status: 'processing' }, 'http://localhost:8000');
   assert.equal(s.node('gifResult').classList.contains('hidden'), true);
 });
+
+test('side panel tallies print a collection count as text, never markup', () => {
+  const s = surface('sidepanel/sidepanel.js');
+  s.chosen.plmode = 'playlist';
+  s.run(`info = { type: 'playlist', media: 'video', count: '<img src=x>' }; infoUrl = url(); syncTally();`);
+  assert.match(s.node('tally').innerHTML, /&lt;img src=x&gt; items/);
+});

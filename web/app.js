@@ -240,10 +240,10 @@ function syncTally() {
     const perVideo = gif ? " · one GIF per video" : "";
     const many = info.type === "playlist" || (info.type === "gallery" && info.count > 1);
     if (state.marks.size) what = `<b>${state.marks.size} circled item${state.marks.size === 1 ? "" : "s"}</b>${perVideo}`;
-    else if (many && (checked("plmode") === "playlist")) what = `<b>${info.count || "All"}${info.more ? "+" : ""} items</b>${perVideo}`;
+    else if (many && (checked("plmode") === "playlist")) what = `<b>${esc(info.count || "All")}${info.more ? "+" : ""} items</b>${perVideo}`;
     else if (info.type === "gallery") what = gif
       ? "<b>1 GIF per video</b> · images are skipped"
-      : `<b>${info.count > 1 ? `${info.count} files` : "1 file"}</b>`;
+      : `<b>${info.count > 1 ? `${esc(info.count)} files` : "1 file"}</b>`;
     else {
       const size = (formatOptions().find((q) => q.id === selectedQuality()) || {}).size;
       what = `<b>1 ${gif ? "GIF" : outputType() === "audio" ? "audio file" : "video"}</b>${size && !gif ? ` · ~${esc(size)}` : ""}`;

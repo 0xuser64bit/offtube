@@ -206,3 +206,15 @@ test("GIFs created without a source print and selected session jobs have a real 
   ui.run('showJob({id:"other", status:"error", quality:"gif", detail:"Could not make GIF"}, false)');
   assert.equal(ui.elements.get("gifResult").classList.contains("hidden"), true);
 });
+
+test("counts reported by a site are printed as text, never markup", async () => {
+  const ui = desk();
+  ui.info({ type: "playlist", media: "video", count: "<img src=x>" });
+  await ui.choose("plmode", "playlist");
+  ui.run("syncTally()");
+  assert.match(ui.elements.get("tally").innerHTML, /&lt;img src=x&gt; items/);
+  ui.info({ type: "gallery", media: "image", count: "9<i>" });
+  await ui.choose("plmode", "single");
+  ui.run("syncTally()");
+  assert.doesNotMatch(ui.elements.get("tally").innerHTML, /<i>/);
+});

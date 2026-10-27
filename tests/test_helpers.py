@@ -259,6 +259,35 @@ def test_format_seconds():
     assert app.format_seconds(None) == "-"
     assert app.format_seconds(90) == "1:30"
     assert app.format_seconds(3723) == "1:02:03"
+    assert app.format_seconds(12.9) == "0:12"
+    # Flat playlist entries skip yt-dlp's numeric checks.
+    for odd in ("90", float("inf"), float("nan"), -5, True, [90]):
+        assert app.format_seconds(odd) == "-"
+
+
+def test_playlist_count_from_an_extractor_is_coerced(monkeypatch):
+    from types import SimpleNamespace
+
+    class DL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"_type": "playlist", "title": "P", "playlist_count": count,
+                    "entries": [{"id": "a", "duration": "n/a"}, {"id": "b", "duration": 61}]}
+
+    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
+    url = "https://www.youtube.com/playlist?list=PLxxxx"
+    for count, expected in (("<b>9</b>", 2), (True, 2), (-1, 2), (None, 2), (240, 240)):
+        info = app.fetch_info(url, {"cookies_mode": "none"})
+        assert info["count"] == expected
+    assert [e["duration_str"] for e in info["entries"]] == ["-", "1:01"]
 
 
 def test_format_bytes():

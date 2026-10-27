@@ -614,7 +614,9 @@ def parse_time_to_seconds(value: str | None) -> float | None:
 
 
 def format_seconds(sec: float | None) -> str:
-    if sec is None:
+    """'1:02:03' for a duration; '-' for anything that isn't a sane number
+    (flat playlist entries skip yt-dlp's numeric checks)."""
+    if isinstance(sec, bool) or not isinstance(sec, (int, float)) or not math.isfinite(sec) or sec < 0:
         return "-"
     sec = int(sec)
     h, rem = divmod(sec, 3600)
@@ -1177,11 +1179,14 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
                     "thumbnail": entry_thumbnail(e),
                 }
             )
+        # Not among yt-dlp's sanitized numeric fields: an extractor can put
+        # anything here, and clients print it.
+        count = info.get("playlist_count")
         return {
             "type": "playlist",
             "title": info.get("title"),
             "uploader": info.get("uploader"),
-            "count": info.get("playlist_count") or len(entries),
+            "count": count if type(count) is int and count > 0 else len(entries),
             "entries": entries,
             "thumbnail": (entries[0].get("thumbnail") if entries else info.get("thumbnail")),
             "webpage_url": info.get("webpage_url") or url,

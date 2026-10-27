@@ -130,7 +130,7 @@ function syncTally() {
   let what;
   const perVideo = quality() === 'gif' ? ' · one GIF per video' : '';
   if (marks.size) what = `<b>${marks.size} circled</b>${perVideo}`;
-  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>${perVideo}`;
+  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${esc(i.count)}${i.more ? '+' : ''} items</b>${perVideo}`;
   else if (i.type === 'gallery') what = quality() === 'gif' ? '<b>1 GIF per video</b> · images are skipped' : '<b>1 file</b> · kept as posted';
   else {
     const q = (i.qualities || []).find((x) => x.id === quality());
