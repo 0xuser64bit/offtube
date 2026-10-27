@@ -58,6 +58,28 @@ jobs:
       - name: Run the backend tests on Windows
         run: python -m pytest tests -q -rs
 
+  macos:
+    # launchd service mode makes macOS a supported host: its process groups
+    # and paths (/var is /private/var) differ from Linux in small ways.
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - name: Install validation dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install ffmpeg
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the backend tests on macOS
+        run: python -m pytest tests -q -rs
+
   browser:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
