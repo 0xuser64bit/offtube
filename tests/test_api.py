@@ -872,6 +872,27 @@ def test_head_ignores_ranges(kept_bytes):
     assert int(headers["Content-Length"]) == len(data)
 
 
+@pytest.mark.parametrize("raised, quiet", [
+    (BrokenPipeError(errno.EPIPE, "Broken pipe"), True),
+    (ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"), True),
+    (OSError(errno.ENOTCONN, "Socket is not connected"), True),  # macOS, after a reset
+    (OSError(errno.EIO, "Input/output error"), False),  # the disk, not the client
+])
+def test_a_client_that_went_away_ends_the_file_quietly(raised, quiet):
+    class Connection:
+        def sendfile(self, *args):
+            raise raised
+
+    handler = app.Handler.__new__(app.Handler)
+    handler.connection, handler.close_connection = Connection(), False
+    if quiet:
+        handler.send_file_body(None, 0, 10)
+        assert handler.close_connection is True
+    else:
+        with pytest.raises(OSError):
+            handler.send_file_body(None, 0, 10)
+
+
 def test_client_closing_mid_file_is_not_a_server_error(server, capfd):
     big = app.DOWNLOAD_DIR / "big [b].mp4"
     with big.open("wb") as fh:

@@ -2550,6 +2550,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.connection.sendfile(handle, offset, count)
         except (ConnectionError, TimeoutError):
             self.close_connection = True
+        except OSError as exc:
+            # macOS's sendfile reports a client that reset as "not connected".
+            if exc.errno != errno.ENOTCONN:
+                raise
+            self.close_connection = True
 
     # -- routes ------------------------------------------------------------
     def do_HEAD(self):
