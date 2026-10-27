@@ -190,9 +190,19 @@ whitespace checks. Override the interpreter with `PYTHON=/path/to/python`.
 ./.venv/bin/pip install -q -r requirements-dev.txt
 ./.venv/bin/python -m pytest tests -q   # no external network
 node --test tests/extension_gif.test.js tests/test_web_gif.mjs
+node --test tests/browser/desk.test.mjs # Chromium; needs Playwright (+ axe-core)
 ```
 
-GitHub CI runs the full gate on Python 3.10 and 3.12, builds the Docker image,
+`tests/browser/` drives the web desk in Chromium against the real server with
+a stubbed yt-dlp: keeping a video, circling a collection, searching a
+library, what a screen reader is told, and an axe-core WCAG 2.2 AA audit in
+light and dark. It is skipped when Playwright isn't installed (and the audit
+when axe-core isn't); to run it, install `playwright@1.63.0` and
+`axe-core@4.14.0` where Node finds them (or point `NODE_PATH` there) and run
+`npx playwright install chromium`.
+
+GitHub CI runs the full gate on Python 3.10 and 3.12, the browser suite with
+Playwright and axe-core required, builds the Docker image,
 checks the packaged GIF worker, smoke-tests HTTP startup, and checks that the
 container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.

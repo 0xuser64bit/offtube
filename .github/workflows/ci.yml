@@ -39,6 +39,33 @@ jobs:
           PYTHON: python
         run: bash tools/check.sh
 
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Install the server, Chromium and axe-core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          python -m pip install -r requirements.txt
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Exercise the web desk in Chromium
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs
+
   container:
     runs-on: ubuntu-24.04
     timeout-minutes: 20

@@ -93,11 +93,13 @@ bash tools/check.sh
 The gate compiles Python, runs pytest (including real generated-media
 encoding, the Docker COPY-layout regression, and `tests/test_shutdown.py`,
 which runs `main()` in a subprocess and sends it real SIGINT/SIGTERM), checks
-shipped JavaScript syntax, runs the web/extension Node tests, and checks
+shipped JavaScript syntax, runs the web/extension Node tests and the
+Chromium suite in `tests/browser/` (skipped without Playwright), and checks
 patch whitespace. It uses `.venv/bin/python` by default; set `PYTHON` to
 select another interpreter.
 
-GitHub CI runs the gate on Python 3.10 and 3.12, plus a separate Docker build,
+GitHub CI runs the gate on Python 3.10 and 3.12, the browser suite with
+pinned Playwright and axe-core (required there, never skipped), a Docker build,
 packaged-worker check, HTTP startup smoke test, and a check that the
 container reaps an orphaned child and stops on SIGTERM with exit status 0.
 Actions are commit-pinned and the workflow has read-only repository
@@ -122,12 +124,12 @@ performance or browser-accessibility audit:
 3. **Constrain outbound destinations.** Refusing private and link-local
    addresses after DNS resolution, including on redirects, needs hooks into
    both engines' HTTP layers.
-4. **Expand release verification.** Exercise the Chrome popup and side panel
-   in a real browser (Playwright can load the unpacked extension), keyboard
-   and focus order, narrow layouts, real-site failures, Windows (the
-   exclusive port bind and `taskkill` tree stop have only been unit-tested)
-   and arm64 images. Existing Node DOM fixtures are useful regressions, not
-   end-to-end browser or accessibility certification.
+4. **Expand release verification.** The web desk is exercised in Chromium
+   with an axe-core audit; the popup and side panel are not (Playwright can
+   load the unpacked extension), nor are keyboard and focus order, narrow
+   layouts, real-site failures, Windows (the exclusive port bind and
+   `taskkill` tree stop have only been unit-tested) and arm64 images. An
+   automated audit is a regression check, not accessibility certification.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules

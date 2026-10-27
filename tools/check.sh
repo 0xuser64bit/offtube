@@ -22,5 +22,8 @@ for script in web/app.js extension/*.js extension/*/*.js; do
   node --check "$script"
 done
 node --test tests/extension_gif.test.js tests/test_web_gif.mjs
+# The web desk in Chromium; skipped when Playwright (or, for the audit,
+# axe-core) isn't installed. CI installs both and requires them.
+PYTHON="$python" node --test tests/browser/desk.test.mjs
 git diff --check
 git diff --cached --check
