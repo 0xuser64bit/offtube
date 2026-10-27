@@ -150,6 +150,16 @@ permissions on POSIX. To reuse a manually exported file, save it as
 inspection and download gets a separate, site-filtered copy, removed when that
 request finishes; engine cookie updates never overwrite the saved export.
 
+## Who can use it
+
+offtube has no login. Web pages can't drive it or read from it, but every
+program on this computer — under any account — and every installed browser
+extension can, including starting downloads and reading or deleting what you
+kept. Use it on a computer whose users and extensions you trust, and never
+publish its port beyond `127.0.0.1`. Link checks keep the engines on sites
+with a dedicated extractor; they are not a network sandbox. Details:
+`ARCHITECTURE.md` → Trust boundary.
+
 ## Project layout
 
 ```
@@ -162,7 +172,7 @@ offtube/
   cookies/          # per-job isolates (never committed; cleaned on boot + job end)
   deploy/           # launchd plist + systemd user unit (path-templated)
   tools/            # isolated GIF source worker, validation gate, icon generator
-  ARCHITECTURE.md   # system map, invariants and prioritized engineering risks
+  ARCHITECTURE.md   # system map, invariants, trust boundary and next priorities
   Dockerfile, docker-compose.yml
   tools/gen_icons.py
   requirements.txt  # runtime: pinned yt-dlp + gallery-dl
@@ -183,7 +193,8 @@ node --test tests/extension_gif.test.js tests/test_web_gif.mjs
 ```
 
 GitHub CI runs the full gate on Python 3.10 and 3.12, builds the Docker image,
-checks the packaged GIF worker and smoke-tests HTTP startup. See
+checks the packaged GIF worker, smoke-tests HTTP startup, and checks that the
+container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
@@ -192,14 +203,18 @@ traversal blocks, info validation, `/api/source`, download → files →
 delete, bad input, oversized bodies, queued + running cancel (including
 killing a gallery-dl process), origin/CORS, payload stripping, channel
 rejection, temp/dotfile hiding, disposition, jobs limit, disk guard, the
-public-job field whitelist, Host-header guard, `/api/retry`, and
-`/api/jobs/clear`. `tests/test_helpers.py` checks source resolution against
+public-job field whitelist, Host-header guard, `/api/retry`,
+`/api/jobs/clear`, byte ranges, the library's symlink and vanishing-file
+rules, connection limits and slow-client deadlines, and stopping gallery-dl's
+whole process tree. `tests/test_helpers.py` checks source resolution against
 the real extractor tables (no network) — including every site named in the
 web UI's “works with” strip — plus engine order and fallback, per-site
 cookie trimming, failure hints, and filename byte caps. `tests/test_gif.py`
 covers GIF validation, cancellation, isolated temporary sources, cleanup and
 real generated-media encoding (when ffmpeg and ffprobe are on PATH), including
 duration, frame count, dimensions, looping and anamorphic display ratios.
+`tests/test_shutdown.py` stops the server with real SIGINT and SIGTERM and
+checks that it exits promptly, cancels its jobs and removes their cookie copies.
 
 ## API (for scripting)
 
