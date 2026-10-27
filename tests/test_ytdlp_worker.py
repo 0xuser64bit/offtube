@@ -2,7 +2,6 @@
 source isolation and trimming, and stopping its whole process tree."""
 import http.server
 import json
-import os
 from pathlib import Path
 import re
 import shlex
@@ -16,7 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app
-from conftest import process_gone
+from conftest import process_gone, processes_started_by
 
 
 requires_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
@@ -95,7 +94,7 @@ def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monk
     if layout == "container":
         runtime = tmp_path / "runtime"
         runtime.mkdir()
-        for line in (app.BASE_DIR / "Dockerfile").read_text().splitlines():
+        for line in (app.BASE_DIR / "Dockerfile").read_text(encoding="utf-8").splitlines():
             if not line.startswith("COPY "):
                 continue
             source_name, destination_name = shlex.split(line)[1:]
@@ -158,8 +157,9 @@ def test_silent_download_stops_process_tree(source_job, source_server, monkeypat
     else:
         payload, run = {"quality": quality}, app.run_ytdlp
     errors = []
+    low_disk = threading.Event()
     if reason == "disk":
-        monkeypatch.setattr(app, "disk_low_locked", lambda _: requested.is_set())
+        monkeypatch.setattr(app, "disk_low_locked", lambda _: low_disk.is_set())
 
     def download():
         try:
@@ -172,27 +172,27 @@ def test_silent_download_stops_process_tree(source_job, source_server, monkeypat
     assert requested.wait(8), source_job["log"]
     proc = source_job["proc"]
     descendants = []
-    if os.name != "nt":
-        # A direct file is fetched by yt-dlp itself. ffmpeg is in the same
-        # process group only when the protocol needs it, and then it must die too.
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            result = subprocess.run(["ps", "-axo", "pid=,pgid=,comm="], capture_output=True, text=True, check=True)
-            descendants = [int(parts[0]) for line in result.stdout.splitlines()
-                           if len(parts := line.split(maxsplit=2)) == 3 and int(parts[1]) == proc.pid and "ffmpeg" in parts[2]]
-            if descendants:
-                break
-            time.sleep(0.05)
+    if quality == "gif":
+        # A clip is fetched by ffmpeg under the worker, which must die with
+        # it. (yt-dlp fetches a whole file itself.)
+        deadline = time.monotonic() + 15
+        while not descendants:
+            assert time.monotonic() < deadline, "no ffmpeg under the worker"
+            descendants = [pid for pid, name in processes_started_by(proc.pid) if "ffmpeg" in name.lower()]
     start = time.monotonic()
     if reason == "cancel":
         source_job["cancel_requested"] = True
+    else:
+        low_disk.set()
     thread.join(timeout=3)
     assert not thread.is_alive() and time.monotonic() - start < 3
     assert proc.poll() is not None
     assert errors and ("Cancelled" if reason == "cancel" else "disk is almost full") in errors[0]
     assert "proc" not in source_job
-    for pid in descendants:
-        assert process_gone(pid)
+    deadline = time.monotonic() + 5
+    while not all(process_gone(pid) for pid in descendants):
+        assert time.monotonic() < deadline, f"ffmpeg outlived the stopped worker: {descendants}"
+        time.sleep(0.1)
 
 
 @pytest.mark.parametrize("payload", [

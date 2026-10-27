@@ -1302,7 +1302,7 @@ FEATURED = {
 
 def test_featured_sources_in_web_ui_all_resolve():
     import re
-    html = (Path(app.__file__).parent / "web" / "index.html").read_text()
+    html = (Path(app.__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
     strip = re.search(r'class="sources"[^>]*>(.*?)<span>', html).group(1)
     strip = re.sub(r'<span class="visually-hidden">.*?</span>', "", strip)  # "Works with:"
     assert {n.strip() for n in strip.split("·") if n.strip()} == set(FEATURED)

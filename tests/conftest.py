@@ -15,6 +15,34 @@ import app  # noqa: E402
 FAKE_WORKER = [sys.executable, str(Path(__file__).resolve().parent / "fake_ytdlp_worker.py")]
 
 
+def processes_started_by(pid: int) -> list[tuple[int, str]]:
+    """(pid, name) of the running processes that `pid` started: the rest of
+    its process group on POSIX (offtube's children lead their own), every
+    descendant on Windows (where, say, a Chocolatey ffmpeg.exe is a shim
+    that starts the real one)."""
+    if os.name == "nt":
+        listed = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             "Get-CimInstance Win32_Process"
+             " | ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, $_.Name }"],
+            capture_output=True, text=True)
+        rows = [line.split(maxsplit=2) for line in listed.stdout.splitlines()]
+        rows = [(int(row[0]), int(row[1]), row[2]) for row in rows
+                if len(row) == 3 and row[0].isdigit() and row[1].isdigit()]
+        found, parents = [], {pid}
+        while True:
+            children = [(child, name) for child, parent, name in rows
+                        if parent in parents and child not in parents and (child, name) not in found]
+            if not children:
+                return found
+            found += children
+            parents |= {child for child, _ in children}
+    listed = subprocess.run(["ps", "-axo", "pid=,pgid=,comm="], capture_output=True, text=True)
+    rows = [line.split(maxsplit=2) for line in listed.stdout.splitlines()]
+    return [(int(row[0]), row[2]) for row in rows
+            if len(row) == 3 and int(row[1]) == pid and int(row[0]) != pid]
+
+
 def process_gone(pid: int) -> bool:
     """True once `pid` no longer runs. A zombie counts as gone: only its
     parent, not the test, can reap it."""
