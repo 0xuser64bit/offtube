@@ -504,9 +504,22 @@ def test_missing_and_duplicate_host_headers(server):
         assert b" 200 " in connection.recv(4096).split(b"\r\n", 1)[0]
 
 
-def test_server_binds_ipv6_loopback():
+def ipv6_loopback_available() -> bool:
+    """socket.has_ipv6 only says Python was built with IPv6; containers and
+    some CI kernels still refuse AF_INET6 sockets or have no ::1."""
     if not socket.has_ipv6:
-        pytest.skip("IPv6 is unavailable")
+        return False
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+def test_server_binds_ipv6_loopback():
+    if not ipv6_loopback_available():
+        pytest.skip("IPv6 loopback is unavailable")
     with app.LocalServer(("::1", 0), app.Handler) as httpd:
         assert httpd.address_family == socket.AF_INET6
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
