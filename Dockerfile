@@ -19,7 +19,7 @@ WORKDIR /app
 # x86_64 binary into arm64 images and deno died with a Rosetta/ELF error.
 ARG DENO_VERSION=2.9.7
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl unzip \
+    && apt-get install -y --no-install-recommends ffmpeg tini ca-certificates curl unzip \
     && ARCH="$(uname -m)" \
     && curl -fsSL "https://github.com/denoland/deno/releases/download/v${DENO_VERSION}/deno-${ARCH}-unknown-linux-gnu.zip" -o /tmp/deno.zip \
     && unzip /tmp/deno.zip -d /usr/local/bin \
@@ -44,4 +44,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4)"
 
+# tini is PID 1: it forwards docker stop's SIGTERM to offtube (which stops
+# its jobs and exits) and reaps orphaned grandchildren, such as the ffmpeg
+# of a stopped job. Python as PID 1 would leave those as zombies.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["python", "app.py"]

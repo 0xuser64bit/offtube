@@ -57,6 +57,17 @@ jobs:
             --retry 10 --retry-delay 1 --retry-all-errors --retry-max-time 30 \
             --connect-timeout 2 --max-time 5 \
             http://127.0.0.1:18000/api/health
+      - name: Check child reaping and graceful stop
+        run: |
+          # An orphan is reparented to PID 1, which must reap it.
+          docker exec offtube-ci sh -c 'sleep 1 & exit 0'
+          sleep 2
+          zombies=$(docker exec offtube-ci sh -c 'cat /proc/[0-9]*/stat 2>/dev/null; true' \
+            | sed 's/.*) //' | awk '$1 == "Z"' | wc -l)
+          test "$zombies" -eq 0
+          # SIGTERM must stop offtube cleanly, well before the SIGKILL timeout.
+          docker stop --time 10 offtube-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' offtube-ci)" -eq 0
       - name: Container diagnostics and cleanup
         if: always()
         run: |

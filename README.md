@@ -91,7 +91,7 @@ docker compose logs -f
 docker compose down
 ```
 
-- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp + gallery-dl. Healthcheck hits `/api/health`.
+- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp + gallery-dl, with `tini` as PID 1 to pass on `docker stop` and reap stopped jobs' processes. Healthcheck hits `/api/health`.
 - Port is published on loopback only (`127.0.0.1:8000:8000`); inside the
   container `HOST=0.0.0.0` is required (a container has its own loopback).
 - Native `./run.sh` defaults to `HOST=127.0.0.1`; `HOST=0.0.0.0` is docker-only.
