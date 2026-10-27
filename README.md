@@ -215,8 +215,13 @@ integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
-- `GET /api/files` → `{files, disk_free, disk_free_str}` (in-progress `.part`/`.temp` hidden); `GET /files/<name>` downloads one (RFC 5987 filename)
-- `POST /api/files/delete` `{name}` → `{deleted}`
+- `GET /api/files` → `{files, disk_free, disk_free_str}`, newest first (up to 500); `GET /files/<name>` downloads one (RFC 5987 filename)
+- `POST /api/files/delete` `{name}` → `{deleted}` (the exact file name; 404 if it isn't a kept file)
+
+The library is the regular files directly in `downloads/`. Dotfiles,
+in-progress `.part`/`.temp` files, symlinks and special files are never
+listed, served or deleted, so every listed name is exactly what
+`/files/<name>` returns and deleting a name can never reach another file.
 
 Only links with a dedicated yt-dlp or gallery-dl extractor are accepted (400
 otherwise, also for IP/LAN hosts and DRM services). YouTube channel, home,

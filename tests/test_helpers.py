@@ -212,6 +212,18 @@ def test_safe_child_blocks_escape_and_dotfiles(name):
     assert app.safe_child(app.DOWNLOAD_DIR, name) is None
 
 
+@pytest.mark.parametrize("name, ok", [
+    ("Video [abc].mp4", True),
+    ("100%BE sale [x].mp4", True),       # verbatim: no URL decoding
+    ("back\\slash.jpg", os.sep != "\\"),  # a plain character on POSIX
+    ("", False), (".gitkeep", False), (".gif-0123456789ab-x", False),
+    ("a/b.mp4", False), ("..", False), ("nul\x00.mp4", False),
+    ("half.mp4.part", False), (None, False), (["x.mp4"], False),
+])
+def test_library_name(name, ok):
+    assert app.library_name(name) == (name if ok else None)
+
+
 # --- time parsing -----------------------------------------------------------
 @pytest.mark.parametrize("raw, want", [
     ("90", 90.0), ("1:30", 90.0), ("01:30", 90.0), ("1:02:03", 3723.0),

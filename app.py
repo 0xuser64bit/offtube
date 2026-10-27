@@ -35,6 +35,7 @@ import datetime as _dt
 import concurrent.futures
 import functools
 import http.server
+import io
 import ipaddress
 import json
 import mimetypes
@@ -45,6 +46,7 @@ import shutil
 import signal
 import socket
 import socketserver
+import stat
 import subprocess
 import sys
 import tempfile
@@ -449,6 +451,92 @@ def safe_child(base: Path, name: str) -> Path | None:
     if candidate.name.startswith("."):
         return None
     return candidate
+
+
+# The library is downloads/'s regular files: never dotfiles (.gitkeep, the
+# private .gif-* folders), in-progress temps, symlinks or special files.
+# Listing, serving and deleting share this one definition, so a listed name
+# is exactly what /files/ serves and nothing else is reachable.
+LIBRARY_LISTING_LIMIT = 500
+
+
+def library_name(name) -> str | None:
+    """`name` if it can name a kept file: one path component, taken verbatim."""
+    if not isinstance(name, str) or not name or name.startswith(".") or "\x00" in name:
+        return None
+    if any(sep in name for sep in (os.sep, os.altsep) if sep) or is_temp_file(name):
+        return None
+    return name
+
+
+def library_listing(limit: int = LIBRARY_LISTING_LIMIT) -> list[dict]:
+    """Kept files, newest first, from one pass with one lstat per entry. A
+    file that vanishes mid-scan (deleted, or renamed by an engine) is skipped."""
+    found: list[tuple[str, os.stat_result]] = []
+    with os.scandir(DOWNLOAD_DIR) as entries:
+        for entry in entries:
+            if library_name(entry.name) is None:
+                continue
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                found.append((entry.name, info))
+    found.sort(key=lambda item: (-item[1].st_mtime, item[0]))
+    return [{
+        "name": name,
+        "size": info.st_size,
+        "size_str": format_bytes(info.st_size) or "?",
+        "modified": _dt.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds"),
+        "url": f"/files/{urllib.parse.quote(name)}",
+        "kind": file_kind(name),
+    } for name, info in found[:limit]]
+
+
+def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
+    """A kept file opened for reading plus its fstat, or None. The descriptor
+    is checked rather than the path: open refuses a symlink (O_NOFOLLOW) and
+    never blocks on a FIFO (O_NONBLOCK), and fstat refuses anything but a
+    regular file, so the bytes and length served belong to one file."""
+    name = library_name(name)
+    if name is None:
+        return None
+    path = DOWNLOAD_DIR / name
+    if not hasattr(os, "O_NOFOLLOW") and path.is_symlink():
+        return None
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_BINARY", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    handle = os.fdopen(fd, "rb")
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode):
+            return handle, info
+    except OSError:
+        pass
+    handle.close()
+    return None
+
+
+def delete_library_file(name) -> str | None:
+    """Unlink a kept file and return its name, or None if there's no such
+    file. The entry itself is checked (lstat), so deleting a symlink can
+    never resolve into deleting the file it points at."""
+    name = library_name(name)
+    if name is None:
+        return None
+    path = DOWNLOAD_DIR / name
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+    except FileNotFoundError:
+        return None
+    path.unlink()
+    return name
 
 
 def clean_text(value, limit: int = 2000) -> str:
@@ -2165,34 +2253,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not getattr(self, "_omit_body", False):
             self.wfile.write(data)
 
-    def serve_download_file(self, name: str):
-        safe = Path(urllib.parse.unquote(name)).name
-        if not safe or safe == ".gitkeep":
+    def serve_download_file(self, raw_name: str):
+        name = urllib.parse.unquote(raw_name)
+        opened = open_library_file(name)
+        if opened is None:
             self.send_error(404)
             return
-        path = safe_child(DOWNLOAD_DIR, safe)
-        if path is None or not path.is_file():
-            self.send_error(404)
-            return
-        ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
-        fallback = re.sub(r'["\r\n]', "_", safe)
-        fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
-        encoded = urllib.parse.quote(safe, safe="")
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(path.stat().st_size))
-        self.send_header(
-            "Content-Disposition",
-            f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if getattr(self, "_omit_body", False):
-            return
-        with open(path, "rb") as fh:
-            shutil.copyfileobj(fh, self.wfile)
+        handle, info = opened
+        with handle:
+            ctype = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
+            fallback = re.sub(r'["\r\n]', "_", name)
+            fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
+            encoded = urllib.parse.quote(name, safe="")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(info.st_size))
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not getattr(self, "_omit_body", False):
+                shutil.copyfileobj(handle, self.wfile)
 
     # -- routes ------------------------------------------------------------
     def do_HEAD(self):
@@ -2258,26 +2343,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "Unknown job id."}, 404)
             return self.send_json(snapshot)
         if route == "/api/files":
-            files = []
-            listing = sorted(
-                # Dotfiles (.DS_Store, ...) are never served, so never listed.
-                (p for p in DOWNLOAD_DIR.iterdir() if p.is_file() and not is_temp_file(p.name)
-                 and not p.name.startswith(".")),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for p in listing[:500]:
-                st = p.stat()
-                files.append(
-                    {
-                        "name": p.name,
-                        "size": st.st_size,
-                        "size_str": format_bytes(st.st_size) or "?",
-                        "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-                        "url": f"/files/{urllib.parse.quote(p.name)}",
-                        "kind": file_kind(p.name),
-                    }
-                )
+            try:
+                files = library_listing()
+            except OSError:
+                return self.send_json({"ok": False, "error": "Can't read the downloads folder."}, 500)
             try:
                 free = shutil.disk_usage(DOWNLOAD_DIR).free
             except OSError:
@@ -2372,18 +2441,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "cleared": len(terminal)})
 
         if route == "/api/files/delete":
-            name = str(body.get("name") or "")
-            safe = Path(urllib.parse.unquote(name)).name
-            if not safe:
+            # A JSON body carries the name verbatim; it is not URL-decoded.
+            name = body.get("name")
+            if not isinstance(name, str) or not name:
                 return self.send_json({"ok": False, "error": "Missing file name."}, 400)
-            path = safe_child(DOWNLOAD_DIR, safe)
-            if path is None or not path.is_file():
-                return self.send_json({"ok": False, "error": "File not found."}, 404)
             try:
-                path.unlink()
+                deleted = delete_library_file(name)
             except OSError as exc:
-                return self.send_json({"ok": False, "error": f"Could not delete: {exc}"}, 500)
-            return self.send_json({"ok": True, "deleted": safe})
+                # strerror only: the full message would carry the server path.
+                reason = exc.strerror or "the system refused"
+                return self.send_json({"ok": False, "error": f"Could not delete: {reason}."}, 500)
+            if deleted is None:
+                return self.send_json({"ok": False, "error": "File not found."}, 404)
+            return self.send_json({"ok": True, "deleted": deleted})
 
         if route.startswith("/api/"):
             return self.send_json({"ok": False, "error": "Not found."}, 404)

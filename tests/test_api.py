@@ -6,6 +6,7 @@ simulates a download by firing progress hooks and writing one output file.
 
 import json
 import http.client
+import os
 import socket
 import sys
 import threading
@@ -687,3 +688,103 @@ def test_fonts_are_served_and_traversal_blocked(server):
         raise AssertionError("traversal should 404")
     except urllib.error.HTTPError as exc:
         assert exc.code == 404
+
+
+# --- library snapshots: what is listed is exactly what is served -----------------
+def _http_status(base, path, method="GET"):
+    import urllib.error
+    req = urllib.request.Request(base + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.status, res.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, b""
+
+
+def test_listing_survives_files_vanishing_mid_scan(server, monkeypatch):
+    (app.DOWNLOAD_DIR / "stays [a].mp4").write_bytes(b"a")
+    (app.DOWNLOAD_DIR / "gone [b].mp4").write_bytes(b"b")
+    real_scandir = os.scandir
+
+    class Snapshot:
+        """scandir that loses a file after listing it, as when a concurrent
+        delete or an engine rename lands between the scan and the stat."""
+        def __init__(self, path):
+            with real_scandir(path) as entries:
+                self.entries = list(entries)
+            (app.DOWNLOAD_DIR / "gone [b].mp4").unlink()
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(app.os, "scandir", Snapshot)
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200
+    assert [f["name"] for f in listing["files"]] == ["stays [a].mp4"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlinks_are_never_listed_served_or_followed_on_delete(server, tmp_path):
+    inside = app.DOWNLOAD_DIR / "inside [a].mp4"
+    inside.write_bytes(b"kept")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"private")
+    (app.DOWNLOAD_DIR / "alias [a].mp4").symlink_to(inside)
+    (app.DOWNLOAD_DIR / "escape [b].mp4").symlink_to(outside)
+
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert [f["name"] for f in listing["files"]] == ["inside [a].mp4"]
+    for name in ("alias [a].mp4", "escape [b].mp4"):
+        assert _http_status(server, "/files/" + urllib.parse.quote(name))[0] == 404
+        status, _, _ = api(server, "POST", "/api/files/delete", {"name": name})
+        assert status == 404
+    # Deleting the alias must never delete the file it points at.
+    assert inside.read_bytes() == b"kept" and outside.read_bytes() == b"private"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
+def test_special_files_are_refused_without_blocking(server):
+    os.mkfifo(app.DOWNLOAD_DIR / "pipe [x].mp4")
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200 and listing["files"] == []
+    started = time.monotonic()
+    assert _http_status(server, "/files/" + urllib.parse.quote("pipe [x].mp4"))[0] == 404
+    assert time.monotonic() - started < 3
+
+
+def test_names_are_one_component_and_taken_verbatim(server):
+    (app.DOWNLOAD_DIR / "x.mp4").write_bytes(b"x")
+    # An encoded separator is not a way to reach a differently named file.
+    assert _http_status(server, "/files/sub%2Fx.mp4")[0] == 404
+    assert _http_status(server, "/files/x.mp4")[0] == 200
+    # Delete bodies are JSON, not URLs: a literal %XX in a title is kept.
+    literal = app.DOWNLOAD_DIR / "Sale 100%BE [s].mp4"
+    literal.write_bytes(b"s")
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": literal.name})
+    assert status == 200 and body["deleted"] == literal.name
+    assert not literal.exists()
+
+
+def test_partial_downloads_are_neither_served_nor_deleted(server):
+    part = app.DOWNLOAD_DIR / "Video [v].mp4.part"
+    part.write_bytes(b"half")
+    assert _http_status(server, "/files/" + urllib.parse.quote(part.name))[0] == 404
+    status, _, _ = api(server, "POST", "/api/files/delete", {"name": part.name})
+    assert status == 404 and part.exists()
+
+
+def test_delete_failure_names_the_reason_not_the_path(server, monkeypatch):
+    (app.DOWNLOAD_DIR / "locked [l].mp4").write_bytes(b"l")
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": "locked [l].mp4"})
+    assert status == 500
+    assert body["error"] == "Could not delete: Permission denied."
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": ["locked [l].mp4"]})
+    assert status == 400
