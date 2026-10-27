@@ -82,7 +82,7 @@ def server(tmp_path, monkeypatch):
     app.futures.clear()
     httpd = app.LocalServer(("127.0.0.1", 0), app.Handler)
     port = httpd.server_address[1]
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{port}"
     httpd.shutdown()
@@ -523,7 +523,7 @@ def test_server_binds_ipv6_loopback():
         pytest.skip("IPv6 loopback is unavailable")
     with app.LocalServer(("::1", 0), app.Handler) as httpd:
         assert httpd.address_family == socket.AF_INET6
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         try:
             with closing(http.client.HTTPConnection("::1", httpd.server_address[1], timeout=5)) as connection:
