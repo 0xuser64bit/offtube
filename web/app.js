@@ -870,6 +870,7 @@ function keptThumb(f) {
 
 const FILES_PAGE = 60;
 let filesRequest = 0; // the latest library request; older answers are dropped
+let filesFilter = null;
 let searchTimer = null;
 
 function renderFiles() {
@@ -899,14 +900,19 @@ function renderFiles() {
 // rows as are showing, `more` appends the next page, and `reset` starts over
 // for a new search or kind.
 async function loadFiles({ more = false, reset = false } = {}) {
+  const q = $("fileSearch").value.trim();
+  const kind = checked("kind") || "all";
+  const filter = JSON.stringify([q, kind]);
+  if (more && filter !== filesFilter) {
+    more = false;
+    reset = true;
+  }
   const my = ++filesRequest;
   const shown = state.files.length;
   const params = new URLSearchParams({
     offset: String(more ? shown : 0),
     limit: String(more || reset ? FILES_PAGE : Math.min(500, Math.max(FILES_PAGE, shown))),
   });
-  const q = $("fileSearch").value.trim();
-  const kind = checked("kind") || "all";
   if (q) params.set("q", q);
   if (kind !== "all") params.set("kind", kind);
   try {
@@ -929,12 +935,17 @@ async function loadFiles({ more = false, reset = false } = {}) {
     } else {
       state.files = page;
     }
+    filesFilter = filter;
     state.total = data.total ?? state.files.length;
     state.matched = data.matched ?? state.files.length;
     state.diskFree = data.disk_free_str || "";
     renderFiles();
     syncTally();
-  } catch { /* server down */ }
+  } catch (err) {
+    if (my === filesRequest && (more || reset)) {
+      setDeck(`Couldn’t load files: ${err.message}. Try again.`, "error");
+    }
+  }
 }
 
 $("refreshFiles").addEventListener("click", () => loadFiles());
@@ -944,7 +955,16 @@ $("fileSearch").addEventListener("input", () => {
 });
 $$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => loadFiles({ reset: true })));
 $("files").addEventListener("click", async (e) => {
-  if (e.target.closest("#moreFiles")) { e.target.disabled = true; loadFiles({ more: true }); return; }
+  const moreButton = e.target.closest("#moreFiles");
+  if (moreButton) {
+    moreButton.disabled = true;
+    try {
+      await loadFiles({ more: true });
+    } finally {
+      moreButton.disabled = false;
+    }
+    return;
+  }
   const btn = e.target.closest("[data-del]");
   if (!btn) return;
   const name = btn.dataset.del;

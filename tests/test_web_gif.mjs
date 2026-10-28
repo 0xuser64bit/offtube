@@ -326,6 +326,60 @@ test("a search supersedes an unfinished multi-page library refresh", async () =>
   assert.equal(ui.elements.get("filesEmpty").textContent, "Nothing matches.");
 });
 
+test("paging during a filter change never mixes old rows or skips filtered rows", async () => {
+  const ui = desk();
+  const oldFile = { name: "old.mp4", kind: "video", url: "/files/old.mp4" };
+  const newFile = { name: "new.gif", kind: "image", url: "/files/new.gif" };
+  const offsets = [];
+  let finishReset;
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    if (!params.get("kind")) {
+      return { ok: true, json: async () => ({ files: [oldFile], total: 2, matched: 2 }) };
+    }
+    const offset = Number(params.get("offset"));
+    offsets.push(offset);
+    const response = { ok: true, json: async () => ({
+      files: offset ? [] : [newFile], total: 2, matched: 1,
+    }) };
+    if (offsets.length === 1) {
+      return new Promise((resolve) => { finishReset = () => resolve(response); });
+    }
+    return response;
+  };
+  await ui.run("loadFiles()");
+  const reset = ui.choose("kind", "gif");
+  await ui.run("loadFiles({ more: true })");
+  finishReset();
+  await reset;
+  assert.deepEqual(offsets, [0, 0]);
+  assert.equal(ui.run("JSON.stringify(state.files.map((file) => file.name))"), '["new.gif"]');
+});
+
+test("a failed library page can be retried from its Show more button", async () => {
+  const ui = desk();
+  const button = { disabled: false, closest: (selector) => selector === "#moreFiles" ? button : null };
+  ui.context.fetch = async () => ({ ok: true, json: async () => ({
+    files: [{ name: "first.mp4", kind: "video", url: "/files/first.mp4" }], total: 2, matched: 2,
+  }) });
+  await ui.run("loadFiles()");
+  ui.context.fetch = async () => { throw new Error("Connection lost"); };
+  await ui.elements.get("files").dispatch("click", {
+    target: button,
+  });
+  assert.equal(button.disabled, false);
+  assert.match(ui.elements.get("jobStatus").textContent, /Couldn.t load files/);
+  ui.context.fetch = async (url) => {
+    assert.equal(new URLSearchParams(url.split("?")[1]).get("offset"), "1");
+    return { ok: true, json: async () => ({
+      files: [{ name: "second.mp4", kind: "video", url: "/files/second.mp4" }], total: 2, matched: 2,
+    }) };
+  };
+  await ui.elements.get("files").dispatch("click", { target: button });
+  assert.equal(button.disabled, false);
+  assert.equal(ui.run("state.files.length"), 2);
+});
+
 test("collection ranges are only editable when they apply", async () => {
   const ui = desk();
   ui.info({ type: "video", media: "video", part_of_playlist: true });
