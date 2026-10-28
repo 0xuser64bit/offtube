@@ -275,11 +275,14 @@ figure { margin: 0; }
 
 /* blank sheet */
 .is-blank .rebate { overflow: hidden; }
-.blank-frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* The call lies over the frames in one grid cell, which grows to fit it: it
+   never covers the edge rows, however large or widely spaced the text. */
+.blank-sheet { display: grid; }
+.blank-sheet > * { grid-area: 1 / 1; }
+.blank-frames { display: grid; grid-template-columns: repeat(3, 1fr); align-content: start; gap: 12px; }
 .blank-frames span { display: flex; align-items: flex-end; aspect-ratio: 3 / 2; padding: 8px 10px; background: var(--rebate-2); color: var(--edge-2); }
 .blank-call {
-  position: absolute;
-  inset: 0;
+  position: relative; /* its scrim over the frame numbers, as a layer */
   display: grid;
   place-content: center;
   gap: 8px;
