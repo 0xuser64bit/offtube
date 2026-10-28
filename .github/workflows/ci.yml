@@ -138,10 +138,10 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
-      - name: Install the server, Chromium and axe-core
+      - name: Install the server, Chromium, axe-core and Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg xvfb libxtst6
           python -m pip install -r requirements.txt
           npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
           "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
@@ -150,7 +150,7 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/browser/node_modules
           OFFTUBE_BROWSER_TESTS: required
           PYTHON: python
-        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs tests/browser/background.test.mjs
 
   container:
     # Built natively on both architectures the image ships for: the Deno

@@ -1,8 +1,8 @@
-// Shared by the browser suites: the stub server, optional dependencies and
-// the axe-core audit. Playwright and axe-core are optional unless
-// OFFTUBE_BROWSER_TESTS=required (as in CI), so a missing browser can't
-// pass silently there.
-import { spawn } from "node:child_process";
+// Shared by the browser suites: the stub server, optional dependencies, the
+// axe-core audit and a private X server. Playwright, axe-core and Xvfb are
+// optional unless OFFTUBE_BROWSER_TESTS=required (as in CI), so a missing
+// one can't pass silently there.
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import net from "node:net";
@@ -25,7 +25,11 @@ export const playwright = optional(() => require("playwright"));
 const axePath = optional(() => require.resolve("axe-core/axe.min.js"));
 export const skip = playwright ? false : "Playwright is not installed";
 export const skipAudit = skip || (!axePath && "axe-core is not installed");
-const python = process.env.PYTHON
+// Real input (xinput.py) needs a private X server, so it never types into
+// a developer's own screen: Xvfb, which only Linux has.
+const xvfb = process.platform === "linux" && !spawnSync("Xvfb", ["-help"]).error;
+export const skipRealInput = skip || (!xvfb && !required && "Xvfb is not installed");
+export const python = process.env.PYTHON
   || (existsSync(path.join(root, ".venv/bin/python")) ? path.join(root, ".venv/bin/python") : "python3");
 
 export function freePort() {
@@ -34,6 +38,24 @@ export function freePort() {
       const { port } = probe.address();
       probe.close(() => resolve(port));
     });
+  });
+}
+
+// A private X server for a headed browser and xinput.py, with the display
+// number Xvfb picked once it is ready for clients.
+export function startXServer() {
+  return new Promise((resolve, reject) => {
+    const server = spawn("Xvfb", ["-displayfd", "3", "-screen", "0", "1280x1024x24", "-nolisten", "tcp"],
+      { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+    let number = "";
+    let errors = "";
+    server.stderr.on("data", (chunk) => { errors += chunk; });
+    server.stdio[3].on("data", (chunk) => {
+      number += chunk;
+      if (number.endsWith("\n")) resolve({ display: `:${number.trim()}`, stop: () => server.kill() });
+    });
+    server.once("error", reject);
+    server.once("exit", (code) => reject(new Error(`Xvfb exited with ${code}:\n${errors}`)));
   });
 }
 

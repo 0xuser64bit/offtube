@@ -98,9 +98,10 @@ encoding, the Docker COPY-layout regression, and `tests/test_shutdown.py`,
 which runs `main()` in a subprocess and sends it real SIGINT/SIGTERM), checks
 shipped JavaScript syntax, runs the web/extension Node tests and the
 Chromium suites in `tests/browser/` for the web desk and the unpacked
-extension (skipped without Playwright), and checks
-patch whitespace. It uses `.venv/bin/python` by default; set `PYTHON` to
-select another interpreter.
+extension (skipped without Playwright; the one that right-clicks through a
+private Xvfb display also without Xvfb), and checks patch whitespace. It
+uses `.venv/bin/python` by default; set `PYTHON` to select another
+interpreter.
 
 GitHub CI runs the gate on Python 3.10 and 3.12, pytest on Windows (process
 trees stopped with `taskkill`, the exclusive port bind, Windows file and
@@ -128,9 +129,10 @@ performance or browser-accessibility audit:
    addresses after DNS resolution, including on redirects, needs hooks into
    both engines' HTTP layers.
 3. **Expand release verification.** The web desk, popup and side panel are
-   exercised in Chromium with axe-core audits. The extension runs there as
-   pages in tabs, so the toolbar popup's own window, opening the side panel,
-   the context menu and the background worker are not; nor are real-site
+   exercised in Chromium with axe-core audits. The popup and side panel run
+   there as pages in tabs, and the right-click menu gets real input on a
+   private X display; the toolbar popup's own window, opening the side
+   panel and the keyboard shortcut are not exercised, nor are real-site
    failures, the web and extension tests on Windows and macOS, and a
    running systemd service (its unit is only verified).
    All three surfaces are checked for keyboard-only use, and the desk for
