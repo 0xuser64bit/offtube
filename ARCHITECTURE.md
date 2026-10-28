@@ -139,10 +139,10 @@ performance or browser-accessibility audit:
    panel; the toolbar popup's own window is not exercised, nor are
    real-site failures, the web and extension tests on Windows and macOS,
    and a running systemd service (its unit is only verified).
-   All three surfaces are checked for keyboard-only use, and the desk for
-   reflow at 320 CSS px; text spacing and screen readers themselves are
-   not. An automated audit is a regression check, not accessibility
-   certification.
+   All three surfaces are checked for keyboard-only use and WCAG text
+   spacing, and the desk for reflow at 320 CSS px; screen readers
+   themselves are not. An automated audit is a regression check, not
+   accessibility certification.
 
 Keep fixes incremental. Do not split the backend into a framework, introduce
 a datastore or redesign the UI merely to reduce file length. Extract modules

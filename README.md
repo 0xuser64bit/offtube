@@ -201,7 +201,9 @@ and reflow at 320 CSS px without sideways scrolling.
 In the extension, loaded unpacked: the popup with the server off and keeping
 a pasted link, a collection handed from the popup to the side panel, the
 side panel's library, and both surfaces used with the keyboard alone. Both
-get an axe-core WCAG 2.2 AA audit in light and dark. Chromium's own context
+get an axe-core WCAG 2.2 AA audit in light and dark, and WCAG text spacing
+(1.4.12; on the desk at 320 px too) must not cut off or push out any text
+that fitted. Chromium's own context
 menu and shortcuts ignore Playwright's input, so `background.test.mjs` runs
 a headed Chromium on a private Xvfb display and clicks and types through
 XTest (`xinput.py`): "Keep link with offtube" and "Keep this page with

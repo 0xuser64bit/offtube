@@ -360,7 +360,7 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
 }
 
-.panel .keep-col { display: grid; gap: 14px; margin-top: 16px; }
+.panel .keep-col { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin-top: 16px; }
 .panel .keep-col .tally { margin: 0; }
 .panel .keep-col .deck { margin-top: 0; }
 .panel #tabLine { margin: 6px 0 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

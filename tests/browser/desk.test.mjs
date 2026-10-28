@@ -3,7 +3,7 @@
 // (see harness.mjs for when they may be missing).
 import assert from "node:assert/strict";
 import { after, before, test } from "node:test";
-import { axeViolations, playwright, skip, skipAudit, startServer, tabTo, watchProblems } from "./harness.mjs";
+import { axeViolations, playwright, skip, skipAudit, startServer, tabTo, textSpacingLosses, watchProblems } from "./harness.mjs";
 
 let browser;
 before(async () => { if (playwright) browser = await playwright.chromium.launch(); });
@@ -157,6 +157,41 @@ test("reflows at 320 CSS px without scrolling sideways (WCAG 1.4.10)", { skip },
     await close();
     await server.stop();
   }
+});
+
+test("keeps every word in view with WCAG text spacing, at 1280 and 320 CSS px (1.4.12)", { skip }, async () => {
+  const server = await startServer(["Song [b].mp3", "pin_1.jpg", "Loop [c].gif",
+    "A file name long enough to need wrapping in a narrow column of the sheet [abcdefghijk].mp4"]);
+  const found = [];
+  try {
+    for (const width of [1280, 320]) {
+      const { page, problems, close } = await openDesk(server, { viewport: { width, height: 900 } });
+      const check = async (state) => {
+        for (const loss of await textSpacingLosses(page)) found.push(`${width} px/${state}: ${loss}`);
+      };
+      try {
+        await page.waitForSelector(".kept-cell");
+        await check("blank");
+        await preview(page, "https://www.youtube.com/watch?v=abc123abc12");
+        await page.waitForSelector("#printFig .print-title");
+        await page.evaluate(() => { for (const note of document.querySelectorAll("details.note")) note.open = true; });
+        await check("print with every note open");
+        await keepAndWait(page);
+        await page.evaluate(() => { document.getElementById("logBox").open = true; });
+        await check("kept, log open");
+        await preview(page, "https://www.youtube.com/playlist?list=PLabc");
+        await page.waitForSelector("#printFig.sheet .cell");
+        await page.click('.cell[data-i="1"]');
+        await check("contact sheet");
+        assert.deepEqual(problems, []);
+      } finally {
+        await close();
+      }
+    }
+  } finally {
+    await server.stop();
+  }
+  assert.deepEqual(found, []);
 });
 
 test("meets WCAG 2.2 AA in light and dark (axe-core)", { skip: skipAudit }, async () => {

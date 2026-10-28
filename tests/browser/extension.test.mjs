@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { axeViolations, freePort, playwright, root, skip, skipAudit, startServer, tabTo, watchProblems } from "./harness.mjs";
+import { axeViolations, freePort, playwright, root, skip, skipAudit, startServer, tabTo, textSpacingLosses, watchProblems } from "./harness.mjs";
 
 let context;
 let worker;
@@ -205,6 +205,43 @@ test("the popup and the side panel work from the keyboard alone, with focus alwa
     await page.close();
     await server.stop();
   }
+});
+
+test("popup and side panel keep every word in view with WCAG text spacing (1.4.12)", { skip }, async () => {
+  const server = await startServer(["Song [b].mp3", "pin_1.jpg", "Loop [c].gif"]);
+  await useServer(server.base);
+  const found = [];
+  const check = async (page, state) => {
+    for (const loss of await textSpacingLosses(page)) found.push(`${state}: ${loss}`);
+  };
+  let { page, problems } = await openSurface("popup");
+  try {
+    await page.waitForSelector("#linkForm:not(.hidden)");
+    await check(page, "popup, nothing on this tab");
+    await paste(page, "https://www.youtube.com/watch?v=abc123abc12");
+    await page.waitForSelector("#stage .print-title");
+    await check(page, "popup, print");
+    assert.deepEqual(problems, []);
+    await page.close();
+
+    ({ page, problems } = await openSurface("sidepanel"));
+    await page.waitForSelector(".kept-cell");
+    await check(page, "side panel, library");
+    await paste(page, "https://www.youtube.com/watch?v=abc123abc12");
+    await page.waitForSelector("#stage .print-title");
+    await page.evaluate(() => { for (const note of document.querySelectorAll("details")) note.open = true; });
+    await check(page, "side panel, print with every note open");
+    await page.click("#changeLink");
+    await paste(page, "https://www.youtube.com/playlist?list=PLabc");
+    await page.waitForSelector("#stage .cell");
+    await page.click('.cell[data-i="1"]');
+    await check(page, "side panel, contact sheet");
+    assert.deepEqual(problems, []);
+  } finally {
+    await page.close();
+    await server.stop();
+  }
+  assert.deepEqual(found, []);
 });
 
 test("popup and side panel meet WCAG 2.2 AA in light and dark (axe-core)", { skip: skipAudit }, async () => {

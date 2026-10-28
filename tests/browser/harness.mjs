@@ -116,6 +116,45 @@ export async function axeViolations(page) {
   })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`));
 }
 
+// What WCAG 1.4.12's text spacing costs the page as it stands: the elements
+// whose content fitted their box and no longer does (cut off, or spilling
+// over what follows), and any sideways scrolling it causes. Overflow that
+// was there already, as a pencil circle's, is the design, and so is text
+// that ends in an ellipsis: file names and links, whose whole text is in a
+// title or a field. The spacing goes in as a constructed stylesheet, which
+// the pages' CSP allows, as it does a reader's own extension.
+export async function textSpacingLosses(page) {
+  return page.evaluate(() => {
+    const overflowing = () => {
+      const found = new Set();
+      for (const el of document.querySelectorAll("body *")) {
+        if (el.closest("svg") || el.matches("input, select, textarea, .visually-hidden")) continue;
+        const style = getComputedStyle(el);
+        if (style.display === "inline" || style.visibility === "hidden" || el.clientWidth <= 1
+          || !el.textContent.trim()) continue;
+        if (style.textOverflow === "ellipsis" || style.getPropertyValue("-webkit-line-clamp") !== "none") continue;
+        if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) found.add(el);
+      }
+      return found;
+    };
+    const describe = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${[...el.classList].map((c) => `.${c}`).join("")}`
+      + ` "${el.textContent.trim().replace(/\s+/g, " ").slice(0, 40)}"`;
+    const before = overflowing();
+    const spacing = new CSSStyleSheet();
+    spacing.replaceSync(`* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }
+      p { margin-bottom: 2em !important; }`);
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, spacing];
+    try {
+      const losses = [...overflowing()].filter((el) => !before.has(el)).map(describe);
+      const wide = document.scrollingElement.scrollWidth;
+      if (wide > innerWidth) losses.push(`the page scrolls sideways (${wide} px in ${innerWidth})`);
+      return losses;
+    } finally {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((sheet) => sheet !== spacing);
+    }
+  });
+}
+
 // Press Tab (Shift+Tab with `back`) until `selector` has focus, requiring
 // a visible focus ring at every stop on the way: on the control itself,
 // its radio's label text or label, a print's frame, or the box drawn
