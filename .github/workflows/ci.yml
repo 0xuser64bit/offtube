@@ -76,7 +76,8 @@ jobs:
 
   windows:
     # Process groups, taskkill tree stops and the exclusive port bind only
-    # exist here; POSIX-only tests skip themselves.
+    # exist here; POSIX-only tests skip themselves. The browser suites run
+    # against the server as it behaves on Windows.
     runs-on: windows-2025
     timeout-minutes: 20
     steps:
@@ -86,12 +87,27 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
       - name: Install validation dependencies
         run: |
           choco install ffmpeg --no-progress --yes
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the backend tests on Windows
         run: python -m pytest tests -q -rs
+      - name: Install Chromium and axe-core
+        shell: bash
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install chromium
+      - name: Exercise the web desk and the extension in Chromium
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
       - name: Start offtube with run.bat
         run: |
           # run.bat builds its venv on first run, then starts offtube.
@@ -125,6 +141,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
       - name: Install validation dependencies
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
@@ -134,6 +153,18 @@ jobs:
           python -m pip install -r requirements.txt -r requirements-dev.txt
       - name: Run the backend tests on macOS
         run: python -m pytest tests -q -rs
+      - name: Install Chromium and axe-core
+        shell: bash
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install chromium
+      - name: Exercise the web desk and the extension in Chromium
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
       - name: Run offtube as the README's launchd agent

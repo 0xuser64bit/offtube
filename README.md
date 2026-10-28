@@ -218,8 +218,9 @@ so on Linux only); to run them, install `playwright@1.63.0` and
 `npx playwright install chromium`. Other axe-core versions check different
 rules, so use the pinned one.
 
-GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests on
-Windows and macOS, the browser suite with Playwright and axe-core required,
+GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests and
+the desk and extension browser suites on Windows and macOS too (Playwright
+and axe-core required everywhere; the real-input suite on Linux),
 starts offtube from a fresh checkout with `run.sh` (Linux, macOS; it must stop
 cleanly on SIGTERM) and `run.bat` (Windows), installs both background
 services above as shown there and runs them under `launchctl` and a user

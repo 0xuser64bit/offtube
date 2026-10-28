@@ -109,7 +109,8 @@ interpreter.
 
 GitHub CI runs the gate on Python 3.10 and 3.12, pytest on Windows (process
 trees stopped with `taskkill`, the exclusive port bind, Windows file and
-encoding behavior) and macOS, the launchers from a fresh checkout
+encoding behavior) and macOS, with the desk and extension browser suites on
+both, the launchers from a fresh checkout
 (`tools/launcher_smoke.sh` for `run.sh`; `run.bat` on Windows), the README's
 launchd agent under `launchctl` and its systemd unit under a user manager,
 from a fresh clone (both must find ffmpeg and a JS runtime; systemd must see
@@ -137,8 +138,8 @@ performance or browser-accessibility audit:
    exercised in Chromium with axe-core audits. The popup and side panel run
    there as pages in tabs, and the right-click menu and the keyboard
    shortcut get real input on a private X display, opening the real side
-   panel; the toolbar popup's own window is not exercised, nor are
-   real-site failures and the web and extension tests on Windows and macOS.
+   panel (on Linux; the other suites run on Windows and macOS too). The
+   toolbar popup's own window is not exercised, nor are real-site failures.
    All three surfaces are checked for keyboard-only use and WCAG text
    spacing, and the desk for reflow at 320 CSS px; screen readers
    themselves are not. An automated audit is a regression check, not
