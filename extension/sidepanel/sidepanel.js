@@ -18,6 +18,7 @@ let printJobId = null;
 let resultJobId = null;
 let pollTimer = null;
 let inspectToken = 0;
+let serverUp = true; // what the health line last said
 
 const url = () => $('url').value.trim();
 const access = () => checked('access') || 'none';
@@ -405,7 +406,19 @@ async function refreshQueue() {
     $('queueCount').textContent = all.length ? `${active ? `${active} developing · ` : ''}${all.length} print${all.length === 1 ? '' : 's'}` : '';
     $('queueEmpty').classList.toggle('hidden', all.length > 0);
     $('clearQueue').classList.toggle('hidden', !all.some((j) => !OFFTUBE.ACTIVE.includes(j.status)));
-  } catch { /* health shows the server is down */ }
+    serverAnswered(true);
+  } catch {
+    serverAnswered(false);
+  }
+}
+
+// The panel stays open for hours: the queue refresh tells the health line
+// when offtube stops or starts, and a server that comes back gets the tab
+// read again, as the "Server off" print promises.
+async function serverAnswered(up) {
+  if (up === serverUp) return;
+  serverUp = await OFFTUBE.showHealth(server);
+  if (serverUp) followTab();
 }
 
 $('queue').addEventListener('click', async (e) => {
@@ -481,7 +494,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   OFFTUBE.wireLoupe();
   syncNotes();
 
-  await OFFTUBE.showHealth(server);
+  serverUp = await OFFTUBE.showHealth(server);
   const session = await chrome.storage.session.get(['pendingUrl', 'pendingOptions']);
   if (session.pendingUrl) {
     setLink(session.pendingUrl);
@@ -546,7 +559,7 @@ $('server').addEventListener('change', async () => {
     $('server').value = v;
     server = v;
     await chrome.storage.local.set({ serverUrl: v });
-    await OFFTUBE.showHealth(v);
+    serverUp = await OFFTUBE.showHealth(v);
     refreshQueue();
     refreshFiles();
   } catch (err) {

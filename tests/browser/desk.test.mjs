@@ -88,6 +88,23 @@ test("a keep cut short by a restart says so instead of retrying forever", { skip
   }
 });
 
+test("the health line follows offtube stopping and starting again", { skip }, async () => {
+  const server = await startServer();
+  const { page, problems, close } = await openDesk(server);
+  const says = (text) => page.waitForFunction((t) => document.getElementById("healthText").textContent === t, text,
+    { timeout: 10000 });
+  try {
+    await page.waitForFunction(() => document.getElementById("healthText").textContent !== "Checking…");
+    const healthy = await page.textContent("#healthText");
+    await server.restart(() => says("Server off — run ./run.sh"));
+    await says(healthy);
+    assert.deepEqual(problems.filter((p) => !/ERR_CONNECTION_REFUSED/.test(p)), []);
+  } finally {
+    await close();
+    await server.stop();
+  }
+});
+
 test("the library reaches every kept file through the server", { skip }, async () => {
   const names = Array.from({ length: 70 }, (_, age) => `pin_${String(69 - age).padStart(4, "0")}.jpg`);
   const server = await startServer(names);

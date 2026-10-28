@@ -197,11 +197,13 @@ node --test tests/browser/*.test.mjs     # Chromium; needs Playwright (+ axe-cor
 the real server with a stubbed yt-dlp. On the desk: keeping a video,
 circling a collection, searching a library, what a screen reader is told,
 keeping a collection with the keyboard alone (focus shown at every stop),
-reflow at 320 CSS px without sideways scrolling, and a keep cut short by a
-server restart (said once, not retried forever).
+reflow at 320 CSS px without sideways scrolling, a keep cut short by a
+server restart (said once, not retried forever), and the health line
+following the server as it stops and starts.
 In the extension, loaded unpacked: the popup with the server off and keeping
 a pasted link, a collection handed from the popup to the side panel, the
-side panel's library, a restart during a keep, and both surfaces used with
+side panel's library, a restart during a keep, the side panel noticing the
+server stop and picking it up when it starts, and both surfaces used with
 the keyboard alone. Both
 get an axe-core WCAG 2.2 AA audit in light and dark, and WCAG text spacing
 (1.4.12; on the desk at 320 px too) must not cut off or push out any text

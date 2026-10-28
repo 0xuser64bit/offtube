@@ -90,6 +90,7 @@ const state = {
   marks: new Set(),    // circled item numbers on a collection sheet
   fetchToken: 0,
   activeJobId: null,   // job shown on the deck
+  serverUp: true,      // what the health line last said
   spoken: "",          // the job state last announced ("id:status")
   printJobId: null,    // job started from the current source (develops its print)
   previewJobId: null,  // source job or session job explicitly selected for its result
@@ -805,7 +806,11 @@ async function refreshQueue() {
     $("queueCount").textContent = all.length ? `${active ? `${active} developing · ` : ""}${all.length} print${all.length === 1 ? "" : "s"}` : "";
     $("queueEmpty").classList.toggle("hidden", all.length > 0);
     $("clearQueue").classList.toggle("hidden", !all.some((j) => !ACTIVE.includes(j.status)));
-  } catch { /* the health line already says the server is down */ }
+    if (!state.serverUp) checkHealth();
+  } catch {
+    // Said now, not at the next health check.
+    if (state.serverUp) checkHealth();
+  }
 }
 
 $("queue").addEventListener("click", async (e) => {
@@ -960,10 +965,12 @@ async function checkHealth() {
     const env = `yt-dlp ${checks.yt_dlp} · gallery-dl ${checks.gallery_dl || "?"} · ${(checks.ffmpeg_version || "ffmpeg ?").split(" Copyright")[0]} · JS ${checks.js_runtime || "none"}`;
     el.title = env;
     $("envLine").textContent = env;
+    state.serverUp = true;
   } catch {
     el.className = "health is-bad";
     $("healthText").textContent = "Server off — run ./run.sh";
     el.title = "";
+    state.serverUp = false;
   }
 }
 

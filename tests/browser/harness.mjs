@@ -97,9 +97,11 @@ export async function startServer(files = []) {
   return {
     base,
     // Stopped and started again on the same port and downloads/, as a
-    // restart leaves things: kept files stay, jobs are gone.
-    async restart() {
+    // restart leaves things: kept files stay, jobs are gone. `whileDown`
+    // runs in between.
+    async restart(whileDown) {
       await halt();
+      await whileDown?.();
       await boot();
     },
     async stop() {

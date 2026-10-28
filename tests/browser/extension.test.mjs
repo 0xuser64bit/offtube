@@ -174,6 +174,47 @@ test("the popup and the side panel say when a restart cut a keep short", { skip 
   }
 });
 
+test("the side panel follows offtube stopping, and picks it up once it starts", { skip }, async () => {
+  const server = await startServer();
+  await useServer(server.base);
+  const says = (page, text) => page.waitForFunction((t) => document.getElementById("healthText").textContent === t, text,
+    { timeout: 10000 });
+  const unexpected = (problems) => problems.filter((p) => !/ERR_CONNECTION_REFUSED/.test(p));
+  // The video's page, which the panel reads: its URL is what counts.
+  await context.route("https://www.youtube.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>A video</title>" }));
+  let { page, problems } = await openSurface("sidepanel");
+  let video;
+  try {
+    await page.waitForSelector("#linkForm:not(.hidden)");
+    const healthy = await page.textContent("#healthText");
+    await server.restart(() => says(page, "Server off"));
+    await says(page, healthy);
+    assert.deepEqual(unexpected(problems), []);
+    await page.close();
+
+    // Opened while offtube is off, over a video's tab: the "Server off"
+    // print says the panel picks offtube up, and it must.
+    await server.restart(async () => {
+      ({ page, problems } = await openSurface("sidepanel"));
+      await page.waitForSelector("#linkForm:not(.hidden)");
+      video = await context.newPage();
+      await video.goto("https://www.youtube.com/watch?v=abc123abc12");
+      await video.bringToFront();
+      await page.waitForFunction(() => document.getElementById("stage").textContent.includes("offtube isn’t running."),
+        null, { timeout: 10000 });
+    });
+    await page.waitForSelector("#stage .print-title", { timeout: 10000 });
+    assert.equal(await page.textContent("#stage .print-title"), "A test video");
+    await says(page, healthy);
+    assert.deepEqual(unexpected(problems), []);
+  } finally {
+    await video?.close();
+    await page.close();
+    await context.unroute("https://www.youtube.com/**");
+    await server.stop();
+  }
+});
+
 test("the side panel shows the newest kept files and the library's size", { skip }, async () => {
   const names = Array.from({ length: 15 }, (_, age) => `pin_${String(14 - age).padStart(2, "0")}.jpg`);
   const server = await startServer(names);
