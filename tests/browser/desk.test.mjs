@@ -138,9 +138,13 @@ test("reflows at 320 CSS px without scrolling sideways (WCAG 1.4.10)", { skip },
   const server = await startServer(["Song [b].mp3", "pin_1.jpg", "Loop [c].gif",
     "A file name long enough to need wrapping in a narrow column of the sheet [abcdefghijk].mp4"]);
   const { page, problems, close } = await openDesk(server, { viewport: { width: 320, height: 800 } });
-  const sideways = () => page.evaluate(() => [...document.querySelectorAll("body *")]
-    .filter((el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.right > innerWidth + 1; })
-    .map((el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${el.getAttribute("aria-label") ? ` "${el.getAttribute("aria-label")}"` : ""}`));
+  // In the desk's own font, which a fresh page shows only once it loads.
+  const sideways = () => page.evaluate(async () => {
+    await document.fonts.ready;
+    return [...document.querySelectorAll("body *")]
+      .filter((el) => { const box = el.getBoundingClientRect(); return box.width > 0 && box.right > innerWidth + 1; })
+      .map((el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${el.getAttribute("aria-label") ? ` "${el.getAttribute("aria-label")}"` : ""}`);
+  });
   try {
     await page.waitForSelector(".kept-cell");
     assert.deepEqual(await sideways(), [], "blank desk");

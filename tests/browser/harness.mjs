@@ -116,36 +116,91 @@ export async function axeViolations(page) {
   })).violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`));
 }
 
-// What WCAG 1.4.12's text spacing costs the page as it stands: the elements
-// whose content fitted their box and no longer does (cut off, or spilling
-// over what follows), and any sideways scrolling it causes. Overflow that
-// was there already, as a pencil circle's, is the design, and so is text
-// that ends in an ellipsis: file names and links, whose whole text is in a
-// title or a field. The spacing goes in as a constructed stylesheet, which
-// the pages' CSP allows, as it does a reader's own extension.
+// What WCAG 1.4.12's text spacing costs the page as it stands: lines of
+// text that a box now cuts off or that now run into other text, and any
+// sideways scrolling. Decoration (pencil circles, frame numbers) is not, and
+// text that was already cut off or overlapping is the design, as is text
+// that ends in an ellipsis (file names and links, whose whole text is in a
+// title or a field) and text passing under the pinned paste bar. The
+// spacing goes in as a constructed stylesheet, which the pages' CSP allows,
+// as it does a reader's own extension. Measured in the pages' own font:
+// text shows in a fallback until it loads.
 export async function textSpacingLosses(page) {
-  return page.evaluate(() => {
-    const overflowing = () => {
-      const found = new Set();
-      for (const el of document.querySelectorAll("body *")) {
-        if (el.closest("svg") || el.matches("input, select, textarea, .visually-hidden")) continue;
-        const style = getComputedStyle(el);
-        if (style.display === "inline" || style.visibility === "hidden" || el.clientWidth <= 1
-          || !el.textContent.trim()) continue;
-        if (style.textOverflow === "ellipsis" || style.getPropertyValue("-webkit-line-clamp") !== "none") continue;
-        if (el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1) found.add(el);
+  return page.evaluate(async () => {
+    await document.fonts.ready;
+    const clips = (el) => /hidden|clip/.test(`${getComputedStyle(el).overflowX} ${getComputedStyle(el).overflowY}`);
+    const scrolls = (el) => /hidden|clip|auto|scroll/.test(`${getComputedStyle(el).overflowX} ${getComputedStyle(el).overflowY}`);
+    // The paste bar and the keep panel stay put while the page passes under
+    // them; text in one and text outside it may meet in passing.
+    const pinnedIn = (el) => {
+      for (let box = el; box; box = box.parentElement) if (/fixed|sticky/.test(getComputedStyle(box).position)) return box;
+      return null;
+    };
+    // The part of a line that shows: what its scrolling and clipping boxes
+    // leave of it.
+    const shown = (el, rect) => {
+      let { left, top, right, bottom } = rect;
+      for (let box = el; box && box !== document.body; box = box.parentElement) {
+        if (!scrolls(box)) continue;
+        const edge = box.getBoundingClientRect();
+        left = Math.max(left, edge.left); top = Math.max(top, edge.top);
+        right = Math.min(right, edge.right); bottom = Math.min(bottom, edge.bottom);
+      }
+      return { left, top, right, bottom };
+    };
+    const truncates = (el) => getComputedStyle(el).textOverflow === "ellipsis"
+      || getComputedStyle(el).getPropertyValue("-webkit-line-clamp") !== "none";
+    const describe = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${[...el.classList].map((c) => `.${c}`).join("")}`
+      + ` "${el.textContent.trim().replace(/\s+/g, " ").slice(0, 40)}"`;
+    const problems = () => {
+      const lines = [];
+      const range = document.createRange();
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const el = node.parentElement;
+        if (!node.textContent.trim() || el.closest("svg, script, style, .visually-hidden, [aria-hidden='true']")) continue;
+        if (getComputedStyle(el).visibility === "hidden") continue;
+        // A closed note's body is laid out but not shown; its summary is.
+        const closed = el.closest("details:not([open])");
+        if (closed && el.closest("summary")?.parentElement !== closed) continue;
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.width > 1 && rect.height > 1) lines.push({ el, rect, seen: shown(el, rect), pinned: pinnedIn(el) });
+        }
+      }
+      const found = new Map();
+      for (const { el, rect } of lines) {
+        for (let box = el; box && box !== document.body; box = box.parentElement) {
+          if (truncates(box)) break;
+          if (!clips(box)) continue;
+          const edge = box.getBoundingClientRect();
+          if (rect.left < edge.left - 1 || rect.right > edge.right + 1 || rect.top < edge.top - 1 || rect.bottom > edge.bottom + 1) {
+            found.set(`clip ${describe(el)}`, `${describe(el)} is cut off by ${describe(box)}`);
+            break;
+          }
+        }
+      }
+      for (let i = 0; i < lines.length; i++) {
+        for (let j = i + 1; j < lines.length; j++) {
+          const a = lines[i], b = lines[j];
+          if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el) || a.pinned !== b.pinned) continue;
+          const across = Math.min(a.seen.right, b.seen.right) - Math.max(a.seen.left, b.seen.left);
+          const down = Math.min(a.seen.bottom, b.seen.bottom) - Math.max(a.seen.top, b.seen.top);
+          if (across > 2 && down > 2) {
+            const [first, second] = [describe(a.el), describe(b.el)].sort();
+            found.set(`overlap ${first} ${second}`, `${first} runs into ${second}`);
+          }
+        }
       }
       return found;
     };
-    const describe = (el) => `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${[...el.classList].map((c) => `.${c}`).join("")}`
-      + ` "${el.textContent.trim().replace(/\s+/g, " ").slice(0, 40)}"`;
-    const before = overflowing();
+    const before = problems();
     const spacing = new CSSStyleSheet();
     spacing.replaceSync(`* { line-height: 1.5 !important; letter-spacing: 0.12em !important; word-spacing: 0.16em !important; }
       p { margin-bottom: 2em !important; }`);
     document.adoptedStyleSheets = [...document.adoptedStyleSheets, spacing];
     try {
-      const losses = [...overflowing()].filter((el) => !before.has(el)).map(describe);
+      const losses = [...problems()].filter(([key]) => !before.has(key)).map(([, loss]) => loss);
       const wide = document.scrollingElement.scrollWidth;
       if (wide > innerWidth) losses.push(`the page scrolls sideways (${wide} px in ${innerWidth})`);
       return losses;
