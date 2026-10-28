@@ -19,6 +19,8 @@ const OFFTUBE = {
   },
   // Errors that mean "give the site a signed-in session".
   NEEDS_ACCESS: /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership|login/i,
+  // Jobs live in the server's memory: one it no longer knows stopped with it.
+  RESTARTED: 'offtube restarted, so this keep stopped. Keep it again.',
   // Grease-pencil strokes in a 100×100 box, stretched over what they mark.
   MARKS: {
     circle: 'M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15',
@@ -73,14 +75,14 @@ OFFTUBE.api = async function api(server, path, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 };
 
 OFFTUBE.apiGet = async function apiGet(server, path) {
   const res = await fetch(server + path);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 };
 

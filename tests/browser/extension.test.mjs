@@ -149,6 +149,31 @@ test("a collection moves from the popup to the side panel with its link and form
   }
 });
 
+test("the popup and the side panel say when a restart cut a keep short", { skip }, async () => {
+  const server = await startServer();
+  await useServer(server.base);
+  try {
+    for (const surface of ["popup", "sidepanel"]) {
+      const { page, problems } = await openSurface(surface);
+      try {
+        await paste(page, "https://www.youtube.com/watch?v=abc123abc12");
+        await page.waitForSelector("#stage .print-title");
+        await page.click("#dlBtn");
+        await page.waitForFunction(() => /^Downloading/.test(document.getElementById("jobStatus").textContent));
+        await server.restart();
+        await page.waitForFunction(() => document.getElementById("jobStatus").textContent
+          === "offtube restarted, so this keep stopped. Keep it again.", null, { timeout: 10000 });
+        assert.equal(await page.isVisible("#cancelBtn"), false, surface);
+        assert.deepEqual(problems.filter((p) => !/ERR_CONNECTION_REFUSED|status of 404/.test(p)), [], surface);
+      } finally {
+        await page.close();
+      }
+    }
+  } finally {
+    await server.stop();
+  }
+});
+
 test("the side panel shows the newest kept files and the library's size", { skip }, async () => {
   const names = Array.from({ length: 15 }, (_, age) => `pin_${String(14 - age).padStart(2, "0")}.jpg`);
   const server = await startServer(names);

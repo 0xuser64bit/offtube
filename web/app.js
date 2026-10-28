@@ -18,6 +18,8 @@ const checked = (name) => document.querySelector(`input[name="${name}"]:checked`
 const NEEDS_ACCESS = /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership|login/i;
 const MEDIA_WORD = { image: "Image", video: "Video", audio: "Audio", mixed: "Post" };
 const ACTIVE = ["queued", "starting", "downloading", "processing"];
+// Jobs live in the server's memory: one it no longer knows stopped with it.
+const RESTARTED = "offtube restarted, so this keep stopped. Keep it again.";
 const STATE_WORD = {
   queued: "Waiting", starting: "Starting", downloading: "Developing", processing: "Fixing",
   done: "Kept", error: "Failed", cancelled: "Cancelled",
@@ -103,7 +105,7 @@ const state = {
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
@@ -685,11 +687,18 @@ function pollJob(jobId) {
         if (job.status === "done") loadFiles();
         refreshQueue();
       }
-    } catch {
-      if (state.activeJobId === jobId) {
-        setDeck("Lost the server — retrying…", "busy");
-        if (state.spoken !== "lost") { state.spoken = "lost"; announce("Lost the server — retrying…"); }
+    } catch (err) {
+      if (state.activeJobId !== jobId) return;
+      if (err.status === 404) {
+        // The server answered without the job: no retry will bring it back.
+        clearInterval(state.pollTimer);
+        state.activeJobId = null;
+        showJob({ id: jobId, status: "error", detail: RESTARTED }, false);
+        refreshQueue();
+        return;
       }
+      setDeck("Lost the server — retrying…", "busy");
+      if (state.spoken !== "lost") { state.spoken = "lost"; announce("Lost the server — retrying…"); }
     } finally {
       inFlight = false;
     }

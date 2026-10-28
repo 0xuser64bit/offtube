@@ -110,12 +110,17 @@ async function pollJob(id, sourceUrl, sourceToken) {
     let job;
     try {
       job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(id)}`);
-    } catch {
-      if (jobId === id) {
-        setDeck('Lost the server — retrying…', 'busy');
-        OFFTUBE.speakJob('lost');
+    } catch (err) {
+      // The server answered without the job: no retry will bring it back.
+      if (err.status === 404) {
+        job = { id, status: 'error', detail: OFFTUBE.RESTARTED };
+      } else {
+        if (jobId === id) {
+          setDeck('Lost the server — retrying…', 'busy');
+          OFFTUBE.speakJob('lost');
+        }
+        continue;
       }
-      continue;
     }
     if (jobId !== id) return;
     const isPrint = sourceUrl === url() && sourceToken === inspectToken;

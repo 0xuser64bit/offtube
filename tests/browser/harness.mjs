@@ -70,27 +70,40 @@ export async function startServer(files = []) {
     utimesSync(file, 1_700_000_000 - age * 60, 1_700_000_000 - age * 60);
   });
   const port = await freePort();
-  const proc = spawn(python, [path.join(root, "tests/browser/stub_server.py"), root, data],
-    { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
-  let output = "";
-  proc.stdout.on("data", (chunk) => { output += chunk; });
-  proc.stderr.on("data", (chunk) => { output += chunk; });
   const base = `http://127.0.0.1:${port}`;
-  for (const deadline = Date.now() + 20000; ;) {
-    try {
-      if ((await fetch(`${base}/api/health`)).ok) break;
-    } catch { /* not listening yet */ }
-    if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`The stub server did not start:\n${output}`);
-    await new Promise((resolve) => { setTimeout(resolve, 100); });
-  }
+  let proc;
+  let output = "";
+  const boot = async () => {
+    proc = spawn(python, [path.join(root, "tests/browser/stub_server.py"), root, data],
+      { env: { ...process.env, PORT: String(port) }, stdio: ["ignore", "pipe", "pipe"] });
+    proc.stdout.on("data", (chunk) => { output += chunk; });
+    proc.stderr.on("data", (chunk) => { output += chunk; });
+    for (const deadline = Date.now() + 20000; ;) {
+      try {
+        if ((await fetch(`${base}/api/health`)).ok) return;
+      } catch { /* not listening yet */ }
+      if (proc.exitCode !== null || Date.now() > deadline) throw new Error(`The stub server did not start:\n${output}`);
+      await new Promise((resolve) => { setTimeout(resolve, 100); });
+    }
+  };
+  const halt = async () => {
+    if (proc.exitCode === null) {
+      const exited = new Promise((resolve) => { proc.once("exit", resolve); });
+      proc.kill("SIGTERM");
+      await exited;
+    }
+  };
+  await boot();
   return {
     base,
+    // Stopped and started again on the same port and downloads/, as a
+    // restart leaves things: kept files stay, jobs are gone.
+    async restart() {
+      await halt();
+      await boot();
+    },
     async stop() {
-      if (proc.exitCode === null) {
-        const exited = new Promise((resolve) => { proc.once("exit", resolve); });
-        proc.kill("SIGTERM");
-        await exited;
-      }
+      await halt();
       rmSync(data, { recursive: true, force: true });
     },
   };

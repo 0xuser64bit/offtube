@@ -62,6 +62,32 @@ test("circling prints on a collection keeps only those", { skip }, async () => {
   }
 });
 
+test("a keep cut short by a restart says so instead of retrying forever", { skip }, async () => {
+  const server = await startServer();
+  const { page, problems, close } = await openDesk(server);
+  try {
+    await preview(page, "https://www.youtube.com/watch?v=abc123abc12");
+    await page.waitForSelector("#printFig .print-title");
+    await page.click("#dlBtn");
+    await page.waitForFunction(() => /^Downloading/.test(document.getElementById("jobStatus").textContent));
+    // Jobs live in memory: the restarted server doesn't know this one.
+    await server.restart();
+    await page.waitForFunction(() => document.getElementById("jobStatus").textContent
+      === "offtube restarted, so this keep stopped. Keep it again.", null, { timeout: 10000 });
+    assert.equal(await page.isVisible("#cancelBtn"), false);
+    assert.equal(await page.textContent("#printEdge"), "Failed");
+    const asked = [];
+    page.on("request", (request) => { if (request.url().includes("/api/job?")) asked.push(request.url()); });
+    await page.waitForTimeout(1500);
+    assert.deepEqual(asked, [], "it kept asking for the job");
+    // Only the requests that failed meanwhile may be logged.
+    assert.deepEqual(problems.filter((p) => !/ERR_CONNECTION_REFUSED|status of 404/.test(p)), []);
+  } finally {
+    await close();
+    await server.stop();
+  }
+});
+
 test("the library reaches every kept file through the server", { skip }, async () => {
   const names = Array.from({ length: 70 }, (_, age) => `pin_${String(69 - age).padStart(4, "0")}.jpg`);
   const server = await startServer(names);

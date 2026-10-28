@@ -289,11 +289,18 @@ function pollJob(id) {
         refreshFiles();
         refreshQueue();
       }
-    } catch {
-      if (activeJobId === id) {
-        setDeck('Lost the server — retrying…', 'busy');
-        OFFTUBE.speakJob('lost');
+    } catch (err) {
+      if (activeJobId !== id) return;
+      if (err.status === 404) {
+        // The server answered without the job: no retry will bring it back.
+        clearInterval(pollTimer);
+        activeJobId = null;
+        showJob({ id, status: 'error', detail: OFFTUBE.RESTARTED }, false);
+        refreshQueue();
+        return;
       }
+      setDeck('Lost the server — retrying…', 'busy');
+      OFFTUBE.speakJob('lost');
     } finally {
       inFlight = false;
     }
