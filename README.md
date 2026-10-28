@@ -126,11 +126,11 @@ proof-of-origin challenges — Deno (any recent 2.x) or Node.js ≥ 23.5
 (older Node, e.g. Debian's 18.x, is rejected by yt-dlp as unsupported).
 The Docker image already includes Deno.
 
-| Tool | macOS | Windows |
-|---|---|---|
-| ffmpeg | `brew install ffmpeg` | `winget install Gyan.FFmpeg` (reopen terminal after) |
-| JS runtime | `brew install deno` | `winget install DenoLand.Deno` |
-| Python deps | `pip install -r requirements.txt` | `python -m pip install -r requirements.txt` |
+| Tool | macOS | Linux (Debian, Ubuntu) | Windows |
+|---|---|---|---|
+| ffmpeg | `brew install ffmpeg` | `sudo apt install ffmpeg` | `winget install Gyan.FFmpeg` (reopen terminal after) |
+| JS runtime | `brew install deno` | `curl -fsSL https://deno.land/install.sh \| sh` (into `~/.deno/bin`) | `winget install DenoLand.Deno` |
+| Python deps | `pip install -r requirements.txt` | `sudo apt install python3-venv`, then `./run.sh` installs them | `python -m pip install -r requirements.txt` |
 
 ## How to use
 
