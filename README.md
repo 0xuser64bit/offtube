@@ -219,9 +219,10 @@ rules, so use the pinned one.
 GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests on
 Windows and macOS, the browser suite with Playwright and axe-core required,
 starts offtube from a fresh checkout with `run.sh` (Linux, macOS; it must stop
-cleanly on SIGTERM) and `run.bat` (Windows), loads the macOS service above with
-`launchctl` (it must find ffmpeg and a JS runtime), checks the systemd unit
-with `systemd-analyze verify`, and on amd64 and arm64 builds the Docker image,
+cleanly on SIGTERM) and `run.bat` (Windows), installs both background
+services above as shown there and runs them under `launchctl` and a user
+systemd manager (each must find ffmpeg and a JS runtime, and systemd must
+stop offtube cleanly), and on amd64 and arm64 builds the Docker image,
 checks the packaged yt-dlp worker, smoke-tests HTTP startup, and checks that
 the container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.

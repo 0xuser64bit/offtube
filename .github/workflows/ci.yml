@@ -40,10 +40,39 @@ jobs:
         run: bash tools/check.sh
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
-      - name: Check the README's systemd unit
+      - name: Run offtube as the README's systemd user service
         run: |
-          sed "s|REPLACE_DIR|$PWD|g" deploy/offtube.service > "$RUNNER_TEMP/offtube.service"
-          systemd-analyze --user verify "$RUNNER_TEMP/offtube.service"
+          # The README's Linux setup, from a fresh clone: run.sh builds .venv
+          # with the system python3, as the service starts it.
+          rm -rf .venv
+          sudo apt-get install -y python3-venv
+          # Deno where its installer puts it, at the Docker image's version.
+          deno_version="$(sed -n 's/^ARG DENO_VERSION=//p' Dockerfile)"
+          curl -fsSL "https://github.com/denoland/deno/releases/download/v${deno_version}/deno-$(uname -m)-unknown-linux-gnu.zip" -o "$RUNNER_TEMP/deno.zip"
+          mkdir -p ~/.deno/bin
+          unzip -o -q "$RUNNER_TEMP/deno.zip" -d ~/.deno/bin
+          # A user manager for this account, as logging in would start.
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then break; fi
+            sleep 1
+          done
+          mkdir -p ~/.config/systemd/user
+          sed "s|REPLACE_DIR|$PWD|g" deploy/offtube.service > ~/.config/systemd/user/offtube.service
+          systemd-analyze --user verify ~/.config/systemd/user/offtube.service
+          systemctl --user daemon-reload
+          systemctl --user enable --now offtube
+          trap 'journalctl --user -u offtube --no-pager || true' EXIT
+          for _ in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8000/api/health -o health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat health.json
+          python -c "import json, sys; c = json.load(open('health.json'))['checks']; sys.exit(0 if c['ffmpeg'] and c['js_runtime'] == 'deno' else 'ffmpeg or Deno is missing under systemd')"
+          # Stopping is a SIGTERM: offtube must exit 0, not leave the unit failed.
+          systemctl --user stop offtube
+          test "$(systemctl --user show -p Result --value offtube)" = success
 
   windows:
     # Process groups, taskkill tree stops and the exclusive port bind only
