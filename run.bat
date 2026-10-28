@@ -3,7 +3,7 @@ REM Windows launcher — project-local venv, no system pip pollution.
 cd /d "%~dp0"
 .venv\Scripts\python -c "import sys" >nul 2>&1
 if errorlevel 1 (
-  rmdir /s /q .venv
+  if exist .venv rmdir /s /q .venv
   python -m venv .venv
 )
 if not exist .venv\Scripts\python.exe (

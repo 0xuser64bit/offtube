@@ -13,6 +13,8 @@ function desk() {
   const elements = new Map();
   const groups = new Map();
   const saved = new Map();
+  const timers = new Map();  // pending setTimeout callbacks, never run on their own
+  let timerId = 0;
   class Element {
     constructor(id = "") {
       this.id = id;
@@ -44,7 +46,7 @@ function desk() {
     setAttribute(name, value) { this.attrs[name] = value; }
     getAttribute(name) { return this.attrs[name]; }
     addEventListener(type, handler) { (this.listeners[type] ||= []).push(handler); }
-    async dispatch(type) { for (const handler of this.listeners[type] || []) await handler({ target: this, preventDefault() {} }); }
+    async dispatch(type, detail = {}) { for (const handler of this.listeners[type] || []) await handler({ target: this, preventDefault() {}, ...detail }); }
     querySelector() { return null; }
     querySelectorAll() { return []; }
     focus() { this.focused = true; }
@@ -79,9 +81,10 @@ function desk() {
   elements.get("subLang").value = "en";
   elements.get("gifResult").classList.add("hidden");
   const context = vm.createContext({
-    document, window: {}, CSS: { escape: String }, Intl,
+    document, window: {}, CSS: { escape: String }, Intl, URLSearchParams,
     localStorage: { getItem: (key) => saved.get(key) || null, setItem: (key, value) => saved.set(key, value) },
-    setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+    setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; },
+    clearTimeout: (id) => timers.delete(id), setInterval: () => 1, clearInterval() {},
     fetch: async () => ({ ok: true, json: async () => ({}) }),
   });
   vm.runInContext(script, context);
@@ -91,7 +94,7 @@ function desk() {
     elements.get("url").value = "https://example.com/video";
     run(`state.info = ${JSON.stringify(value)}; state.infoUrl = $("url").value; renderFormats();`);
   };
-  return { elements, context, run, choose, info, saved };
+  return { elements, context, run, choose, info, saved, timers };
 }
 
 test("GIF keeps whole videos or fractional timeframes with its own settings and no subtitles", async () => {
@@ -205,4 +208,201 @@ test("GIFs created without a source print and selected session jobs have a real 
   assert.match(ui.elements.get("gifReady").textContent, /2 GIFs are ready/);
   ui.run('showJob({id:"other", status:"error", quality:"gif", detail:"Could not make GIF"}, false)');
   assert.equal(ui.elements.get("gifResult").classList.contains("hidden"), true);
+});
+
+test("counts reported by a site are printed as text, never markup", async () => {
+  const ui = desk();
+  ui.info({ type: "playlist", media: "video", count: "<img src=x>" });
+  await ui.choose("plmode", "playlist");
+  ui.run("syncTally()");
+  assert.match(ui.elements.get("tally").innerHTML, /&lt;img src=x&gt; items/);
+  ui.info({ type: "gallery", media: "image", count: "9<i>" });
+  await ui.choose("plmode", "single");
+  ui.run("syncTally()");
+  assert.doesNotMatch(ui.elements.get("tally").innerHTML, /<i>/);
+});
+
+test("a pasted link previews promptly; typing still waits for a pause", async () => {
+  const ui = desk();
+  const url = ui.elements.get("url");
+  // A browser fires paste, then input once the value has changed.
+  url.value = "https://www.youtube.com/watch?v=abc123abc12";
+  await url.dispatch("paste");
+  await url.dispatch("input", { inputType: "insertFromPaste" });
+  assert.deepEqual([...ui.timers.values()].map((t) => t.ms), [150]);
+  ui.timers.clear();
+  url.value = "https://www.youtube.com/watch?v=abc";
+  await url.dispatch("input", { inputType: "insertText" });
+  assert.deepEqual([...ui.timers.values()].map((t) => t.ms), [700]);
+});
+
+test("the library is searched and paged by the server, not the page", async () => {
+  const ui = desk();
+  const asked = [];
+  const file = (name) => ({ name, kind: "video", url: `/files/${name}`, size_str: "1 KB", modified: "2026-01-01T00:00:00" });
+  ui.context.fetch = async (url) => {
+    asked.push(url);
+    const offset = Number(new URLSearchParams(url.split("?")[1]).get("offset"));
+    return { ok: true, json: async () => ({ files: [file(`f${offset}.mp4`)], total: 900, matched: 2, disk_free_str: "1 GB" }) };
+  };
+  await ui.run("loadFiles()");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60");
+  assert.equal(ui.elements.get("footFiles").textContent, "900 files · 1 GB free");
+  assert.match(ui.elements.get("files").innerHTML, /Show 1 more/);
+  await ui.run("loadFiles({ more: true })");
+  assert.equal(asked.at(-1), "/api/files?offset=1&limit=60");
+  assert.match(ui.elements.get("files").innerHTML, /f1\.mp4/);
+  assert.doesNotMatch(ui.elements.get("files").innerHTML, /Show \d+ more/);
+  // A refresh keeps the rows already showing.
+  await ui.run("loadFiles()");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60");
+  // A search waits for a pause in typing, then starts from the first page.
+  ui.timers.clear();
+  ui.elements.get("fileSearch").value = "clip";
+  await ui.elements.get("fileSearch").dispatch("input");
+  const [pending] = [...ui.timers.values()];
+  assert.equal(pending.ms, 200);
+  await pending.fn();
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip");
+  await ui.choose("kind", "gif");
+  assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip&kind=gif");
+});
+
+test("refreshing the library preserves more than one server page of visible files", async () => {
+  const ui = desk();
+  const files = Array.from({ length: 620 }, (_, index) => ({
+    name: `file${index}.mp4`, kind: "video", url: `/files/file${index}.mp4`, size_str: "1 KB",
+  }));
+  const asked = [];
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    const offset = Number(params.get("offset"));
+    const limit = Number(params.get("limit"));
+    asked.push({ offset, limit });
+    return { ok: true, json: async () => ({
+      files: files.slice(offset, offset + limit), total: files.length, matched: files.length,
+    }) };
+  };
+  ui.run(`state.files = ${JSON.stringify(files.slice(0, 600))}`);
+  await ui.run("loadFiles()");
+  assert.equal(ui.run("state.files.length"), 600);
+  assert.deepEqual(asked, [{ offset: 0, limit: 500 }, { offset: 500, limit: 100 }]);
+  assert.match(ui.elements.get("files").innerHTML, /file599\.mp4/);
+  assert.match(ui.elements.get("files").innerHTML, /Show 20 more/);
+  files.splice(550);
+  await ui.run("loadFiles()");
+  assert.equal(ui.run("state.files.length"), 550);
+  assert.doesNotMatch(ui.elements.get("files").innerHTML, /Show \d+ more/);
+});
+
+test("a search supersedes an unfinished multi-page library refresh", async () => {
+  const ui = desk();
+  const files = Array.from({ length: 600 }, (_, index) => ({
+    name: `file${index}.mp4`, kind: "video", url: `/files/file${index}.mp4`, size_str: "1 KB",
+  }));
+  let finishPage;
+  let startPage;
+  const pageStarted = new Promise((resolve) => { startPage = resolve; });
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    if (params.get("q")) {
+      return { ok: true, json: async () => ({ files: [], total: files.length, matched: 0 }) };
+    }
+    const offset = Number(params.get("offset"));
+    if (offset) await new Promise((resolve) => { finishPage = resolve; startPage(); });
+    return { ok: true, json: async () => ({
+      files: files.slice(offset, offset + Number(params.get("limit"))),
+      total: files.length, matched: files.length,
+    }) };
+  };
+  ui.run(`state.files = ${JSON.stringify(files)}`);
+  const refresh = ui.run("loadFiles()");
+  await pageStarted;
+  ui.elements.get("fileSearch").value = "absent";
+  await ui.run("loadFiles({ reset: true })");
+  finishPage();
+  await refresh;
+  assert.equal(ui.run("state.files.length"), 0);
+  assert.equal(ui.elements.get("filesEmpty").textContent, "Nothing matches.");
+});
+
+test("paging during a filter change never mixes old rows or skips filtered rows", async () => {
+  const ui = desk();
+  const oldFile = { name: "old.mp4", kind: "video", url: "/files/old.mp4" };
+  const newFile = { name: "new.gif", kind: "image", url: "/files/new.gif" };
+  const offsets = [];
+  let finishReset;
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    if (!params.get("kind")) {
+      return { ok: true, json: async () => ({ files: [oldFile], total: 2, matched: 2 }) };
+    }
+    const offset = Number(params.get("offset"));
+    offsets.push(offset);
+    const response = { ok: true, json: async () => ({
+      files: offset ? [] : [newFile], total: 2, matched: 1,
+    }) };
+    if (offsets.length === 1) {
+      return new Promise((resolve) => { finishReset = () => resolve(response); });
+    }
+    return response;
+  };
+  await ui.run("loadFiles()");
+  const reset = ui.choose("kind", "gif");
+  await ui.run("loadFiles({ more: true })");
+  finishReset();
+  await reset;
+  assert.deepEqual(offsets, [0, 0]);
+  assert.equal(ui.run("JSON.stringify(state.files.map((file) => file.name))"), '["new.gif"]');
+});
+
+test("a failed library page can be retried from its Show more button", async () => {
+  const ui = desk();
+  const button = { disabled: false, closest: (selector) => selector === "#moreFiles" ? button : null };
+  ui.context.fetch = async () => ({ ok: true, json: async () => ({
+    files: [{ name: "first.mp4", kind: "video", url: "/files/first.mp4" }], total: 2, matched: 2,
+  }) });
+  await ui.run("loadFiles()");
+  ui.context.fetch = async () => { throw new Error("Connection lost"); };
+  await ui.elements.get("files").dispatch("click", {
+    target: button,
+  });
+  assert.equal(button.disabled, false);
+  assert.match(ui.elements.get("jobStatus").textContent, /Couldn.t load files/);
+  ui.context.fetch = async (url) => {
+    assert.equal(new URLSearchParams(url.split("?")[1]).get("offset"), "1");
+    return { ok: true, json: async () => ({
+      files: [{ name: "second.mp4", kind: "video", url: "/files/second.mp4" }], total: 2, matched: 2,
+    }) };
+  };
+  await ui.elements.get("files").dispatch("click", { target: button });
+  assert.equal(button.disabled, false);
+  assert.equal(ui.run("state.files.length"), 2);
+});
+
+test("collection ranges are only editable when they apply", async () => {
+  const ui = desk();
+  ui.info({ type: "video", media: "video", part_of_playlist: true });
+  ui.run("syncNotes()");
+  for (const id of ["plStart", "plEnd", "plItems"]) assert.equal(ui.elements.get(id).disabled, true, id);
+  await ui.choose("plmode", "playlist");
+  for (const id of ["plStart", "plEnd", "plItems"]) assert.equal(ui.elements.get(id).disabled, false, id);
+  assert.equal(ui.elements.get("plItemsField").classList.contains("is-off"), false);
+});
+
+test("screen readers hear what was found and each change of state once, not every tick", () => {
+  const ui = desk();
+  // The deck and the print redraw on every poll, so they are not live regions.
+  assert.doesNotMatch(html, /class="deck"[^>]*aria-live/);
+  assert.doesNotMatch(html, /id="print"[^>]*aria-live/);
+  const said = [];
+  Object.defineProperty(ui.elements.get("announce"), "textContent", { set(v) { said.push(v); }, get() { return said.at(-1) || ""; } });
+  ui.elements.get("url").value = "https://www.youtube.com/watch?v=abc123abc12";
+  ui.run(`renderPrint({ type: "video", media: "video", title: "Clip", source: { label: "YouTube" } })`);
+  ui.run(`showJob({ id: "j", status: "downloading", progress: 10, detail: "Downloading — 10%" }, true)`);
+  ui.run(`showJob({ id: "j", status: "downloading", progress: 20, detail: "Downloading — 20%" }, true)`);
+  ui.run(`showJob({ id: "j", status: "processing", progress: 99, quality: "gif" }, true)`);
+  ui.run(`showJob({ id: "j", status: "done", progress: 100, quality: "gif", files: ["a.gif"] }, true)`);
+  ui.run(`setDeck("Couldn’t cancel: gone", "error")`);
+  assert.deepEqual(said, ["YouTube video ready: Clip.", "Downloading.", "Making the GIF.", "Kept a.gif.", "Couldn’t cancel: gone"]);
 });

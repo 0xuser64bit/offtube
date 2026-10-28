@@ -91,7 +91,7 @@ docker compose logs -f
 docker compose down
 ```
 
-- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp + gallery-dl. Healthcheck hits `/api/health`.
+- Image: `python:3.12-slim` + ffmpeg + pinned Deno + yt-dlp + gallery-dl, with `tini` as PID 1 to pass on `docker stop` and reap stopped jobs' processes. Healthcheck hits `/api/health`.
 - Port is published on loopback only (`127.0.0.1:8000:8000`); inside the
   container `HOST=0.0.0.0` is required (a container has its own loopback).
 - Native `./run.sh` defaults to `HOST=127.0.0.1`; `HOST=0.0.0.0` is docker-only.
@@ -100,6 +100,10 @@ docker compose down
 - Limitation: cookies **from browser** can't work in docker (no host browser
   profile inside the container) — use the cookies-file upload/paste instead.
   Native mode + the OS services below keep from-browser working.
+- Stopping — Ctrl+C, `docker compose down`, `systemctl --user stop offtube`
+  or `launchctl unload` — refuses new work, cancels queued jobs, stops
+  running ones together with their processes, removes per-job cookie copies
+  and exits within about 5 seconds. A second Ctrl+C exits at once.
 
 ```bash
 # macOS (native, auto-start on login) — run from this clone
@@ -122,11 +126,11 @@ proof-of-origin challenges — Deno (any recent 2.x) or Node.js ≥ 23.5
 (older Node, e.g. Debian's 18.x, is rejected by yt-dlp as unsupported).
 The Docker image already includes Deno.
 
-| Tool | macOS | Windows |
-|---|---|---|
-| ffmpeg | `brew install ffmpeg` | `winget install Gyan.FFmpeg` (reopen terminal after) |
-| JS runtime | `brew install deno` | `winget install DenoLand.Deno` |
-| Python deps | `pip install -r requirements.txt` | `python -m pip install -r requirements.txt` |
+| Tool | macOS | Linux (Debian, Ubuntu) | Windows |
+|---|---|---|---|
+| ffmpeg | `brew install ffmpeg` | `sudo apt install ffmpeg` | `winget install Gyan.FFmpeg` (reopen terminal after) |
+| JS runtime | `brew install deno` | `curl -fsSL https://deno.land/install.sh \| sh` (into `~/.deno/bin`) | `winget install DenoLand.Deno` |
+| Python deps | `pip install -r requirements.txt` | `sudo apt install python3-venv`, then `./run.sh` installs them | `python -m pip install -r requirements.txt` |
 
 ## How to use
 
@@ -146,6 +150,16 @@ permissions on POSIX. To reuse a manually exported file, save it as
 inspection and download gets a separate, site-filtered copy, removed when that
 request finishes; engine cookie updates never overwrite the saved export.
 
+## Who can use it
+
+offtube has no login. Web pages can't drive it or read from it, but every
+program on this computer — under any account — and every installed browser
+extension can, including starting downloads and reading or deleting what you
+kept. Use it on a computer whose users and extensions you trust, and never
+publish its port beyond `127.0.0.1`. Link checks keep the engines on sites
+with a dedicated extractor; they are not a network sandbox. Details:
+`ARCHITECTURE.md` → Trust boundary.
+
 ## Project layout
 
 ```
@@ -157,8 +171,8 @@ offtube/
   downloads/        # finished files (contents git-ignored, dir kept)
   cookies/          # per-job isolates (never committed; cleaned on boot + job end)
   deploy/           # launchd plist + systemd user unit (path-templated)
-  tools/            # isolated GIF source worker, validation gate, icon generator
-  ARCHITECTURE.md   # system map, invariants and prioritized engineering risks
+  tools/            # isolated yt-dlp worker, validation gate, icon generator
+  ARCHITECTURE.md   # system map, invariants, trust boundary and next priorities
   Dockerfile, docker-compose.yml
   tools/gen_icons.py
   requirements.txt  # runtime: pinned yt-dlp + gallery-dl
@@ -176,26 +190,70 @@ whitespace checks. Override the interpreter with `PYTHON=/path/to/python`.
 ./.venv/bin/pip install -q -r requirements-dev.txt
 ./.venv/bin/python -m pytest tests -q   # no external network
 node --test tests/extension_gif.test.js tests/test_web_gif.mjs
+node --test tests/browser/*.test.mjs     # Chromium; needs Playwright (+ axe-core, Xvfb)
 ```
 
-GitHub CI runs the full gate on Python 3.10 and 3.12, builds the Docker image,
-checks the packaged GIF worker and smoke-tests HTTP startup. See
+`tests/browser/` drives the web desk and the extension in Chromium against
+the real server with a stubbed yt-dlp. On the desk: keeping a video,
+circling a collection, searching a library, what a screen reader is told,
+keeping a collection with the keyboard alone (focus shown at every stop),
+reflow at 320 CSS px without sideways scrolling, a keep cut short by a
+server restart (said once, not retried forever), and the health line
+following the server as it stops and starts.
+In the extension, loaded unpacked: the popup with the server off and keeping
+a pasted link, a collection handed from the popup to the side panel, the
+side panel's library, a restart during a keep, the side panel noticing the
+server stop and picking it up when it starts, and both surfaces used with
+the keyboard alone. Both
+get an axe-core WCAG 2.2 AA audit in light and dark, and WCAG text spacing
+(1.4.12; on the desk at 320 px too) must not cut off or push out any text
+that fitted. Chromium's own context
+menu and shortcuts ignore Playwright's input, so `background.test.mjs` runs
+a headed Chromium on a private Xvfb display and clicks and types through
+XTest (`xinput.py`): "Keep link with offtube" and "Keep this page with
+offtube" must reach the server, and with Sign-in set to a cookies file the
+menu, like `Alt+Shift+O`, must open the real side panel, which takes the
+link. The suites are skipped when Playwright isn't
+installed (the audits when axe-core isn't, and the real input without Xvfb,
+so on Linux only); to run them, install `playwright@1.63.0` and
+`axe-core@4.14.0` where Node finds them (or point `NODE_PATH` there) and run
+`npx playwright install chromium`. Other axe-core versions check different
+rules, so use the pinned one.
+
+GitHub CI runs the full gate on Python 3.10 and 3.12, the backend tests and
+the desk and extension browser suites on Windows and macOS too (Playwright
+and axe-core required everywhere; the real-input suite on Linux),
+starts offtube from a fresh checkout with `run.sh` (Linux, macOS; it must stop
+cleanly on SIGTERM) and `run.bat` (Windows), installs both background
+services above as shown there and runs them under `launchctl` and a user
+systemd manager (each must find ffmpeg and a JS runtime, and systemd must
+stop offtube cleanly), and on amd64 and arm64 builds the Docker image,
+checks the packaged yt-dlp worker, smoke-tests HTTP startup, and checks that
+the container reaps orphaned processes and stops cleanly on `docker stop`. See
 `ARCHITECTURE.md` for the system map and remaining production-hardening work.
 
 `tests/test_api.py` boots the real `Handler` on an ephemeral port with a
-stubbed `YoutubeDL` and a fake gallery-dl CLI, covering health/headers,
+stubbed `YoutubeDL` for inspection, a stand-in yt-dlp worker
+(`tests/fake_ytdlp_worker.py`) and a fake gallery-dl CLI, covering health/headers,
 traversal blocks, info validation, `/api/source`, download → files →
 delete, bad input, oversized bodies, queued + running cancel (including
-killing a gallery-dl process), origin/CORS, payload stripping, channel
+a silent yt-dlp worker and a gallery-dl process), origin/CORS, payload stripping, channel
 rejection, temp/dotfile hiding, disposition, jobs limit, disk guard, the
-public-job field whitelist, Host-header guard, `/api/retry`, and
-`/api/jobs/clear`. `tests/test_helpers.py` checks source resolution against
+public-job field whitelist, Host-header guard, `/api/retry`,
+`/api/jobs/clear`, byte ranges, the library's symlink and vanishing-file
+rules, connection limits and slow-client deadlines, and stopping gallery-dl's
+whole process tree. `tests/test_helpers.py` checks source resolution against
 the real extractor tables (no network) — including every site named in the
 web UI's “works with” strip — plus engine order and fallback, per-site
 cookie trimming, failure hints, and filename byte caps. `tests/test_gif.py`
 covers GIF validation, cancellation, isolated temporary sources, cleanup and
 real generated-media encoding (when ffmpeg and ffprobe are on PATH), including
 duration, frame count, dimensions, looping and anamorphic display ratios.
+`tests/test_shutdown.py` stops the server with real SIGINT and SIGTERM and
+checks that it exits promptly, cancels its jobs and removes their cookie copies.
+`tests/test_ytdlp_worker.py` runs the real worker against a local server:
+a download with its cookies, a trimmed GIF source, and stopping a silent
+download's whole process tree on cancel or low disk.
 
 ## API (for scripting)
 
@@ -211,18 +269,25 @@ integers or text. `playlist_mode` is `single` or `playlist`; `cookies_mode` is
 - `POST /api/info` `{url, cookies_mode, cookies_text?, cookies_browser?}` → metadata with `source`, `engine`, `type` (`video` | `playlist` | `gallery`) and `media` (`video` | `audio` | `image` | `mixed`); galleries carry `count`, `more` and `entries` with thumbnails (side-effect-free; pasted cookies use an ephemeral file)
 - `POST /api/download` `{url, quality, clip_from, clip_to, gif_size, gif_fps, gif_loop, playlist_mode, playlist_start, playlist_end, playlist_items, cookies_*, subtitles, sub_lang}` → `{job_id}`
 - `GET /api/job?id=…` → `{status, source, progress, detail, log, files}` (`status`: queued/starting/downloading/processing/done/error/cancelled)
-- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; running yt-dlp jobs stop cooperatively at the next progress callback, gallery-dl processes are terminated)
+- `POST /api/cancel` `{job_id}` → `{cancelled: true}` (queued cancels instantly; a running job's yt-dlp worker, gallery-dl or ffmpeg is stopped at once together with every process it started, even while it is extracting or merging)
 - `POST /api/retry` `{job_id}` → `{job_id, retried}` (re-runs a finished job from its stored params; 404 unknown, 400 still running, 400 if the stored params no longer validate)
 - `POST /api/jobs/clear` `{}` → `{cleared}` (drops finished job records)
 - `GET /api/jobs?limit=50` → recent job records, logs trimmed to 20 lines (terminal jobs evicted past 50)
-- `GET /api/files` → `{files, disk_free, disk_free_str}` (in-progress `.part`/`.temp` hidden); `GET /files/<name>` downloads one (RFC 5987 filename)
-- `POST /api/files/delete` `{name}` → `{deleted}`
+- `GET /api/files?q=&kind=&offset=&limit=` → `{files, total, matched, disk_free, disk_free_str}`, newest first. `q` matches part of a name (case-insensitive), `kind` is `all`, `video`, `audio`, `image` or `gif`, and `limit` is 1–500 (default 500); `total` counts the whole library and `matched` the files that fit the search. `GET /files/<name>` downloads one (RFC 5987 filename). A single `Range: bytes=…` is answered with `206` (or `416` past the end), so media elements fetch only the index and frames they need; `ETag`/`Last-Modified` let `If-Range` resume only an unchanged file
+- `POST /api/files/delete` `{name}` → `{deleted}` (the exact file name; 404 if it isn't a kept file)
+
+The library is the regular files directly in `downloads/`. Dotfiles,
+in-progress `.part`/`.temp` files, symlinks and special files are never
+listed, served or deleted, so every listed name is exactly what
+`/files/<name>` returns and deleting a name can never reach another file.
 
 Only links with a dedicated yt-dlp or gallery-dl extractor are accepted (400
 otherwise, also for IP/LAN hosts and DRM services). YouTube channel, home,
 and search pages are rejected. Inspect treats `watch?v=&list=` as a single
 video; only `/playlist?list=` is a playlist. Bodies are capped at ~2 MB (413).
-Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
+A request must arrive whole within 30 seconds, and the server serves 64
+connections at once; past that it answers 503 with `Retry-After: 1` as soon
+as the request arrives (waiting at most 0.2 s for it) instead of queueing. Past 5 active downloads `/api/download` returns 429. Under 200 MB free disk
 `/api/download` returns 507. Cross-site POSTs with a foreign `Origin`/`Referer`
 return 403, as do non-loopback `Host` headers. JSON responses reflect
 `Access-Control-Allow-Origin` only for localhost and `chrome-extension://` —

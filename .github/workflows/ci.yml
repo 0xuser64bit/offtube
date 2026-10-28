@@ -38,9 +38,188 @@ jobs:
         env:
           PYTHON: python
         run: bash tools/check.sh
+      - name: Start and stop offtube with run.sh
+        run: bash tools/launcher_smoke.sh
+      - name: Run offtube as the README's systemd user service
+        run: |
+          # The README's Linux setup, from a fresh clone: run.sh builds .venv
+          # with the system python3, as the service starts it.
+          rm -rf .venv
+          sudo apt-get install -y python3-venv
+          # Deno where its installer puts it, at the Docker image's version.
+          deno_version="$(sed -n 's/^ARG DENO_VERSION=//p' Dockerfile)"
+          curl -fsSL "https://github.com/denoland/deno/releases/download/v${deno_version}/deno-$(uname -m)-unknown-linux-gnu.zip" -o "$RUNNER_TEMP/deno.zip"
+          mkdir -p ~/.deno/bin
+          unzip -o -q "$RUNNER_TEMP/deno.zip" -d ~/.deno/bin
+          # A user manager for this account, as logging in would start.
+          sudo loginctl enable-linger "$USER"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          for _ in $(seq 1 30); do
+            if [ -S "$XDG_RUNTIME_DIR/systemd/private" ]; then break; fi
+            sleep 1
+          done
+          mkdir -p ~/.config/systemd/user
+          sed "s|REPLACE_DIR|$PWD|g" deploy/offtube.service > ~/.config/systemd/user/offtube.service
+          systemd-analyze --user verify ~/.config/systemd/user/offtube.service
+          systemctl --user daemon-reload
+          systemctl --user enable --now offtube
+          trap 'journalctl --user -u offtube --no-pager || true' EXIT
+          for _ in $(seq 1 180); do
+            if curl -fsS http://127.0.0.1:8000/api/health -o health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat health.json
+          python -c "import json, sys; c = json.load(open('health.json'))['checks']; sys.exit(0 if c['ffmpeg'] and c['js_runtime'] == 'deno' else 'ffmpeg or Deno is missing under systemd')"
+          # Stopping is a SIGTERM: offtube must exit 0, not leave the unit failed.
+          systemctl --user stop offtube
+          test "$(systemctl --user show -p Result --value offtube)" = success
+
+  windows:
+    # Process groups, taskkill tree stops and the exclusive port bind only
+    # exist here; POSIX-only tests skip themselves. The browser suites run
+    # against the server as it behaves on Windows.
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Install validation dependencies
+        run: |
+          choco install ffmpeg --no-progress --yes
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the backend tests on Windows
+        run: python -m pytest tests -q -rs
+      - name: Install Chromium and axe-core
+        shell: bash
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install chromium
+      - name: Exercise the web desk and the extension in Chromium
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
+      - name: Start offtube with run.bat
+        run: |
+          # run.bat builds its venv on first run, then starts offtube.
+          $env:PORT = "18123"
+          $server = Start-Process cmd.exe -ArgumentList "/c", "run.bat" -NoNewWindow -PassThru `
+            -RedirectStandardOutput launcher.out -RedirectStandardError launcher.err
+          $up = $false
+          for ($i = 0; $i -lt 180 -and -not $up; $i++) {
+            try {
+              Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:18123/api/health" -TimeoutSec 2 | Out-Null
+              $up = $true
+            } catch {
+              if ($server.HasExited) { break }
+              Start-Sleep -Seconds 1
+            }
+          }
+          taskkill /PID $server.Id /T /F | Out-Null
+          Get-Content launcher.out, launcher.err
+          if (-not $up) { throw "run.bat never got offtube answering /api/health" }
+          exit 0
+
+  macos:
+    # launchd service mode makes macOS a supported host: its process groups
+    # and paths (/var is /private/var) differ from Linux in small ways.
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Install validation dependencies
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install ffmpeg deno
+          python -m pip install -r requirements.txt -r requirements-dev.txt
+      - name: Run the backend tests on macOS
+        run: python -m pytest tests -q -rs
+      - name: Install Chromium and axe-core
+        shell: bash
+        run: |
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install chromium
+      - name: Exercise the web desk and the extension in Chromium
+        shell: bash
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
+      - name: Start and stop offtube with run.sh
+        run: bash tools/launcher_smoke.sh
+      - name: Run offtube as the README's launchd agent
+        run: |
+          # The README's install commands, then the tools must be found:
+          # launchd's own PATH has no Homebrew.
+          mkdir -p ~/Library/LaunchAgents ~/Library/Logs
+          DIR="$(pwd)"
+          sed -e "s|REPLACE_ME|$USER|g" -e "s|REPLACE_DIR|$DIR|g" \
+            deploy/com.offtube.plist > ~/Library/LaunchAgents/com.offtube.plist
+          plutil -lint ~/Library/LaunchAgents/com.offtube.plist
+          launchctl load ~/Library/LaunchAgents/com.offtube.plist
+          trap 'launchctl unload ~/Library/LaunchAgents/com.offtube.plist || true; cat ~/Library/Logs/offtube.log || true' EXIT
+          for _ in $(seq 1 120); do
+            if curl -fsS http://127.0.0.1:8000/api/health -o health.json 2>/dev/null; then break; fi
+            sleep 1
+          done
+          cat health.json
+          python -c "import json, sys; c = json.load(open('health.json'))['checks']; sys.exit(0 if c['ffmpeg'] and c['js_runtime_ok'] else 'ffmpeg or a JS runtime is missing under launchd')"
+
+  browser:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "24"
+      - name: Install the server, Chromium, axe-core and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg xvfb libxtst6
+          python -m pip install -r requirements.txt
+          npm install --no-save --no-package-lock --prefix "$RUNNER_TEMP/browser" playwright@1.63.0 axe-core@4.14.0
+          "$RUNNER_TEMP/browser/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Exercise the web desk and the extension in Chromium
+        env:
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+          OFFTUBE_BROWSER_TESTS: required
+          PYTHON: python
+        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs tests/browser/background.test.mjs
 
   container:
-    runs-on: ubuntu-24.04
+    # Built natively on both architectures the image ships for: the Deno
+    # download is picked per architecture inside the build.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -48,8 +227,8 @@ jobs:
           persist-credentials: false
       - name: Build runtime image
         run: docker build --tag offtube:ci .
-      - name: Check packaged GIF worker
-        run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/gif_source.py
+      - name: Check packaged yt-dlp worker
+        run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/ytdlp_worker.py
       - name: Check HTTP startup
         run: |
           docker run --detach --name offtube-ci --publish 127.0.0.1:18000:8000 offtube:ci
@@ -57,6 +236,17 @@ jobs:
             --retry 10 --retry-delay 1 --retry-all-errors --retry-max-time 30 \
             --connect-timeout 2 --max-time 5 \
             http://127.0.0.1:18000/api/health
+      - name: Check child reaping and graceful stop
+        run: |
+          # An orphan is reparented to PID 1, which must reap it.
+          docker exec offtube-ci sh -c 'sleep 1 & exit 0'
+          sleep 2
+          zombies=$(docker exec offtube-ci sh -c 'cat /proc/[0-9]*/stat 2>/dev/null; true' \
+            | sed 's/.*) //' | awk '$1 == "Z"' | wc -l)
+          test "$zombies" -eq 0
+          # SIGTERM must stop offtube cleanly, well before the SIGKILL timeout.
+          docker stop --timeout 10 offtube-ci
+          test "$(docker inspect --format '{{.State.ExitCode}}' offtube-ci)" -eq 0
       - name: Container diagnostics and cleanup
         if: always()
         run: |

@@ -1,9 +1,11 @@
 """Unit tests for app.py pure helpers. No network, no yt-dlp needed."""
 
+import json
 import os
 import stat
 import sys
-from pathlib import Path
+import time
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -212,6 +214,47 @@ def test_safe_child_blocks_escape_and_dotfiles(name):
     assert app.safe_child(app.DOWNLOAD_DIR, name) is None
 
 
+@pytest.mark.parametrize("name, ok", [
+    ("Video [abc].mp4", True),
+    ("100%BE sale [x].mp4", True),       # verbatim: no URL decoding
+    ("back\\slash.jpg", os.sep != "\\"),  # a plain character on POSIX
+    ("", False), (".gitkeep", False), (".gif-0123456789ab-x", False),
+    ("a/b.mp4", False), ("..", False), ("nul\x00.mp4", False),
+    ("half.mp4.part", False), (None, False), (["x.mp4"], False),
+])
+def test_library_name(name, ok):
+    assert app.library_name(name) == (name if ok else None)
+
+
+@pytest.mark.parametrize("name", ["C:secret.txt", "C:", "D:escape.mp4", "c:relative"])
+def test_library_name_rejects_windows_drive_paths(name, monkeypatch):
+    monkeypatch.setattr(app, "Path", PureWindowsPath)
+    assert PureWindowsPath("D:/offtube/downloads") / "C:secret.txt" == PureWindowsPath("C:secret.txt")
+    assert app.library_name(name) is None
+    assert app.open_library_file(name) is None
+    assert app.delete_library_file(name) is None
+
+
+@pytest.mark.parametrize("quality", [None, "", "best", "2160", "720", "4320", "audio_mp3", "audio_m4a", "gif"])
+def test_quality_ids_accepted(quality):
+    app.validate_media_payload({"quality": quality})
+
+
+@pytest.mark.parametrize("quality", ["GIF", "Best", "4k", "720p", " 720", "99", "12345", "audio", "<b>x</b>"])
+def test_quality_ids_rejected(quality):
+    # "GIF" used to pick GIF's stream format but skip GIF encoding.
+    with pytest.raises(ValueError, match="quality"):
+        app.validate_media_payload({"quality": quality})
+
+
+def test_browser_profile_is_bounded_text():
+    payload = {"cookies_mode": "browser", "cookies_browser": "chrome"}
+    assert app.resolve_cookies({**payload, "cookies_browser_profile": "Profile 2"})["cookiesfrombrowser"][1] == "Profile 2"
+    for profile in ("x" * (app.MAX_PROFILE_LEN + 1), "Default\nother"):
+        with pytest.raises(ValueError, match="profile"):
+            app.resolve_cookies({**payload, "cookies_browser_profile": profile})
+
+
 # --- time parsing -----------------------------------------------------------
 @pytest.mark.parametrize("raw, want", [
     ("90", 90.0), ("1:30", 90.0), ("01:30", 90.0), ("1:02:03", 3723.0),
@@ -226,6 +269,35 @@ def test_format_seconds():
     assert app.format_seconds(None) == "-"
     assert app.format_seconds(90) == "1:30"
     assert app.format_seconds(3723) == "1:02:03"
+    assert app.format_seconds(12.9) == "0:12"
+    # Flat playlist entries skip yt-dlp's numeric checks.
+    for odd in ("90", float("inf"), float("nan"), -5, True, [90]):
+        assert app.format_seconds(odd) == "-"
+
+
+def test_playlist_count_from_an_extractor_is_coerced(monkeypatch):
+    from types import SimpleNamespace
+
+    class DL:
+        def __init__(self, opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def extract_info(self, url, download=False):
+            return {"_type": "playlist", "title": "P", "playlist_count": count,
+                    "entries": [{"id": "a", "duration": "n/a"}, {"id": "b", "duration": 61}]}
+
+    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
+    url = "https://www.youtube.com/playlist?list=PLxxxx"
+    for count, expected in (("<b>9</b>", 2), (True, 2), (-1, 2), (None, 2), (240, 240)):
+        info = app.fetch_info(url, {"cookies_mode": "none"})
+        assert info["count"] == expected
+    assert [e["duration_str"] for e in info["entries"]] == ["-", "1:01"]
 
 
 def test_format_bytes():
@@ -319,7 +391,10 @@ def test_cookie_write_does_not_follow_target_symlink(tmp_path, monkeypatch):
     outside = tmp_path / "outside.txt"
     outside.write_text("UNTOUCHED")
     target = app.cookie_file_for("linked")
-    target.symlink_to(outside)
+    try:
+        target.symlink_to(outside)
+    except OSError as exc:  # Windows without the symlink privilege
+        pytest.skip(f"symlinks are unavailable: {exc}")
     app.resolve_cookies({"cookies_mode": "text", "cookies_text": "SECRET"}, "linked")
     assert outside.read_text() == "UNTOUCHED"
     assert not target.is_symlink()
@@ -573,16 +648,14 @@ def test_fetch_info_no_retry_on_non_session_error(monkeypatch):
     assert len(calls) == 1
 
 
-def test_run_download_retries_session_failure_with_fallback(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
-    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
-    (tmp_path / "cookies").mkdir()
+def test_worker_retries_a_rejected_youtube_session(monkeypatch, capsys):
+    # Normal downloads run in tools/ytdlp_worker.py; the retry with
+    # alternate player clients happens there, and the deck is told.
     seen = []
 
     class DL:
         def __init__(self, opts):
-            self.opts = opts
+            seen.append(dict(opts))
 
         def __enter__(self):
             return self
@@ -591,24 +664,17 @@ def test_run_download_retries_session_failure_with_fallback(tmp_path, monkeypatc
             return False
 
         def download(self, urls):
-            seen.append(self.opts.get("extractor_args"))
-            if not self.opts.get("extractor_args"):
+            if len(seen) == 1:
                 raise app.DownloadError("The page needs to be reloaded")
-            (tmp_path / "V [x].mp4").write_bytes(b"v")
 
-    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
-    app.jobs.clear()
-    jid = "fallback1"
-    app.jobs[jid] = {"id": jid, "status": "queued", "progress": 0,
-                     "detail": "", "log": [], "files": []}
-    try:
-        app.run_download(jid, {"url": "https://youtu.be/xxxxxxxxxxx", "quality": "best"})
-        job = app.jobs[jid]
-        assert job["status"] == "done"
-        assert seen[1] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
-        assert any("alternate player" in ln for ln in job["log"])
-    finally:
-        app.jobs.clear()
+    monkeypatch.setattr(app.yt_dlp, "YoutubeDL", DL)
+    app.ytdlp_worker({"opts": {"format": "bv*+ba/b"}, "clip": None,
+                      "source": "youtube", "url": "https://youtu.be/xxxxxxxxxxx"})
+    assert len(seen) == 2
+    assert "match_filter" not in seen[0]  # GIF sources only
+    assert seen[1]["extractor_args"] == {"youtube": {"player_client": app.FALLBACK_PLAYER_CLIENTS}}
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert {"kind": "detail", "data": "Retrying with alternate players…"} in events
 
 
 # --- build_download_opts validation ------------------------------------------
@@ -646,6 +712,9 @@ def test_validate_path_writes_no_cookie_file(tmp_path, monkeypatch):
 
 def test_is_temp_file():
     assert app.is_temp_file("a.mp4.part")
+    # yt-dlp's HLS/DASH fragments: "<tmpfilename>-Frag<n>"
+    assert app.is_temp_file("Video [abc].f137.mp4.part-Frag12")
+    assert not app.is_temp_file("Notes-Frag1.txt")
     assert app.is_temp_file("a.temp")
     assert app.is_temp_file("a.ytdl")
     assert app.is_temp_file(".gitkeep")
@@ -740,6 +809,24 @@ def test_public_job_log_limit():
 
 
 # --- cross-job temp protection -------------------------------------------------
+def test_cleanup_job_temps_goes_on_past_a_file_it_cannot_remove(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    names = ["Clip [abc].f137.mp4.part", "Clip [abc].f251.webm.part", "Clip [abc].mp4.part"]
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+    unlink, held = Path.unlink, []
+
+    def busy(path, missing_ok=False):
+        if not held:  # the first one tried, as Windows refuses while a process holds it
+            held.append(path.name)
+            raise PermissionError(13, "The process cannot access the file")
+        return unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "unlink", busy)
+    app.cleanup_job_temps({"seen_files": names, "seen_ids": ["abc"]})
+    assert [p.name for p in tmp_path.iterdir()] == held
+
+
 def test_cleanup_job_temps_skips_file_another_live_job_writes(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     (tmp_path / "Video [abc].f137.mp4.part").write_bytes(b"partial")
@@ -1003,9 +1090,21 @@ if "-j" in args:
 d = pathlib.Path(args[args.index("-D") + 1])
 if "slow" in url:
     time.sleep(30)
+if "child" in url:  # an HLS pin: gallery-dl's yt-dlp runs ffmpeg under it
+    import subprocess
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    (d / "child.pid").write_text(str(child.pid))
+    print("[pinterest][info] merging fragments", flush=True)
+    time.sleep(60)
+if "silent" in url:  # one large file: nothing printed for a long time
+    time.sleep(60)
 if "fail" in url:
     print("[pinterest][error] Requested pin could not be found", flush=True)
     sys.exit(8)
+if "unicode" in url:
+    (d / "Café ☕ [1].jpg").write_bytes(b"img")
+    print(d / "Café ☕ [1].jpg", flush=True)
+    sys.exit(0)
 (d / "pinterest_1.jpg").write_bytes(b"img")
 print(d / "pinterest_1.jpg", flush=True)
 print("# " + str(d / "pinterest_0.jpg"), flush=True)
@@ -1091,6 +1190,18 @@ def test_run_gallery_collects_saved_and_existing(tmp_path, monkeypatch, fake_gal
         app.jobs.clear()
 
 
+def test_run_gallery_reads_names_in_utf8_whatever_the_platform(tmp_path, monkeypatch, fake_gallery):
+    # Python's pipes default to the ANSI code page on Windows (cp1252), as
+    # latin-1 does here: "☕" can't be written and "é" would come back garbled.
+    monkeypatch.setenv("PYTHONIOENCODING", "latin-1")
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    job = _gallery_job("g-utf8")
+    try:
+        assert app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?unicode") == ["Café ☕ [1].jpg"]
+    finally:
+        app.jobs.pop("g-utf8", None)
+
+
 def test_run_gallery_partial_keeps_files_and_warns(tmp_path, monkeypatch, fake_gallery):
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     job = _gallery_job("g-partial")
@@ -1112,28 +1223,13 @@ def test_run_gallery_nothing_saved_raises_last_error(tmp_path, monkeypatch, fake
 
 
 def test_run_download_falls_back_to_gallery_for_photo_posts(tmp_path, monkeypatch, fake_gallery):
-    from types import SimpleNamespace
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
     (tmp_path / "cookies").mkdir()
-
-    class DL:
-        def __init__(self, opts):
-            pass
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def download(self, urls):
-            raise app.DownloadError("ERROR: [twitter] 1: No video could be found in this tweet")
-
-    monkeypatch.setattr(app, "yt_dlp", SimpleNamespace(YoutubeDL=DL))
     job = _gallery_job("x-photos")
     try:
-        app.run_download("x-photos", {"url": "https://x.com/user/status/1234567890"})
+        # The fake worker fails this the way yt-dlp fails an image-only tweet.
+        app.run_download("x-photos", {"url": "https://x.com/user/status/1234567890?novideo"})
         assert job["status"] == "done", job["detail"]
         assert job["files"] == ["pinterest_1.jpg", "pinterest_0.jpg"]
         assert any("trying gallery-dl" in ln for ln in job["log"])
@@ -1174,6 +1270,20 @@ def test_run_download_disk_full_is_error_not_engine_fallback(tmp_path, monkeypat
         app.jobs.clear()
 
 
+def test_silent_gallery_work_stops_when_the_disk_runs_low(tmp_path, monkeypatch, fake_gallery):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "disk_low_locked", lambda job: True)
+    job = _gallery_job("g-silent")
+    started = time.monotonic()
+    try:
+        with pytest.raises(app.DownloadError, match="disk is almost full"):
+            app.run_gallery(job, {}, "https://www.pinterest.com/pin/1/?silent")
+        assert time.monotonic() - started < 5
+        assert "proc" not in job
+    finally:
+        app.jobs.clear()
+
+
 # --- the web UI's "works with" strip only names sites that resolve -------------------
 FEATURED = {
     "YouTube": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -1201,8 +1311,9 @@ FEATURED = {
 
 def test_featured_sources_in_web_ui_all_resolve():
     import re
-    html = (Path(app.__file__).parent / "web" / "index.html").read_text()
+    html = (Path(app.__file__).parent / "web" / "index.html").read_text(encoding="utf-8")
     strip = re.search(r'class="sources"[^>]*>(.*?)<span>', html).group(1)
+    strip = re.sub(r'<span class="visually-hidden">.*?</span>', "", strip)  # "Works with:"
     assert {n.strip() for n in strip.split("·") if n.strip()} == set(FEATURED)
     for label, url in FEATURED.items():
         assert app.resolve_source(url)["label"] == label, url
@@ -1217,10 +1328,14 @@ def test_display_thumbnail_only_http():
 
 
 @pytest.mark.parametrize("name, kind", [
-    ("Clip [abc].mp4", "video"), ("Song [x].mp3", "audio"), ("Track [x].m4a", "audio"),
-    ("pinterest_1.jpg", "image"), ("pin.png", "image"), ("subs.en.srt", "other"),
+    ("Clip [abc].mp4", "video"), ("Clip [abc].webm", "video"), ("Clip [abc].mkv", "video"),
+    ("Song [x].mp3", "audio"), ("Track [x].m4a", "audio"), ("Voice [x].opus", "audio"),
+    ("Take [x].flac", "audio"), ("pinterest_1.jpg", "image"), ("pin.png", "image"),
+    ("pin.webp", "image"), ("Loop [c].gif", "image"), ("subs.en.srt", "other"),
 ])
-def test_file_kind(name, kind):
+def test_file_kind(name, kind, monkeypatch):
+    # The same answer whatever the platform's own MIME database says.
+    monkeypatch.setattr(app.mimetypes, "guess_type", lambda *args, **kwargs: (None, None))
     assert app.file_kind(name) == kind
 
 
@@ -1262,3 +1377,28 @@ def test_failure_message_hides_tool_framing_when_it_can_explain():
     logged = app.failure_message("ERROR: [youtube] aaaaaaaaaaa: This video is unavailable",
                                  "YouTube", "Couldn’t keep this: ", logged=True)
     assert logged == "Couldn’t keep this: This video is unavailable"
+
+
+def test_progress_never_passes_the_estimate():
+    # total_bytes_estimate is often low; the overshoot must not read as
+    # 140% or bleed into the next playlist item's share of the meter.
+    app.jobs["est"] = {"id": "est", "status": "downloading", "progress": 0, "log": [], "files": []}
+    try:
+        app.progress_hook("est", {"status": "downloading", "downloaded_bytes": 140,
+                                  "total_bytes_estimate": 100, "filename": "/tmp/V [a].mp4"})
+        assert app.jobs["est"]["progress"] == 100
+        assert "140" not in app.jobs["est"]["detail"]
+        app.progress_hook("est", {"status": "downloading", "downloaded_bytes": 140, "total_bytes_estimate": 100,
+                                  "filename": "/tmp/V [a].mp4",
+                                  "info_dict": {"playlist_index": 2, "playlist_count": 4, "id": "a"}})
+        assert app.jobs["est"]["progress"] == 50
+    finally:
+        app.jobs.clear()
+
+
+def test_cleanup_job_temps_removes_fragments(tmp_path, monkeypatch):
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    fragment = tmp_path / "Video [abc].f137.mp4.part-Frag3"
+    fragment.write_bytes(b"partial")
+    app.cleanup_job_temps({"seen_files": ["Video [abc].f137.mp4.part"], "seen_ids": ["abc"]})
+    assert not fragment.exists()

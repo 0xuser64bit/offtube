@@ -33,23 +33,29 @@ from __future__ import annotations
 
 import datetime as _dt
 import concurrent.futures
+import email.utils
+import errno
 import functools
 import http.server
+import io
 import ipaddress
 import json
 import mimetypes
 import math
 import os
 import re
+import selectors
 import shutil
 import signal
 import socket
 import socketserver
+import stat
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import traceback
 import urllib.parse
 import uuid
 from pathlib import Path
@@ -84,6 +90,7 @@ except ImportError:  # pragma: no cover
 jobs: dict[str, dict] = {}
 futures: dict[str, concurrent.futures.Future] = {}
 jobs_lock = threading.Lock()
+shutting_down = False  # set once by shutdown_jobs(); no job starts after it
 # Bounded concurrency: at most 2 simultaneous yt-dlp runs; the rest queue in
 # the executor instead of spawning unbounded threads.
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dl")
@@ -152,10 +159,12 @@ ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\r")
 # their directories.
 
 MAX_JSON_BODY = 2 * 1024 * 1024  # full-browser cookie pastes can be MBs; trimmed after parse
+REQUEST_READ_DEADLINE = 30.0  # seconds to receive a whole request, head and body
 MAX_URL_LEN = 2000
 MAX_COOKIES_TEXT = 1024 * 1024  # raw paste cap; one site's rows surviving the trim are KBs
 MAX_PLAYLIST_ITEMS_LEN = 200
 MAX_SUB_LANG_LEN = 100
+MAX_PROFILE_LEN = 256  # a profile name, or the path to one
 MIN_DISK_FREE = 200 * 1024 * 1024  # refuse new downloads below 200 MB free
 DISK_CHECK_EVERY = 5.0  # seconds between free-space probes per running job
 DISK_FULL_MSG = "Stopped: the disk is almost full (<200 MB free). Free space and retry."
@@ -168,11 +177,13 @@ LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 # In-progress / fragment files yt-dlp leaves behind mid-download. These must
 # never appear in the library or in a job's claimed outputs.
 TEMP_SUFFIXES = (".part", ".temp", ".tmp", ".ytdl", ".ydl", ".frag")
+# HLS/DASH fragments are "<name>.part-Frag<n>" while a download runs.
+FRAGMENT_RE = re.compile(r"\.part-frag\d+$")
 
 
 def is_temp_file(name: str) -> bool:
     low = name.lower()
-    return low == ".gitkeep" or any(low.endswith(s) for s in TEMP_SUFFIXES)
+    return low == ".gitkeep" or any(low.endswith(s) for s in TEMP_SUFFIXES) or bool(FRAGMENT_RE.search(low))
 
 
 class HttpError(Exception):
@@ -258,9 +269,26 @@ def display_thumbnail(value) -> str | None:
     return s if s.startswith(("https://", "http://")) and len(s) <= MAX_URL_LEN else None
 
 
+# One table on every platform. mimetypes' module functions also read
+# /etc/mime.types or, on Windows, the registry, where .js can be text/plain
+# (which nosniff then refuses to run) and .woff2 or .mkv can be missing.
+MEDIA_TYPES = mimetypes.MimeTypes()
+for _ext, _type in {
+    ".js": "text/javascript", ".mjs": "text/javascript", ".woff2": "font/woff2", ".woff": "font/woff",
+    ".mkv": "video/x-matroska", ".m4v": "video/x-m4v", ".m4a": "audio/mp4", ".ogg": "audio/ogg",
+    ".opus": "audio/opus", ".flac": "audio/flac", ".webp": "image/webp", ".avif": "image/avif",
+    ".heic": "image/heic", ".vtt": "text/vtt", ".srt": "application/x-subrip",
+}.items():
+    MEDIA_TYPES.add_type(_type, _ext)
+
+
+def media_type(name: str) -> str:
+    return MEDIA_TYPES.guess_type(name)[0] or "application/octet-stream"
+
+
 def file_kind(name: str) -> str:
     """'video' | 'audio' | 'image' | 'other', for library thumbnails."""
-    major = (mimetypes.guess_type(name)[0] or "").split("/")[0]
+    major = media_type(name).split("/")[0]
     return major if major in ("video", "audio", "image") else "other"
 
 
@@ -451,6 +479,133 @@ def safe_child(base: Path, name: str) -> Path | None:
     return candidate
 
 
+# The library is downloads/'s regular files: never dotfiles (.gitkeep, the
+# private .gif-* folders), in-progress temps, symlinks or special files.
+# Listing, serving and deleting share this one definition, so a listed name
+# is exactly what /files/ serves and nothing else is reachable.
+LIBRARY_PAGE_MAX = 500
+LIBRARY_KINDS = ("all", "video", "audio", "image", "gif")
+
+
+def library_name(name) -> str | None:
+    """`name` if it can name a kept file: one path component, taken verbatim."""
+    if not isinstance(name, str) or not name or name.startswith(".") or "\x00" in name:
+        return None
+    if Path(name).anchor or any(sep in name for sep in (os.sep, os.altsep) if sep) or is_temp_file(name):
+        return None
+    return name
+
+
+def library_snapshot() -> list[tuple[str, os.stat_result]]:
+    """Every kept file, newest first, from one pass with one lstat per entry.
+    A file that vanishes mid-scan (deleted, or renamed by an engine) is skipped.
+    The lstat is our own: Windows' scandir answers stat() from the listing,
+    which still has a file deleted since."""
+    found: list[tuple[str, os.stat_result]] = []
+    with os.scandir(DOWNLOAD_DIR) as entries:
+        for entry in entries:
+            if library_name(entry.name) is None:
+                continue
+            try:
+                info = os.lstat(entry.path)
+            except OSError:
+                continue
+            if stat.S_ISREG(info.st_mode):
+                found.append((entry.name, info))
+    found.sort(key=lambda item: (-item[1].st_mtime, item[0]))
+    return found
+
+
+def library_page(query: str = "", kind: str = "all", offset: int = 0,
+                 limit: int = LIBRARY_PAGE_MAX) -> dict:
+    """One page of the library, filtered by a name fragment and a kind, with
+    the library's total and how many files match. Searching here, not in the
+    client, reaches every file however large the library grows."""
+    snapshot = library_snapshot()
+    needle = query.casefold()
+    matched = [(name, info) for name, info in snapshot
+               if needle in name.casefold()
+               and (kind == "all" or (name.lower().endswith(".gif") if kind == "gif"
+                                      else file_kind(name) == kind))]
+    return {
+        "files": [{
+            "name": name,
+            "size": info.st_size,
+            "size_str": format_bytes(info.st_size) or "?",
+            "modified": _dt.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds"),
+            "url": f"/files/{urllib.parse.quote(name)}",
+            "kind": file_kind(name),
+        } for name, info in matched[offset:offset + limit]],
+        "total": len(snapshot),
+        "matched": len(matched),
+    }
+
+
+def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
+    """A kept file opened for reading plus its fstat, or None. The descriptor
+    is checked rather than the path: open refuses a symlink (O_NOFOLLOW) and
+    never blocks on a FIFO (O_NONBLOCK), and fstat refuses anything but a
+    regular file, so the bytes and length served belong to one file."""
+    name = library_name(name)
+    if name is None:
+        return None
+    path = DOWNLOAD_DIR / name
+    if not hasattr(os, "O_NOFOLLOW") and path.is_symlink():
+        return None
+    flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+             | getattr(os, "O_BINARY", 0))
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    handle = os.fdopen(fd, "rb")
+    try:
+        info = os.fstat(fd)
+        if stat.S_ISREG(info.st_mode):
+            return handle, info
+    except OSError:
+        pass
+    handle.close()
+    return None
+
+
+def byte_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """The one byte range a Range header asks of a `size`-byte file, as an
+    inclusive (first, last), or None to send it whole: no header, an empty
+    file, several ranges or a malformed one (RFC 9110 lets a server ignore
+    those). Raises HttpError(416) for a range that starts past the end."""
+    match = re.fullmatch(r"\s*bytes\s*=\s*(\d{0,20})\s*-\s*(\d{0,20})\s*", header or "", re.IGNORECASE)
+    if not match or size <= 0 or not (match[1] or match[2]):
+        return None
+    if not match[1]:  # a suffix: the final N bytes
+        if int(match[2]) == 0:
+            raise HttpError(416, "Range not satisfiable.")
+        return max(0, size - int(match[2])), size - 1
+    first = int(match[1])
+    if match[2] and int(match[2]) < first:
+        return None  # an invalid spec, not an unsatisfiable one
+    if first >= size:
+        raise HttpError(416, "Range not satisfiable.")
+    return first, min(int(match[2]), size - 1) if match[2] else size - 1
+
+
+def delete_library_file(name) -> str | None:
+    """Unlink a kept file and return its name, or None if there's no such
+    file. The entry itself is checked (lstat), so deleting a symlink can
+    never resolve into deleting the file it points at."""
+    name = library_name(name)
+    if name is None:
+        return None
+    path = DOWNLOAD_DIR / name
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+    except FileNotFoundError:
+        return None
+    path.unlink()
+    return name
+
+
 def clean_text(value, limit: int = 2000) -> str:
     """Strip ANSI codes, carriage returns and C0 controls so text is JSON-safe
     and displays cleanly in the UI log."""
@@ -499,7 +654,9 @@ def parse_time_to_seconds(value: str | None) -> float | None:
 
 
 def format_seconds(sec: float | None) -> str:
-    if sec is None:
+    """'1:02:03' for a duration; '-' for anything that isn't a sane number
+    (flat playlist entries skip yt-dlp's numeric checks)."""
+    if isinstance(sec, bool) or not isinstance(sec, (int, float)) or not math.isfinite(sec) or sec < 0:
         return "-"
     sec = int(sec)
     h, rem = divmod(sec, 3600)
@@ -561,20 +718,25 @@ def cleanup_job_temps(job: dict | None) -> None:
     """
     if not job:
         return
+    with jobs_lock:
+        others = [j for j in jobs.values()
+                  if j.get("id") != job.get("id") and not is_terminal(j)]
     try:
-        with jobs_lock:
-            others = [j for j in jobs.values()
-                      if j.get("id") != job.get("id") and not is_terminal(j)]
-        for p in DOWNLOAD_DIR.iterdir():
-            if not p.is_file() or not is_temp_file(p.name):
-                continue
-            if not _job_claims_name(job, p.name):
-                continue
-            if any(_job_claims_name(o, p.name) for o in others):
-                continue
-            p.unlink(missing_ok=True)
+        entries = list(DOWNLOAD_DIR.iterdir())
     except OSError:
-        pass
+        return
+    for p in entries:
+        if not is_temp_file(p.name) or not _job_claims_name(job, p.name):
+            continue
+        if any(_job_claims_name(o, p.name) for o in others):
+            continue
+        # One file that can't go (on Windows, one a just-stopped process
+        # still holds) must not keep the others; the startup sweep retries.
+        try:
+            if p.is_file():
+                p.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 # Full-browser exports carry MBs of unrelated sites (bank, mail, ...), so a
@@ -780,6 +942,8 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
         if browser not in allowed:
             raise ValueError(f"Unsupported browser '{browser}'. Use one of: {', '.join(sorted(allowed))}.")
         profile = (payload.get("cookies_browser_profile") or "").strip() or None
+        if profile and (len(profile) > MAX_PROFILE_LEN or any(ord(ch) < 32 for ch in profile)):
+            raise ValueError("That browser profile name doesn't look right.")
         # yt-dlp python API expects a tuple: (browser, profile, keyring, container)
         opts["cookiesfrombrowser"] = (browser, profile, None, None)
         return opts
@@ -829,7 +993,8 @@ def node_meets_yt_dlp(version: str | None) -> bool:
 
 def _cmd_version(argv: list[str]) -> str | None:
     try:
-        out = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        out = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=5)
     except Exception:
         return None
     text = (out.stdout or out.stderr or "").strip()
@@ -981,6 +1146,10 @@ def validate_media_payload(payload: dict) -> None:
     ):
         if (payload.get(field) or default).lower() not in allowed:
             raise ValueError(f"{field} must be one of: {', '.join(allowed)}.")
+    # Exact ids: "GIF" would pick GIF's stream format but skip its encoding.
+    quality = payload.get("quality")
+    if quality and quality not in QUALITY_FORMATS and not re.fullmatch(r"[1-9]\d{2,3}", quality):
+        raise ValueError("quality must be best, a height such as 720, audio_mp3, audio_m4a or gif.")
 
 
 def fetch_info(url: str, payload: dict) -> dict:
@@ -1056,11 +1225,14 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
                     "thumbnail": entry_thumbnail(e),
                 }
             )
+        # Not among yt-dlp's sanitized numeric fields: an extractor can put
+        # anything here, and clients print it.
+        count = info.get("playlist_count")
         return {
             "type": "playlist",
             "title": info.get("title"),
             "uploader": info.get("uploader"),
-            "count": info.get("playlist_count") or len(entries),
+            "count": count if type(count) is int and count > 0 else len(entries),
             "entries": entries,
             "thumbnail": (entries[0].get("thumbnail") if entries else info.get("thumbnail")),
             "webpage_url": info.get("webpage_url") or url,
@@ -1088,6 +1260,61 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
     }
 
 
+# ------------------------------- child processes -------------------------------
+# Every child offtube starts leads its own process group, so stopping a job
+# stops everything under it: gallery-dl's ffmpeg for an HLS pin, the GIF
+# source worker's ffmpeg for a range. A terminal's Ctrl+C therefore no
+# longer reaches them by itself; shutdown stops each job's tree instead.
+
+OWN_PROCESS_GROUP = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
+                     else {"start_new_session": True})
+
+
+def stop_process_tree(proc: subprocess.Popen, wait: float | None = 5) -> None:
+    """Kill a child started with OWN_PROCESS_GROUP and everything it spawned.
+    With wait=None it only signals, so it is safe under jobs_lock; the
+    thread that owns `proc` reaps it."""
+    if proc.pid <= 0:
+        return  # killpg(0) would mean our own group
+    if os.name == "nt":
+        kill = ["taskkill", "/PID", str(proc.pid), "/T", "/F"]
+        quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if wait is None:
+            subprocess.Popen(kill, **quiet)
+        else:
+            subprocess.run(kill, timeout=5, **quiet)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass  # the group is gone, or holds only zombies (macOS: EPERM)
+    if wait is not None:
+        proc.wait(timeout=wait)
+
+
+def job_must_stop_locked(job: dict) -> bool:
+    """True once a job is cancelled or the disk runs low (which also marks it
+    disk_full). Call with jobs_lock held."""
+    if job.get("cancel_requested"):
+        return True
+    if disk_low_locked(job):
+        job["disk_full"] = True
+        return True
+    return False
+
+
+def watch_job_process(job: dict, proc: subprocess.Popen, done: threading.Event) -> None:
+    """Stop `proc`'s tree once its job must stop, checked on a timer: a child
+    busy with one large file can be silent for minutes, so this can't wait
+    for its next line of output."""
+    while not done.wait(0.25):
+        with jobs_lock:
+            stop = job_must_stop_locked(job)
+        if stop:
+            stop_process_tree(proc, wait=None)
+            return
+
+
 # ------------------------------- gallery-dl engine -------------------------------
 # Runs as a subprocess, not via the Python API: gallery-dl's config is
 # process-global, so two jobs with different cookies would trample each
@@ -1095,6 +1322,15 @@ def inspect_ytdlp(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
 
 GALLERY_INSPECT_LIMIT = 50
 VIDEO_EXTS = frozenset({"mp4", "webm", "mov", "m4v", "mkv"})
+
+
+def python_child_env() -> dict:
+    """Environment for the Python programs offtube starts (gallery-dl, the
+    yt-dlp worker): unbuffered, and UTF-8 on their standard streams, which
+    is how offtube reads and writes them. Their default is the platform's
+    encoding, the ANSI code page on Windows, which can't write every file
+    name and garbles the rest."""
+    return {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8"}
 
 
 def gallery_cmd(payload: dict, cookie_id: str) -> list[str]:
@@ -1153,7 +1389,7 @@ def inspect_gallery(url: str, payload: dict, src: dict, cookie_id: str) -> dict:
         "-j", "--range", f"1-{GALLERY_INSPECT_LIMIT}", "--", url]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                             errors="replace", timeout=90)
+                             errors="replace", timeout=90, env=python_child_env())
     except subprocess.TimeoutExpired:
         raise RuntimeError("gallery-dl took too long to list that link.")
     try:
@@ -1209,11 +1445,15 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     # Unbuffered: a piped child would otherwise hold its lines until exit.
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding="utf-8", errors="replace",
-                            env={**os.environ, "PYTHONUNBUFFERED": "1"})
+                            env=python_child_env(), **OWN_PROCESS_GROUP)
+    done = threading.Event()
+    watchdog = threading.Thread(target=watch_job_process, args=(job, proc, done),
+                                name=f"watch-{job['id']}", daemon=True)
     with jobs_lock:
-        job["proc"] = proc  # internal: /api/cancel terminates it
+        job["proc"] = proc  # internal: /api/cancel and shutdown stop its tree
         job["status"] = "downloading"
         job["detail"] = "Fetching…"
+    watchdog.start()
     root = destination.resolve()
     files: list[str] = []
     errors: list[str] = []
@@ -1233,17 +1473,17 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
                     job["log"] = job["log"][-200:]
                     if "][error]" in line:
                         errors.append(line.split("][error]", 1)[1].strip())
-                # ponytail: checked per output line, so one huge file can
-                # overshoot; poll on a timer if that ever bites.
-                if job.get("cancel_requested"):
-                    proc.terminate()
-                elif disk_low_locked(job):
-                    job["disk_full"] = True
-                    proc.terminate()
+                # Lines answer as fast as gallery-dl talks; the watchdog
+                # covers its silences.
+                if job_must_stop_locked(job):
+                    stop_process_tree(proc, wait=None)
         proc.wait()
     finally:
-        if proc.poll() is None:
-            proc.kill()
+        done.set()
+        watchdog.join()
+        # Finished or stopped, nothing gallery-dl started may outlive the job.
+        stop_process_tree(proc)
+        proc.stdout.close()
         with jobs_lock:
             job.pop("proc", None)
     if job.get("cancel_requested"):
@@ -1261,16 +1501,17 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     return files
 
 
-def build_download_opts(job: dict, payload: dict, persist: bool = True,
-                        player_clients: list[str] | None = None) -> dict:
+def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
+    """yt-dlp options for a download, as plain data for the worker process,
+    which adds the hooks, logger and filters. Raises ValueError for a bad
+    request, which is also how enqueue_download validates one."""
     quality = payload.get("quality") or "best"
     fmt = quality_to_format(quality)
     # Titles on TikTok/X/Instagram are whole captions; cap the bytes so the
     # name stays under the 255-byte filesystem limit and keeps its [id].
     outtmpl = str(DOWNLOAD_DIR / "%(title).150B [%(id)s].%(ext)s")
 
-    opts = base_ydl_opts(payload, job.get("id"), persist=persist,
-                         player_clients=player_clients)
+    opts = base_ydl_opts(payload, job.get("id"), persist=persist)
     opts.update(
         {
             "format": fmt,
@@ -1279,17 +1520,10 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True,
             "writethumbnail": False,
             "writeinfojson": False,
             "continuedl": True,
-            "progress_hooks": [lambda d, jid=job["id"]: progress_hook(jid, d)],
-            "postprocessor_hooks": [lambda d, jid=job["id"]: postprocessor_hook(jid, d)],
-            "logger": JobLogger(job["id"]),
         }
     )
     if quality == "gif":
         gif_settings(payload)
-        opts["match_filter"] = lambda info, *, incomplete=False: gif_source_filter(info, payload, incomplete)
-        if job.get("gif_dir"):
-            opts["outtmpl"] = str(Path(job["gif_dir"]) / "%(title).150B [%(id)s].%(ext)s")
-            opts["post_hooks"] = [lambda filename: convert_gif(job, Path(filename), payload, trimmed=True)]
     if quality == "audio_mp3":
         opts["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "192"}
@@ -1300,19 +1534,16 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True,
         ]
 
     # Clip trim (from-to) — same as --download-sections "*from-to" (needs ffmpeg).
-    # NOTE: the Python API needs a callback, not a plain list (see yt-dlp __init__).
     clip_from = parse_time_to_seconds(payload.get("clip_from")) if (payload.get("clip_from") or "").strip() else None
     clip_to = parse_time_to_seconds(payload.get("clip_to")) if (payload.get("clip_to") or "").strip() else None
     if clip_to is not None and clip_to <= (clip_from or 0):
         raise ValueError("'To' must be after 'From'.")
     if clip_from is not None or clip_to is not None:
-        try:
-            from yt_dlp.utils import download_range_func
-        except ImportError:
+        if yt_dlp is None:
             raise ValueError("Trimming needs yt-dlp installed: pip install -r requirements.txt")
-        start = clip_from if clip_from is not None else 0
-        end = clip_to if clip_to is not None else float("inf")
-        opts["download_ranges"] = download_range_func([], [(start, end)])
+        # The worker turns this into yt-dlp's range callback; no end is None.
+        opts["download_ranges"] = [{"start_time": clip_from if clip_from is not None else 0,
+                                    "end_time": clip_to}]
         opts["force_keyframes_at_cuts"] = True
 
     # Playlist controls
@@ -1381,7 +1612,9 @@ def gif_source_filter(info: dict, payload: dict, incomplete: bool = False) -> No
         raise DownloadError("The GIF start time is past the end of this video.")
 
 
-def check_gif_job(job: dict) -> None:
+def check_job(job: dict) -> None:
+    """Raise if the job was cancelled or the disk ran low; for loops that
+    watch a child process rather than being called back by yt-dlp."""
     with jobs_lock:
         if job.get("cancel_requested"):
             raise DownloadError("Cancelled by user.")
@@ -1390,8 +1623,10 @@ def check_gif_job(job: dict) -> None:
             raise DownloadError(DISK_FULL_MSG)
 
 
-def gif_source_worker(request: dict) -> None:
-    """Isolated yt-dlp API worker; stdout is a stream of JSON events."""
+def ytdlp_worker(request: dict) -> None:
+    """The yt-dlp side of tools/ytdlp_worker.py: one download from a JSON
+    request, reported as JSON events on stdout. A request with a "clip" is a
+    GIF source and refuses live streams and a start past the end."""
     def emit(kind, data):
         print(json.dumps({"kind": kind, "data": data}), flush=True)
 
@@ -1417,11 +1652,15 @@ def gif_source_worker(request: dict) -> None:
             "id", "title", "thumbnail", "playlist_index", "playlist_count")}
         emit("progress", event)
 
+    if yt_dlp is None:
+        emit("error", "yt-dlp is not installed. Run: pip install -r requirements.txt")
+        raise SystemExit(1)
     opts = request["opts"]
     if "cookiesfrombrowser" in opts:
         opts["cookiesfrombrowser"] = tuple(opts["cookiesfrombrowser"])
-    ranges = request.get("ranges")
+    ranges = opts.get("download_ranges")
     if ranges is not None:
+        # yt-dlp's Python API takes a callback here, not a list.
         from yt_dlp.utils import download_range_func
         opts["download_ranges"] = download_range_func([], [
             (item["start_time"], item["end_time"] if item["end_time"] is not None else float("inf"))
@@ -1429,8 +1668,9 @@ def gif_source_worker(request: dict) -> None:
     opts.update(logger=Logger(), progress_hooks=[progress],
                 postprocessor_hooks=[lambda data: emit("postprocessor", {
                     "status": data.get("status"), "postprocessor_name": data.get("postprocessor_name")})],
-                post_hooks=[lambda filename: emit("file", filename)],
-                match_filter=lambda info, *, incomplete=False: gif_source_filter(info, request["clip"], incomplete))
+                post_hooks=[lambda filename: emit("file", filename)])
+    if request.get("clip") is not None:
+        opts["match_filter"] = lambda info, *, incomplete=False: gif_source_filter(info, request["clip"], incomplete)
     try:
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -1438,7 +1678,10 @@ def gif_source_worker(request: dict) -> None:
         except DownloadError as exc:
             if request["source"] != "youtube" or not _is_session_failure(str(exc)):
                 raise
+            # Same session, different player clients, visible in the log so a
+            # repeated failure clearly means the session itself is bad.
             emit("log", "Session rejected by default players — retrying with alternate player clients…")
+            emit("detail", "Retrying with alternate players…")
             opts.setdefault("extractor_args", {}).setdefault("youtube", {})["player_client"] = FALLBACK_PLAYER_CLIENTS
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.download([request["url"]])
@@ -1447,103 +1690,117 @@ def gif_source_worker(request: dict) -> None:
         raise SystemExit(1)
 
 
-def stop_gif_source(proc: subprocess.Popen) -> None:
-    """The source worker can own an FFmpeg child while downloading a range."""
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-    else:
+def ytdlp_worker_cmd() -> list[str]:
+    return [sys.executable, "-u", str(BASE_DIR / "tools" / "ytdlp_worker.py")]
+
+
+def worker_request(job: dict, payload: dict, url: str, src: dict,
+                   gif_folder: Path | None = None) -> dict:
+    """What the worker process is asked to do, as JSON. A GIF source goes to
+    `gif_folder`, numbered so repeated playlist entries stay apart, and the
+    worker refuses one that can't make a GIF."""
+    opts = build_download_opts(job, payload)
+    if gif_folder is not None:
+        opts["outtmpl"] = str(gif_folder.resolve() / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
+    return {"opts": opts, "url": url, "source": src["id"],
+            "clip": {"clip_from": payload.get("clip_from")} if gif_folder is not None else None}
+
+
+def run_ytdlp_worker(job: dict, payload: dict, url: str, src: dict, *,
+                     gif_folder: Path | None = None) -> tuple[list[Path], int, list[str]]:
+    """Run one yt-dlp download in the worker process and follow it: its
+    events update the job, and cancel or low disk stop its whole tree within
+    a fraction of a second, whatever yt-dlp is doing. Returns the files it
+    reported, its exit status and its error messages."""
+    check_job(job)
+    request = worker_request(job, payload, url, src, gif_folder)
+    root = (gif_folder or DOWNLOAD_DIR).resolve()
+    files: list[Path] = []
+    errors: list[str] = []
+    # A file, not a pipe: a full pipe would stall the worker, and the loop
+    # reads it on its own schedule while checking cancel and disk.
+    descriptor, log_name = tempfile.mkstemp(prefix=f"offtube-{job['id']}-", suffix=".log")
+    os.close(descriptor)
+    try:
+        with open(log_name, "w+b") as output, open(log_name, "rb") as reader:
+            proc = subprocess.Popen(ytdlp_worker_cmd(), stdin=subprocess.PIPE, stdout=output,
+                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                                    env=python_child_env(), **OWN_PROCESS_GROUP)
+            with jobs_lock:
+                job["proc"] = proc
+                if gif_folder is not None:
+                    job.update(status="downloading", detail="Fetching GIF source…")
+            pending = b""
+            try:
+                proc.stdin.write(json.dumps(request))
+                proc.stdin.close()
+                while True:
+                    check_job(job)
+                    try:
+                        proc.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    pending += reader.read()
+                    lines = pending.split(b"\n")
+                    pending = lines.pop()
+                    for raw in lines:
+                        try:
+                            event = json.loads(raw)
+                        except ValueError:
+                            JobLogger(job["id"]).info(raw.decode("utf-8", "replace"))
+                            continue
+                        kind, data = event.get("kind"), event.get("data")
+                        if kind == "progress":
+                            progress_hook(job["id"], data)
+                        elif kind == "postprocessor":
+                            postprocessor_hook(job["id"], data)
+                        elif kind == "file":
+                            path = Path(data).resolve()
+                            if not path.is_relative_to(root) or not path.is_file():
+                                raise DownloadError("The download was not saved where offtube expected it.")
+                            if path not in files:
+                                files.append(path)
+                        elif kind == "error":
+                            errors.append(str(data))
+                        elif kind == "log":
+                            JobLogger(job["id"]).info(data)
+                        elif kind == "detail":
+                            with jobs_lock:
+                                job["detail"] = clean_text(data, 500)
+                    if proc.returncode is not None:
+                        break
+                check_job(job)
+            finally:
+                if proc.poll() is None or proc.returncode:
+                    stop_process_tree(proc)
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.close()
+                with jobs_lock:
+                    job.pop("proc", None)
+    finally:
         try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
+            os.unlink(log_name)
+        except OSError:
             pass
-    proc.wait(timeout=5)
+    return files, proc.returncode, errors
 
 
 def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
-    """Poll a private source process so silent extraction and range downloads cancel."""
-    check_gif_job(job)
-    opts = build_download_opts(job, payload)
-    ranges = opts.pop("download_ranges", None)
-    ranges = list(ranges({}, None)) if ranges is not None else None
-    if ranges is not None:
-        ranges = [{**item, "end_time": item["end_time"] if math.isfinite(item["end_time"]) else None}
-                  for item in ranges]
-    for key in ("logger", "progress_hooks", "postprocessor_hooks", "post_hooks", "match_filter"):
-        opts.pop(key, None)
-    folder = Path(job["gif_dir"]).resolve()
-    # Repeated playlist entries need separate sources until acquisition finishes.
-    opts["outtmpl"] = str(folder / "%(autonumber)06d" / Path(opts["outtmpl"]).name)
-    request = {"opts": opts, "ranges": ranges, "url": url, "source": src["id"],
-               "clip": {"clip_from": payload.get("clip_from")}}
-    creation = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
-                else {"start_new_session": True})
-    files, errors = [], []
-    log_path = folder / "source.log"
-    with log_path.open("w+b") as output, log_path.open("rb") as reader:
-        proc = subprocess.Popen([sys.executable, "-u", str(BASE_DIR / "tools" / "gif_source.py")],
-                                stdin=subprocess.PIPE, stdout=output, stderr=subprocess.STDOUT,
-                                text=True, encoding="utf-8", **creation)
-        with jobs_lock:
-            job.update(proc=proc, gif_source_active=True, status="downloading", detail="Fetching GIF source…")
-        pending = b""
-        try:
-            proc.stdin.write(json.dumps(request))
-            proc.stdin.close()
-            while True:
-                check_gif_job(job)
-                try:
-                    proc.wait(timeout=0.2)
-                except subprocess.TimeoutExpired:
-                    pass
-                pending += reader.read()
-                lines = pending.split(b"\n")
-                pending = lines.pop()
-                for raw in lines:
-                    try:
-                        event = json.loads(raw)
-                    except ValueError:
-                        JobLogger(job["id"]).info(raw.decode("utf-8", "replace"))
-                        continue
-                    kind, data = event.get("kind"), event.get("data")
-                    if kind == "progress":
-                        progress_hook(job["id"], data)
-                    elif kind == "postprocessor":
-                        postprocessor_hook(job["id"], data)
-                    elif kind == "file":
-                        path = Path(data).resolve()
-                        if not path.is_relative_to(folder) or not path.is_file():
-                            raise DownloadError("The GIF source was not saved in its private folder.")
-                        if path not in files:
-                            files.append(path)
-                    elif kind == "error":
-                        errors.append(str(data))
-                    elif kind == "log":
-                        JobLogger(job["id"]).info(data)
-                if proc.returncode is not None:
-                    break
-            check_gif_job(job)
-        finally:
-            if proc.poll() is None or proc.returncode:
-                stop_gif_source(proc)
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
-            with jobs_lock:
-                job.pop("proc", None)
-                job.pop("gif_source_active", None)
+    """Fetch GIF sources into the job's private folder, then encode them."""
+    files, code, errors = run_ytdlp_worker(job, payload, url, src, gif_folder=Path(job["gif_dir"]))
     if not files:
-        if proc.returncode:
+        if code:
             raise DownloadError(errors[-1] if errors else "Couldn’t fetch this GIF source; details are in the log.")
         return
     convert_gif_batch(job, payload, files, trimmed=True)
-    if proc.returncode:
+    if code:
         note = errors[-1] if errors else "The GIF source ended early."
         JobLogger(job["id"]).warning(f"{note} Finished GIFs were kept.")
 
 
 def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                    start_pct: float, end_pct: float, duration: float) -> None:
-    check_gif_job(job)
+    check_job(job)
     with jobs_lock:
         job.update(status="processing", detail=detail, progress=start_pct, speed=None, eta=None)
     # A file avoids full pipes stalling cancellation while ffmpeg is silent.
@@ -1551,12 +1808,12 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
     with log_path.open("w+b") as progress, log_path.open("rb") as reader:
         proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                                  "-nostats", "-progress", "pipe:1", "-y", *args],
-                                stdout=progress, stderr=subprocess.STDOUT)
+                                stdout=progress, stderr=subprocess.STDOUT, **OWN_PROCESS_GROUP)
         with jobs_lock:
             job["proc"] = proc
         try:
             while True:
-                check_gif_job(job)
+                check_job(job)
                 try:
                     proc.wait(timeout=0.2)
                 except subprocess.TimeoutExpired:
@@ -1572,14 +1829,12 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                         job["progress"] = round(start_pct + (end_pct - start_pct) * fraction, 1)
                 if proc.returncode is not None:
                     break
-            check_gif_job(job)
+            check_job(job)
             if proc.returncode:
                 JobLogger(job["id"]).error(tail[-2000:])
                 raise DownloadError("GIF conversion failed. Try a shorter range or smaller size; details are in the log.")
         finally:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait()
+            stop_process_tree(proc)
             with jobs_lock:
                 job.pop("proc", None)
 
@@ -1587,10 +1842,10 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
 def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False,
                 part: tuple[int, int] = (0, 1)) -> None:
     size, fps, loop = gif_settings(payload)
-    check_gif_job(job)
+    check_job(job)
     probe = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
                             "-show_entries", "stream=codec_type:format=duration", "-of", "json", str(source)],
-                           capture_output=True, text=True, timeout=20)
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
     try:
         metadata = json.loads(probe.stdout)
         duration = float(metadata.get("format", {}).get("duration", 0))
@@ -1625,7 +1880,7 @@ def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False
                         f"[0:v:0]{filters}[v];[v][1:v]paletteuse=dither=sierra2_4a:diff_mode=rectangle[out]",
                         "-map", "[out]", "-an", "-loop", "0" if loop else "-1", str(output)],
                    "GIF · encoding frames…", color_end, encode_end, duration)
-    check_gif_job(job)
+    check_job(job)
     if not output.is_file() or output.stat().st_size == 0:
         raise DownloadError("No GIF frames were created. Choose a longer time range.")
     stem = source.stem.lstrip(".").encode("utf-8")[:150].decode("utf-8", "ignore") or "Video"
@@ -1646,7 +1901,7 @@ def convert_gif_batch(job: dict, payload: dict, sources: list[Path], *, trimmed:
     last = None
     count = len(sources)
     for index, source in enumerate(sources):
-        check_gif_job(job)
+        check_job(job)
         try:
             convert_gif(job, source, payload, trimmed=trimmed, part=(index, count))
         except DownloadError as exc:
@@ -1717,7 +1972,7 @@ def progress_hook(job_id: str, d: dict):
         job = jobs.get(job_id)
         if not job:
             return
-        # Cooperative cancel: run_download's hooks raise to abort yt-dlp.
+        # Raising ends the worker's event loop, which then stops the worker.
         if job.get("cancel_requested"):
             raise DownloadError("Cancelled by user.")
         if status == "downloading" and disk_low_locked(job):
@@ -1769,7 +2024,8 @@ def progress_hook(job_id: str, d: dict):
             job["speed"] = d.get("speed")
             job["eta"] = d.get("eta")
             job["filename"] = clean_text(d.get("filename") or job.get("filename"), 500)
-            file_pct = round(downloaded / total * 100, 1) if total else 0
+            # total_bytes_estimate can be low: an overshoot reads as 100%, not 140%.
+            file_pct = round(min(1.0, downloaded / total) * 100, 1) if total else 0
             pl_count_v = job.get("playlist_count")
             pl_index_v = job.get("playlist_index")
             overall = None
@@ -1893,7 +2149,7 @@ def run_download(job_id: str, payload: dict):
             job = jobs.get(job_id)
             if job is None:
                 return
-            # Cooperative cancel lands here (hooks raise DownloadError).
+            # A cancel lands here: check_job and the hooks raise DownloadError.
             if "Cancelled by user" in msg or (job and job.get("cancel_requested")):
                 job["status"] = "cancelled"
                 job["detail"] = "Cancelled."
@@ -1934,23 +2190,14 @@ def run_download(job_id: str, payload: dict):
 
 
 def run_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
-    assert yt_dlp is not None, "yt-dlp is not installed. Run: pip install -r requirements.txt"
-    opts = build_download_opts(job, payload)
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except DownloadError as exc:
-        if (src["id"] != "youtube" or not _is_session_failure(str(exc))
-                or job.get("cancel_requested")):
-            raise
-        # Same session, different player clients — visible in the UI log
-        # so a repeated failure clearly means the session itself is bad.
-        with jobs_lock:
-            job["log"].append("Session rejected by default players — retrying with alternate player clients…")
-            job["detail"] = "Retrying with alternate players…"
-        opts = build_download_opts(job, payload, player_clients=FALLBACK_PLAYER_CLIENTS)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
+    """A normal download, in the worker process: a cancel or shutdown stops
+    it at once even mid-extraction or mid-merge. The worker also retries a
+    rejected YouTube session with alternate player clients."""
+    if yt_dlp is None:
+        raise DownloadError("yt-dlp is not installed. Run: pip install -r requirements.txt")
+    _, code, errors = run_ytdlp_worker(job, payload, url, src)
+    if code:
+        raise DownloadError(errors[-1] if errors else "yt-dlp stopped unexpectedly; details are in the log.")
 
 
 def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
@@ -2000,12 +2247,61 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
         "payload": dict(body),
     }
     with jobs_lock:
+        if shutting_down:
+            return None, ("offtube is shutting down.", 503)
         if active_job_count_locked() >= MAX_ACTIVE_JOBS:
             return None, ("Too many active downloads. Wait for one to finish.", 429)
         jobs[jid] = job
         evict_jobs_locked()
         futures[jid] = executor.submit(run_download, jid, body)
     return jid, None
+
+
+SHUTDOWN_GRACE = 5.0  # seconds running jobs get to stop before the process exits anyway
+
+
+def shutdown_jobs(grace: float | None = None) -> bool:
+    """Stop all work for a server shutdown: refuse new jobs, cancel queued
+    ones, ask running ones to stop and kill their process trees, then give
+    them `grace` seconds (SHUTDOWN_GRACE). Every job's cookie copy is
+    removed either way. True when every job thread finished in time. Child
+    processes stop at once; a thread can still be held up by something that
+    is not a child process, such as a stalled network filesystem."""
+    global shutting_down
+    grace = SHUTDOWN_GRACE if grace is None else grace
+    now = _dt.datetime.now().isoformat(timespec="seconds")
+    running: list[concurrent.futures.Future] = []
+    with jobs_lock:
+        shutting_down = True
+        for jid, job in jobs.items():
+            if is_terminal(job):
+                continue
+            future = futures.get(jid)
+            if future is not None and future.cancel():
+                job.update(status="cancelled", detail="Cancelled: offtube stopped.", finished_at=now)
+                futures.pop(jid, None)
+                continue
+            job["cancel_requested"] = True
+            job["detail"] = "Stopping: offtube is shutting down…"
+            if job.get("proc") is not None:
+                stop_process_tree(job["proc"], wait=None)
+            if future is not None:
+                running.append(future)
+    executor.shutdown(wait=False, cancel_futures=True)
+    _, late = concurrent.futures.wait(running, timeout=grace)
+    if late:
+        # A late job may have started a child after the first pass.
+        with jobs_lock:
+            for job in jobs.values():
+                if job.get("proc") is not None:
+                    stop_process_tree(job["proc"], wait=None)
+    # Credentials never outlive the server, even a job that is still busy.
+    for cookie in list(COOKIES_DIR.glob("job-*.cookies.txt")):
+        try:
+            cookie.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return not late
 
 
 # ------------------------------- HTTP layer -------------------------------
@@ -2047,11 +2343,41 @@ def environment_checks() -> dict:
     _health_cache.update(at=now, checks=checks)
     return checks
 
+class DeadlineReader(io.RawIOBase):
+    """Reads a request off a socket against one deadline for the whole of it.
+    A per-recv timeout restarts with every byte, so a client trickling bytes
+    could hold its worker forever; past the deadline a read raises
+    TimeoutError, which BaseHTTPRequestHandler answers by closing."""
+
+    def __init__(self, sock: socket.socket, deadline: float):
+        super().__init__()
+        self.sock, self.deadline = sock, deadline
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer) -> int:
+        remaining = self.deadline - time.monotonic()
+        if remaining > 0:
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(self.sock, selectors.EVENT_READ)
+                if waiting.select(remaining):
+                    return self.sock.recv_into(buffer)
+        raise TimeoutError("the request took too long to arrive")
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "offtube/1.0"
-    # A stalled client must not pin a worker thread forever. BaseHTTPRequestHandler
-    # checks this between requests and on socket reads.
+    # A stalled client must not pin a worker thread forever: reading the
+    # request has one overall deadline (DeadlineReader); writes, such as a
+    # long file the client pauses, get this much time per operation.
     timeout = 30
+
+    def setup(self):
+        super().setup()
+        self.rfile.close()
+        self.rfile = io.BufferedReader(
+            DeadlineReader(self.connection, time.monotonic() + REQUEST_READ_DEADLINE))
 
     def log_message(self, fmt, *args):  # stderr access log for API only
         try:
@@ -2094,9 +2420,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not length:
             return {}
         if length > MAX_JSON_BODY:
-            # Drain so the client doesn't get RST mid-send (flaky 413s).
+            # Drain so the client doesn't get RST mid-send (flaky 413s), but
+            # only so far: a client can declare any length.
             try:
-                remaining = length
+                remaining = min(length, 4 * MAX_JSON_BODY)
                 while remaining > 0:
                     chunk = self.rfile.read(min(65536, remaining))
                     if not chunk:
@@ -2147,7 +2474,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path is None or not path.is_file():
             self.send_error(404)
             return
-        ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
+        ctype = media_type(path.name)
         data = path.read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", ctype)
@@ -2165,34 +2492,69 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not getattr(self, "_omit_body", False):
             self.wfile.write(data)
 
-    def serve_download_file(self, name: str):
-        safe = Path(urllib.parse.unquote(name)).name
-        if not safe or safe == ".gitkeep":
+    def serve_download_file(self, raw_name: str):
+        name = urllib.parse.unquote(raw_name)
+        opened = open_library_file(name)
+        if opened is None:
             self.send_error(404)
             return
-        path = safe_child(DOWNLOAD_DIR, safe)
-        if path is None or not path.is_file():
-            self.send_error(404)
+        handle, info = opened
+        with handle:
+            size = info.st_size
+            etag = f'"{size:x}-{info.st_mtime_ns:x}"'
+            modified = email.utils.formatdate(info.st_mtime, usegmt=True)
+            # Media elements read the index and the frames they need as
+            # ranges. Ranges are GET-only, and If-Range resumes only the
+            # file it names: a replaced file is sent whole.
+            ranged = (self.command == "GET"
+                      and self.headers.get("If-Range", etag).strip() in (etag, modified))
+            try:
+                span = byte_range(self.headers.get("Range"), size) if ranged else None
+            except HttpError:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            first, last = span or (0, size - 1)
+            ctype = media_type(name)
+            # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
+            fallback = re.sub(r'["\r\n]', "_", name)
+            fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
+            encoded = urllib.parse.quote(name, safe="")
+            self.send_response(206 if span else 200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(last - first + 1))
+            if span:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", modified)
+            self.send_header(
+                "Content-Disposition",
+                f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
+            )
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if not getattr(self, "_omit_body", False):
+                self.send_file_body(handle, first, last - first + 1)
+
+    def send_file_body(self, handle: io.BufferedReader, offset: int, count: int) -> None:
+        """Send `count` bytes of `handle` from `offset` (zero-copy where the
+        OS allows). A client that stops reading - a media element that has
+        what it needs, a cancelled Save - ends the response quietly."""
+        if count <= 0:
             return
-        ctype = mimetypes.guess_type(str(path))[0] or "application/octet-stream"
-        # RFC 5987: ascii fallback + UTF-8 encoded value; strip header breakers.
-        fallback = re.sub(r'["\r\n]', "_", safe)
-        fallback = fallback.encode("ascii", "replace").decode("ascii")[:120] or "download"
-        encoded = urllib.parse.quote(safe, safe="")
-        self.send_response(200)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(path.stat().st_size))
-        self.send_header(
-            "Content-Disposition",
-            f'attachment; filename="{fallback}"; filename*=UTF-8\'\'{encoded}',
-        )
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        if getattr(self, "_omit_body", False):
-            return
-        with open(path, "rb") as fh:
-            shutil.copyfileobj(fh, self.wfile)
+        try:
+            self.connection.sendfile(handle, offset, count)
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
+        except OSError as exc:
+            # macOS's sendfile reports a client that reset as "not connected".
+            if exc.errno != errno.ENOTCONN:
+                raise
+            self.close_connection = True
 
     # -- routes ------------------------------------------------------------
     def do_HEAD(self):
@@ -2258,35 +2620,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send_json({"error": "Unknown job id."}, 404)
             return self.send_json(snapshot)
         if route == "/api/files":
-            files = []
-            listing = sorted(
-                # Dotfiles (.DS_Store, ...) are never served, so never listed.
-                (p for p in DOWNLOAD_DIR.iterdir() if p.is_file() and not is_temp_file(p.name)
-                 and not p.name.startswith(".")),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            for p in listing[:500]:
-                st = p.stat()
-                files.append(
-                    {
-                        "name": p.name,
-                        "size": st.st_size,
-                        "size_str": format_bytes(st.st_size) or "?",
-                        "modified": _dt.datetime.fromtimestamp(st.st_mtime).isoformat(timespec="seconds"),
-                        "url": f"/files/{urllib.parse.quote(p.name)}",
-                        "kind": file_kind(p.name),
-                    }
-                )
+            kind = (qs.get("kind") or ["all"])[0]
+            if kind not in LIBRARY_KINDS:
+                return self.send_json({"ok": False, "error": f"kind must be one of: {', '.join(LIBRARY_KINDS)}."}, 400)
+            try:
+                offset = max(0, int((qs.get("offset") or ["0"])[0]))
+                limit = max(1, min(LIBRARY_PAGE_MAX, int((qs.get("limit") or [str(LIBRARY_PAGE_MAX)])[0])))
+            except ValueError:
+                return self.send_json({"ok": False, "error": "offset and limit must be whole numbers."}, 400)
+            try:
+                page = library_page((qs.get("q") or [""])[0][:200], kind, offset, limit)
+            except OSError:
+                return self.send_json({"ok": False, "error": "Can't read the downloads folder."}, 500)
             try:
                 free = shutil.disk_usage(DOWNLOAD_DIR).free
             except OSError:
                 free = None
-            return self.send_json({
-                "files": files,
-                "disk_free": free,
-                "disk_free_str": format_bytes(free),
-            })
+            return self.send_json({**page, "disk_free": free, "disk_free_str": format_bytes(free)})
         if route.startswith("/files/"):
             return self.serve_download_file(route[len("/files/"):])
         if route.startswith("/api/"):
@@ -2354,12 +2704,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     futures.pop(jid, None)
                     cleanup_job_cookies(jid)
                     return self.send_json({"ok": True, "cancelled": True})
-                # Already running: cooperative cancel via hooks. The worker
-                # notices on its next progress/postprocessor callback; a
-                # gallery-dl process is simply terminated.
+                # Already running: its child process (the yt-dlp worker,
+                # gallery-dl, ffmpeg) is stopped with everything it started,
+                # and the job's thread sees the flag within a fraction of a
+                # second.
                 job["cancel_requested"] = True
                 if job.get("proc") is not None:
-                    job["proc"].terminate()
+                    stop_process_tree(job["proc"], wait=None)
                 job["detail"] = "Cancelling…"
                 return self.send_json({"ok": True, "cancelled": True, "stopping": True})
 
@@ -2372,18 +2723,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json({"ok": True, "cleared": len(terminal)})
 
         if route == "/api/files/delete":
-            name = str(body.get("name") or "")
-            safe = Path(urllib.parse.unquote(name)).name
-            if not safe:
+            # A JSON body carries the name verbatim; it is not URL-decoded.
+            name = body.get("name")
+            if not isinstance(name, str) or not name:
                 return self.send_json({"ok": False, "error": "Missing file name."}, 400)
-            path = safe_child(DOWNLOAD_DIR, safe)
-            if path is None or not path.is_file():
-                return self.send_json({"ok": False, "error": "File not found."}, 404)
             try:
-                path.unlink()
+                deleted = delete_library_file(name)
             except OSError as exc:
-                return self.send_json({"ok": False, "error": f"Could not delete: {exc}"}, 500)
-            return self.send_json({"ok": True, "deleted": safe})
+                # strerror only: the full message would carry the server path.
+                reason = exc.strerror or "the system refused"
+                return self.send_json({"ok": False, "error": f"Could not delete: {reason}."}, 500)
+            if deleted is None:
+                return self.send_json({"ok": False, "error": "File not found."}, 404)
+            return self.send_json({"ok": True, "deleted": deleted})
 
         if route.startswith("/api/"):
             return self.send_json({"ok": False, "error": "Not found."}, 404)
@@ -2391,15 +2743,92 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class LocalServer(socketserver.ThreadingTCPServer):
-    allow_reuse_address = True
+    # POSIX needs SO_REUSEADDR to rebind right after a restart (TIME_WAIT).
+    # On Windows the same option makes the port shareable: any process, under
+    # any account, could bind it too and receive offtube's requests, pasted
+    # cookies included. There the port is claimed exclusively instead.
+    exclusive_port = os.name == "nt"
+    allow_reuse_address = not exclusive_port
     daemon_threads = True
+    # One thread per connection, capped: past this many, a connection is
+    # answered 503 at once rather than given a thread to wait in.
+    max_connections = 64
+    refusal_read_wait = 0.2  # seconds a refused client gets to send its request
+    refusal_read_limit = 256 * 1024
 
     def __init__(self, server_address: tuple[str, int], handler_class: type[Handler]):
         self.address_family = socket.AF_INET6 if server_address[0] == "::1" else socket.AF_INET
+        self.connection_slots = threading.BoundedSemaphore(self.max_connections)
+        self.refused = 0
+        self.refused_logged_at = -math.inf
         super().__init__(server_address, handler_class)
+
+    def server_bind(self):
+        if self.exclusive_port:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+    def process_request(self, request, client_address):
+        if not self.connection_slots.acquire(blocking=False):
+            self.refuse_busy(request)
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self.connection_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.connection_slots.release()
+
+    def refuse_busy(self, request: socket.socket) -> None:
+        """Say 503 without a thread or parsing the request. The request is
+        read first, waiting a moment for it if need be: closing a socket on
+        unread bytes sends a reset, and Windows then discards the answer the
+        client already received."""
+        body = b'{"ok": false, "error": "offtube is busy. Retry in a moment."}'
+        try:
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(request, selectors.EVENT_READ)
+                waiting.select(timeout=self.refusal_read_wait)
+            request.setblocking(False)
+            try:
+                remaining = self.refusal_read_limit
+                deadline = time.monotonic() + self.refusal_read_wait
+                while remaining > 0 and time.monotonic() < deadline:
+                    chunk = request.recv(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except (BlockingIOError, InterruptedError):
+                pass
+            request.settimeout(1)
+            request.sendall(b"HTTP/1.0 503 Service Unavailable\r\n"
+                            b"Content-Type: application/json; charset=utf-8\r\n"
+                            b"Retry-After: 1\r\nCache-Control: no-store\r\nConnection: close\r\n"
+                            b"Content-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+        except OSError:
+            pass
+        # Saturation is worth knowing about, but not once per connection.
+        self.refused += 1
+        now = time.monotonic()
+        if now - self.refused_logged_at >= 10:
+            sys.stderr.write(f"{_dt.datetime.now().isoformat(timespec='seconds')} busy: refused "
+                             f"{self.refused} connection(s), all {self.max_connections} in use\n")
+            self.refused, self.refused_logged_at = 0, now
 
 
 def main():
+    # A log file or a pipe on Windows gets the ANSI code page, which can't
+    # write the banner's "→" or every folder name: a character it lacks is
+    # printed as "?" instead of stopping the server. (stderr already
+    # escapes what it can't write.)
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     try:
         port = int(os.environ.get("PORT", "8000"))
     except ValueError:
@@ -2415,24 +2844,59 @@ def main():
         print("HOST must be 127.0.0.1, localhost, ::1, or 0.0.0.0 (docker only).", file=sys.stderr)
         raise SystemExit(2)
     cleanup_stale_files()
-    with LocalServer((host, port), Handler) as httpd:
-        shown_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::1" else host)
-        print(f"\nofftube running → http://{shown_host}:{port}")
-        if host == "0.0.0.0":
-            print("WARNING: listening on all interfaces (docker mode). "
-                  "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
-        print(f"Downloads folder   → {DOWNLOAD_DIR}")
-        print("Paste a link in the page, pick quality / from-to, hit Download.\n")
-        try:
+    try:
+        httpd = LocalServer((host, port), Handler)
+    except OSError as exc:
+        # Windows may report a port held exclusively as WSAEACCES.
+        if exc.errno not in (errno.EADDRINUSE, getattr(errno, "WSAEACCES", errno.EADDRINUSE)):
+            raise
+        print(f"Port {port} is already in use — is offtube already running? "
+              "Set PORT to use another one.", file=sys.stderr)
+        raise SystemExit(1)
+    # systemd, launchd and docker stop send SIGTERM: stop the same way as Ctrl+C.
+    signal.signal(signal.SIGTERM, _interrupt)
+    try:
+        with httpd:
+            shown_host = "127.0.0.1" if host == "0.0.0.0" else ("[::1]" if host == "::1" else host)
+            print(f"\nofftube running → http://{shown_host}:{port}")
+            if host == "0.0.0.0":
+                print("WARNING: listening on all interfaces (docker mode). "
+                      "Prefer 127.0.0.1:8000 port-mapping, not LAN exposure.")
+            print(f"Downloads folder   → {DOWNLOAD_DIR}")
+            print("Paste a link in the page, pick quality / from-to, hit Download.\n", flush=True)
             httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\nbye!")
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
-            with jobs_lock:
-                for job in jobs.values():
-                    if job.get("proc") is not None:
-                        job["proc"].terminate()
+    except KeyboardInterrupt:
+        pass
+    except Exception:
+        traceback.print_exc()
+        stop_work(exit_code=1)
+    stop_work(exit_code=0)
+
+
+def _interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
+def _exit_now(signum, frame):
+    os.write(2, b"Stopping now, without waiting for jobs.\n")
+    os._exit(1)
+
+
+def stop_work(exit_code: int) -> None:
+    """Runs once the listener is closed. A second Ctrl+C or SIGTERM exits at
+    once; otherwise jobs get SHUTDOWN_GRACE seconds to stop."""
+    signal.signal(signal.SIGINT, _exit_now)
+    signal.signal(signal.SIGTERM, _exit_now)
+    print("\nStopping…", flush=True)
+    if not shutdown_jobs():
+        # Its thread would hold the interpreter open at exit; everything
+        # else (process trees, cookie copies) is already cleaned up.
+        print("A job was still busy; exiting without it.", flush=True)
+        sys.stderr.flush()
+        os._exit(exit_code)
+    if exit_code:
+        raise SystemExit(exit_code)
+    print("bye!")
 
 
 if __name__ == "__main__":

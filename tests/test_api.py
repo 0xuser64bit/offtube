@@ -1,11 +1,16 @@
 """API integration tests against a live Handler on an ephemeral port.
 
-yt-dlp is stubbed (no network): the fake YoutubeDL answers extract_info and
-simulates a download by firing progress hooks and writing one output file.
+No network: inspection uses a fake YoutubeDL in-process, and downloads run in
+tests/fake_ytdlp_worker.py, which speaks the yt-dlp worker's event protocol.
 """
 
+import concurrent.futures
+import errno
 import json
 import http.client
+import mimetypes
+import os
+import selectors
 import socket
 import sys
 import threading
@@ -20,8 +25,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import app  # noqa: E402
-
-BLOCK = threading.Event()
+from conftest import process_gone  # noqa: E402
 
 
 class FakeYoutubeDL:
@@ -49,17 +53,6 @@ class FakeYoutubeDL:
             "subtitles": {"en": []}, "automatic_captions": {},
         }
 
-    def download(self, urls):
-        if "block" in urls[0]:
-            BLOCK.wait(timeout=15)
-        for hook in self.opts.get("progress_hooks", []):
-            hook({"status": "downloading", "downloaded_bytes": 5,
-                  "total_bytes": 10, "speed": 1000, "eta": 1,
-                  "filename": str(app.DOWNLOAD_DIR / "Test Video [abc123].mp4.part")})
-            hook({"status": "finished",
-                  "filename": str(app.DOWNLOAD_DIR / "Test Video [abc123].mp4")})
-        (app.DOWNLOAD_DIR / "Test Video [abc123].mp4").write_bytes(b"fake-video")
-
 
 class FakeYtDlp:
     YoutubeDL = FakeYoutubeDL
@@ -74,22 +67,23 @@ def server(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path / "cookies")
     monkeypatch.setattr(app, "SESSION_COOKIE_FILE", tmp_path / "cookies" / "session.txt")
     monkeypatch.setattr(app, "yt_dlp", FakeYtDlp())
-    monkeypatch.setattr(app, "shutil", app.shutil)  # no-op, clarity
+    monkeypatch.setattr(app, "executor", concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="dl"))
+    monkeypatch.setattr(app, "shutting_down", False)
     app.DOWNLOAD_DIR.mkdir(exist_ok=True)
     app.COOKIES_DIR.mkdir(exist_ok=True)
     app.jobs.clear()
     app.futures.clear()
     httpd = app.LocalServer(("127.0.0.1", 0), app.Handler)
     port = httpd.server_address[1]
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{port}"
     httpd.shutdown()
     httpd.server_close()
     thread.join(timeout=5)
+    app.shutdown_jobs(grace=5)  # stops whatever a test left running
     app.jobs.clear()
     app.futures.clear()
-    BLOCK.set()
 
 
 def api(base, method, path, body=None, raw_body=None, headers=None):
@@ -410,37 +404,36 @@ def test_disk_guard_refuses_when_full(server, monkeypatch):
     assert "Disk" in body.get("error", "")
 
 
-def test_cancel_queued_job(server):
-    BLOCK.clear()
-    try:
-        # Occupy both executor workers with blocking downloads.
-        first, second = [], []
-        for i in range(2):
-            s, b, _ = api(server, "POST", "/api/download",
-                           {"url": f"https://youtu.be/blockblock{i}"})
-            assert s == 200
-            first.append(b["job_id"]) if i == 0 else second.append(b["job_id"])
-        time.sleep(0.5)  # let workers pick up the blocking jobs
-        s, b, _ = api(server, "POST", "/api/download",
-                       {"url": "https://youtu.be/queuedqueue"})
+def _in_worker(jid, timeout=10):
+    deadline = time.time() + timeout
+    while app.jobs[jid].get("proc") is None:
+        assert time.time() < deadline, app.jobs[jid]
+        time.sleep(0.02)
+
+
+def test_cancel_queued_and_silent_running_jobs(server):
+    # Both executor workers busy with downloads that print nothing at all,
+    # as yt-dlp is while it extracts or merges.
+    running = []
+    for i in range(2):
+        s, b, _ = api(server, "POST", "/api/download", {"url": f"https://youtu.be/blockblock{i}"})
         assert s == 200
-        queued = b["job_id"]
-        s, b, _ = api(server, "POST", "/api/cancel", {"job_id": queued})
-        assert s == 200 and b["cancelled"] is True
-        s, job, _ = api(server, "GET", f"/api/job?id={queued}")
-        assert job["status"] == "cancelled"
-        # Cancelling a running job requests cooperative stop (hooks abort).
-        s, b, _ = api(server, "POST", "/api/cancel", {"job_id": first[0]})
-        assert s == 200 and b["cancelled"] is True
-    finally:
-        BLOCK.set()
-        for jid in list(app.jobs):
-            job = app.jobs.get(jid)
-            if job and job.get("status") not in ("done", "error", "cancelled"):
-                wait_for(server, jid, timeout=15)
-    # The running job we cancelled must end as cancelled, not done/error.
-    s, job, _ = api(server, "GET", f"/api/job?id={first[0]}")
+        running.append(b["job_id"])
+    for jid in running:
+        _in_worker(jid)
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/queuedqueue"})
+    assert s == 200
+    queued = b["job_id"]
+    s, b, _ = api(server, "POST", "/api/cancel", {"job_id": queued})
+    assert s == 200 and b["cancelled"] is True
+    s, job, _ = api(server, "GET", f"/api/job?id={queued}")
     assert job["status"] == "cancelled"
+    # A running download stops at once: its worker process is stopped.
+    started = time.time()
+    s, b, _ = api(server, "POST", "/api/cancel", {"job_id": running[0]})
+    assert s == 200 and b["cancelled"] is True
+    assert wait_for(server, running[0], timeout=10)["status"] == "cancelled"
+    assert time.time() - started < 3
 
 
 # --- public job field whitelist -------------------------------------------------
@@ -504,12 +497,25 @@ def test_missing_and_duplicate_host_headers(server):
         assert b" 200 " in connection.recv(4096).split(b"\r\n", 1)[0]
 
 
-def test_server_binds_ipv6_loopback():
+def ipv6_loopback_available() -> bool:
+    """socket.has_ipv6 only says Python was built with IPv6; containers and
+    some CI kernels still refuse AF_INET6 sockets or have no ::1."""
     if not socket.has_ipv6:
-        pytest.skip("IPv6 is unavailable")
+        return False
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+def test_server_binds_ipv6_loopback():
+    if not ipv6_loopback_available():
+        pytest.skip("IPv6 loopback is unavailable")
     with app.LocalServer(("::1", 0), app.Handler) as httpd:
         assert httpd.address_family == socket.AF_INET6
-        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
         thread.start()
         try:
             with closing(http.client.HTTPConnection("::1", httpd.server_address[1], timeout=5)) as connection:
@@ -545,19 +551,20 @@ def test_retry_unknown_job(server):
 
 
 def test_retry_running_job_refused(server):
-    BLOCK.clear()
-    try:
-        s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/blockblock0"})
-        assert s == 200
-        jid = b["job_id"]
-        time.sleep(0.5)
-        s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
-        assert s == 400 and "still running" in body["error"]
-    finally:
-        BLOCK.set()
-        for j in list(app.jobs.values()):
-            if j.get("status") not in ("done", "error", "cancelled"):
-                wait_for(server, j["id"], timeout=15)
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/blockblock0"})
+    assert s == 200
+    jid = b["job_id"]
+    _in_worker(jid)
+    s, body, _ = api(server, "POST", "/api/retry", {"job_id": jid})
+    assert s == 400 and "still running" in body["error"]
+
+
+def test_worker_failure_is_reported_in_plain_language(server):
+    s, b, _ = api(server, "POST", "/api/download", {"url": "https://youtu.be/failfailfai"})
+    assert s == 200
+    job = wait_for(server, b["job_id"])
+    assert job["status"] == "error"
+    assert job["detail"].startswith("Private video. YouTube only shows this to a signed-in account")
 
 
 def test_retry_resubmits_stored_payload(server):
@@ -674,3 +681,450 @@ def test_fonts_are_served_and_traversal_blocked(server):
         raise AssertionError("traversal should 404")
     except urllib.error.HTTPError as exc:
         assert exc.code == 404
+
+
+def test_media_types_do_not_depend_on_the_platform(server, monkeypatch):
+    # As on a Windows machine whose registry maps .js to text/plain: with
+    # nosniff, a browser would refuse to run the desk's script.
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *args, **kwargs: ("text/plain", None))
+    (app.DOWNLOAD_DIR / "Clip [a].mkv").write_bytes(b"v")
+    served = {}
+    for path in ("/", "/app.js", "/styles.css", "/favicon.svg", "/fonts/archivo.woff2", "/files/Clip%20%5Ba%5D.mkv"):
+        with urllib.request.urlopen(server + path, timeout=10) as res:
+            served[path] = res.headers["Content-Type"]
+    assert served == {"/": "text/html", "/app.js": "text/javascript", "/styles.css": "text/css",
+                      "/favicon.svg": "image/svg+xml", "/fonts/archivo.woff2": "font/woff2",
+                      "/files/Clip%20%5Ba%5D.mkv": "video/x-matroska"}
+
+
+# --- library snapshots: what is listed is exactly what is served -----------------
+def _http_status(base, path, method="GET"):
+    import urllib.error
+    req = urllib.request.Request(base + path, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as res:
+            return res.status, res.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, b""
+
+
+def test_listing_survives_files_vanishing_mid_scan(server, monkeypatch):
+    (app.DOWNLOAD_DIR / "stays [a].mp4").write_bytes(b"a")
+    (app.DOWNLOAD_DIR / "gone [b].mp4").write_bytes(b"b")
+    real_scandir = os.scandir
+
+    class Snapshot:
+        """scandir that loses a file after listing it, as when a concurrent
+        delete or an engine rename lands between the scan and the stat."""
+        def __init__(self, path):
+            with real_scandir(path) as entries:
+                self.entries = list(entries)
+            for entry in self.entries:
+                entry.stat(follow_symlinks=False)  # cached, as Windows' scandir always is
+            (app.DOWNLOAD_DIR / "gone [b].mp4").unlink()
+
+        def __enter__(self):
+            return iter(self.entries)
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(app.os, "scandir", Snapshot)
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200
+    assert [f["name"] for f in listing["files"]] == ["stays [a].mp4"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlinks")
+def test_symlinks_are_never_listed_served_or_followed_on_delete(server, tmp_path):
+    inside = app.DOWNLOAD_DIR / "inside [a].mp4"
+    inside.write_bytes(b"kept")
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"private")
+    (app.DOWNLOAD_DIR / "alias [a].mp4").symlink_to(inside)
+    (app.DOWNLOAD_DIR / "escape [b].mp4").symlink_to(outside)
+
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert [f["name"] for f in listing["files"]] == ["inside [a].mp4"]
+    for name in ("alias [a].mp4", "escape [b].mp4"):
+        assert _http_status(server, "/files/" + urllib.parse.quote(name))[0] == 404
+        status, _, _ = api(server, "POST", "/api/files/delete", {"name": name})
+        assert status == 404
+    # Deleting the alias must never delete the file it points at.
+    assert inside.read_bytes() == b"kept" and outside.read_bytes() == b"private"
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="POSIX FIFOs")
+def test_special_files_are_refused_without_blocking(server):
+    os.mkfifo(app.DOWNLOAD_DIR / "pipe [x].mp4")
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200 and listing["files"] == []
+    started = time.monotonic()
+    assert _http_status(server, "/files/" + urllib.parse.quote("pipe [x].mp4"))[0] == 404
+    assert time.monotonic() - started < 3
+
+
+def test_names_are_one_component_and_taken_verbatim(server):
+    (app.DOWNLOAD_DIR / "x.mp4").write_bytes(b"x")
+    # An encoded separator is not a way to reach a differently named file.
+    assert _http_status(server, "/files/sub%2Fx.mp4")[0] == 404
+    assert _http_status(server, "/files/x.mp4")[0] == 200
+    # Delete bodies are JSON, not URLs: a literal %XX in a title is kept.
+    literal = app.DOWNLOAD_DIR / "Sale 100%BE [s].mp4"
+    literal.write_bytes(b"s")
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": literal.name})
+    assert status == 200 and body["deleted"] == literal.name
+    assert not literal.exists()
+
+
+def test_partial_downloads_are_neither_served_nor_deleted(server):
+    part = app.DOWNLOAD_DIR / "Video [v].mp4.part"
+    part.write_bytes(b"half")
+    assert _http_status(server, "/files/" + urllib.parse.quote(part.name))[0] == 404
+    status, _, _ = api(server, "POST", "/api/files/delete", {"name": part.name})
+    assert status == 404 and part.exists()
+
+
+def test_delete_failure_names_the_reason_not_the_path(server, monkeypatch):
+    (app.DOWNLOAD_DIR / "locked [l].mp4").write_bytes(b"l")
+
+    def refuse(self, *args, **kwargs):
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "unlink", refuse)
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": "locked [l].mp4"})
+    assert status == 500
+    assert body["error"] == "Could not delete: Permission denied."
+    status, body, _ = api(server, "POST", "/api/files/delete", {"name": ["locked [l].mp4"]})
+    assert status == 400
+
+
+# --- byte ranges: media elements read what they need and can stop cleanly --------
+def _fetch(base, path, headers=None, method="GET"):
+    host, port = urllib.parse.urlsplit(base).hostname, urllib.parse.urlsplit(base).port
+    with closing(http.client.HTTPConnection(host, port, timeout=5)) as connection:
+        connection.request(method, path, headers=headers or {})
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+
+@pytest.fixture()
+def kept_bytes(server):
+    data = bytes(range(256)) * 4  # 1024 distinguishable bytes
+    (app.DOWNLOAD_DIR / "clip [r].mp4").write_bytes(data)
+    return server, "/files/" + urllib.parse.quote("clip [r].mp4"), data
+
+
+@pytest.mark.parametrize("spec, first, last", [
+    ("bytes=2-5", 2, 5), ("bytes=1000-", 1000, 1023), ("bytes=-24", 1000, 1023),
+    ("bytes=1020-99999", 1020, 1023), ("bytes=-5000", 0, 1023), ("BYTES = 7 - 7", 7, 7),
+])
+def test_single_byte_range_is_partial_content(kept_bytes, spec, first, last):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": spec})
+    assert status == 206
+    assert headers["Content-Range"] == f"bytes {first}-{last}/{len(data)}"
+    assert int(headers["Content-Length"]) == last - first + 1
+    assert body == data[first:last + 1]
+    assert headers["Accept-Ranges"] == "bytes"
+
+
+def test_whole_file_advertises_ranges_and_validators(kept_bytes):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path)
+    assert status == 200 and body == data
+    assert headers["Accept-Ranges"] == "bytes"
+    assert headers["ETag"].startswith('"') and headers["Last-Modified"].endswith("GMT")
+
+
+@pytest.mark.parametrize("spec", ["bytes=0-1,4-5", "bytes=5-2", "bytes=-", "items=0-1", "bytes=x-",
+                                  "bytes=" + "9" * 30 + "-"])
+def test_unsupported_or_malformed_ranges_get_the_whole_file(kept_bytes, spec):
+    base, path, data = kept_bytes
+    status, _, body = _fetch(base, path, {"Range": spec})
+    assert status == 200 and body == data
+
+
+@pytest.mark.parametrize("spec", ["bytes=1024-", "bytes=5000-6000", "bytes=-0"])
+def test_unsatisfiable_range_is_416_with_the_length(kept_bytes, spec):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": spec})
+    assert status == 416
+    assert headers["Content-Range"] == f"bytes */{len(data)}"
+    assert body == b""
+
+
+def test_if_range_only_resumes_the_same_file(kept_bytes):
+    base, path, data = kept_bytes
+    _, headers, _ = _fetch(base, path)
+    for validator in (headers["ETag"], headers["Last-Modified"]):
+        status, _, body = _fetch(base, path, {"Range": "bytes=10-19", "If-Range": validator})
+        assert status == 206 and body == data[10:20]
+    for stale in ('"0-0"', "W/" + headers["ETag"], "Thu, 01 Jan 1970 00:00:00 GMT"):
+        status, _, body = _fetch(base, path, {"Range": "bytes=10-19", "If-Range": stale})
+        assert status == 200 and body == data
+
+
+def test_head_ignores_ranges(kept_bytes):
+    base, path, data = kept_bytes
+    status, headers, body = _fetch(base, path, {"Range": "bytes=0-9"}, method="HEAD")
+    assert status == 200 and body == b""
+    assert int(headers["Content-Length"]) == len(data)
+
+
+@pytest.mark.parametrize("raised, quiet", [
+    (BrokenPipeError(errno.EPIPE, "Broken pipe"), True),
+    (ConnectionResetError(errno.ECONNRESET, "Connection reset by peer"), True),
+    (OSError(errno.ENOTCONN, "Socket is not connected"), True),  # macOS, after a reset
+    (OSError(errno.EIO, "Input/output error"), False),  # the disk, not the client
+])
+def test_a_client_that_went_away_ends_the_file_quietly(raised, quiet):
+    class Connection:
+        def sendfile(self, *args):
+            raise raised
+
+    handler = app.Handler.__new__(app.Handler)
+    handler.connection, handler.close_connection = Connection(), False
+    if quiet:
+        handler.send_file_body(None, 0, 10)
+        assert handler.close_connection is True
+    else:
+        with pytest.raises(OSError):
+            handler.send_file_body(None, 0, 10)
+
+
+def test_client_closing_mid_file_is_not_a_server_error(server, capfd):
+    big = app.DOWNLOAD_DIR / "big [b].mp4"
+    with big.open("wb") as fh:
+        fh.truncate(64 * 1024 * 1024)  # sparse: cheap to create, too big to buffer
+    host, port = urllib.parse.urlsplit(server).hostname, urllib.parse.urlsplit(server).port
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(b"GET /files/big%20%5Bb%5D.mp4 HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+        assert connection.recv(64).startswith(b"HTTP/1.0 200")
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+    # The handler finishes on its own; the abort must not print a traceback.
+    status, _, _ = api(server, "GET", "/api/health")
+    assert status == 200
+    time.sleep(0.5)
+    assert "Traceback" not in capfd.readouterr().err
+
+
+# --- admission: bounded threads, bounded time to send a request -------------------
+@pytest.fixture()
+def small_server(monkeypatch):
+    monkeypatch.setattr(app.LocalServer, "max_connections", 2)
+    monkeypatch.setattr(app, "REQUEST_READ_DEADLINE", 0.6)
+    httpd = app.LocalServer(("127.0.0.1", 0), app.Handler)
+    thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+    thread.start()
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
+    thread.join(timeout=5)
+
+
+def _health(port):
+    with closing(http.client.HTTPConnection("127.0.0.1", port, timeout=5)) as connection:
+        connection.request("GET", "/api/health")
+        response = connection.getresponse()
+        return response.status, dict(response.getheaders()), response.read()
+
+
+def test_connections_past_the_cap_are_refused_at_once(small_server):
+    port = small_server.server_address[1]
+    idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+    try:
+        time.sleep(0.1)  # both handlers are now waiting for a request
+        started = time.monotonic()
+        status, headers, body = _health(port)
+        assert status == 503 and time.monotonic() - started < 0.5
+        assert headers["Retry-After"] == "1"
+        assert json.loads(body)["ok"] is False
+    finally:
+        for connection in idle:
+            connection.close()
+    deadline = time.monotonic() + 3
+    while _health(port)[0] != 200:  # closed clients free their slots
+        assert time.monotonic() < deadline
+
+
+def test_a_refused_client_is_answered_after_its_request_arrives(small_server):
+    # Closing on request bytes the server never read sends a reset, and
+    # Windows then throws away the 503 the client had already received.
+    port = small_server.server_address[1]
+    idle = [socket.create_connection(("127.0.0.1", port)) for _ in range(2)]
+    try:
+        time.sleep(0.1)
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as late:
+            time.sleep(0.05)  # a client that takes a moment to send
+            with selectors.DefaultSelector() as waiting:
+                waiting.register(late, selectors.EVENT_READ)
+                assert not waiting.select(timeout=0), "answered before the request arrived"
+            late.sendall(b"GET /api/health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            assert late.recv(65536).startswith(b"HTTP/1.0 503 ")
+    finally:
+        for connection in idle:
+            connection.close()
+
+
+def test_a_refused_client_cannot_drain_forever():
+    class StreamingClient:
+        def __init__(self, connection):
+            self.connection = connection
+            self.reads = 0
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def recv(self, size):
+            self.reads += 1
+            assert self.reads <= 16, "refusal kept draining a continuously readable client"
+            return b"x" * size
+
+    with app.LocalServer(("127.0.0.1", 0), app.Handler) as httpd:
+        receiver, sender = socket.socketpair()
+        with receiver, sender:
+            sender.settimeout(2)
+            sender.sendall(b"x")
+            streaming = StreamingClient(receiver)
+            httpd.refuse_busy(streaming)
+            assert streaming.reads <= 16
+            assert sender.recv(65536).startswith(b"HTTP/1.0 503 ")
+
+
+def test_slow_requests_are_cut_off_at_the_deadline(small_server):
+    port = small_server.server_address[1]
+    for opening in (b"GET /api/health HTTP/1.1\r\n",
+                    b"POST /api/info HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 50\r\n\r\n{"):
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as connection:
+            connection.sendall(opening)
+            started = time.monotonic()
+            with pytest.raises(OSError):
+                # A byte every 0.1 s resets any per-recv timeout; only a
+                # deadline for the whole request ends it.
+                while time.monotonic() - started < 4:
+                    connection.sendall(b"x")
+                    time.sleep(0.1)
+            assert time.monotonic() - started < 2
+    assert _health(port)[0] == 200  # and the slots came back
+
+
+def test_oversized_body_drain_is_bounded(server, monkeypatch):
+    monkeypatch.setattr(app, "MAX_JSON_BODY", 1024)
+    host, port = urllib.parse.urlsplit(server).hostname, urllib.parse.urlsplit(server).port
+    with socket.create_connection((host, port), timeout=5) as connection:
+        connection.sendall(b"POST /api/info HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+                           b"Content-Type: application/json\r\nContent-Length: 10000000000\r\n\r\n")
+        sent, started = 0, time.monotonic()
+        with pytest.raises(OSError):
+            while time.monotonic() - started < 5:  # a fast client claiming 10 GB
+                connection.sendall(b"x" * 65536)
+                sent += 65536
+    assert sent < 64 * 1024 * 1024
+
+
+def test_cancelling_a_gallery_job_stops_what_gallery_dl_started(server, fake_gallery):
+    status, body, _ = api(server, "POST", "/api/download",
+                          {"url": "https://www.pinterest.com/pin/664281013778109217/?child"})
+    assert status == 200, body
+    pid_file = app.DOWNLOAD_DIR / "child.pid"
+    deadline = time.time() + 10
+    while not pid_file.exists() or not pid_file.read_text():
+        assert time.time() < deadline
+        time.sleep(0.05)
+    child = int(pid_file.read_text())
+    status, _, _ = api(server, "POST", "/api/cancel", {"job_id": body["job_id"]})
+    assert status == 200
+    assert wait_for(server, body["job_id"], timeout=10)["status"] == "cancelled"
+    deadline = time.time() + 5
+    while not process_gone(child):
+        assert time.time() < deadline, "gallery-dl's child outlived the cancelled job"
+        time.sleep(0.05)
+
+
+def test_unknown_quality_is_refused_before_queueing(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                          {"url": "https://youtu.be/abc123abc12", "quality": "GIF"})
+    assert status == 400 and "quality" in body["error"]
+    assert not app.jobs
+
+
+def test_windows_claims_the_port_exclusively(monkeypatch):
+    monkeypatch.setattr(socket, "SO_EXCLUSIVEADDRUSE", -1, raising=False)
+    calls = []
+
+    class FakeSocket:
+        def setsockopt(self, *args):
+            calls.append(("setsockopt", *args))
+
+        def bind(self, address):
+            calls.append(("bind", address))
+
+        def getsockname(self):
+            return ("127.0.0.1", 8000)
+
+    server = app.LocalServer.__new__(app.LocalServer)
+    server.socket, server.server_address, server.address_family = FakeSocket(), ("127.0.0.1", 8000), socket.AF_INET
+    server.exclusive_port, server.allow_reuse_address = True, False
+    server.server_bind()
+    assert calls == [("setsockopt", socket.SOL_SOCKET, -1, 1), ("bind", ("127.0.0.1", 8000))]
+    # Elsewhere the port stays rebindable right after a restart.
+    assert app.LocalServer.allow_reuse_address is (os.name != "nt")
+
+
+def test_a_second_server_on_the_same_port_is_refused():
+    with app.LocalServer(("127.0.0.1", 0), app.Handler) as first:
+        with pytest.raises(OSError) as error:
+            app.LocalServer(("127.0.0.1", first.server_address[1]), app.Handler)
+        assert error.value.errno == errno.EADDRINUSE
+
+
+# --- the library is paged and searched on the server ------------------------------
+@pytest.fixture()
+def library(server):
+    names = ["Clip one [a].mp4", "Song [b].mp3", "board_1.jpg", "Loop [c].gif",
+             "clip TWO [d].mp4", "notes.srt", "board_2.jpg"]
+    for age, name in enumerate(names):
+        path = app.DOWNLOAD_DIR / name
+        path.write_bytes(b"x")
+        os.utime(path, (1_700_000_000 - age * 60,) * 2)  # listed newest first
+    return server, names
+
+
+def test_library_pages_newest_first_with_totals(library):
+    server, names = library
+    status, page, _ = api(server, "GET", "/api/files?limit=3")
+    assert status == 200
+    assert [f["name"] for f in page["files"]] == names[:3]
+    assert page["total"] == page["matched"] == 7
+    status, page, _ = api(server, "GET", "/api/files?limit=3&offset=6")
+    assert [f["name"] for f in page["files"]] == names[6:]
+    status, page, _ = api(server, "GET", "/api/files")  # older clients: one big page
+    assert len(page["files"]) == 7 and page["disk_free_str"]
+
+
+@pytest.mark.parametrize("query, expected", [
+    ("q=clip", ["Clip one [a].mp4", "clip TWO [d].mp4"]),
+    ("kind=image", ["board_1.jpg", "Loop [c].gif", "board_2.jpg"]),
+    ("kind=gif", ["Loop [c].gif"]),
+    ("kind=audio", ["Song [b].mp3"]),
+    ("kind=video&q=two", ["clip TWO [d].mp4"]),
+    ("q=%5Bc%5D", ["Loop [c].gif"]),
+    ("q=nothing", []),
+])
+def test_library_search_covers_every_file(library, query, expected):
+    server, _ = library
+    status, page, _ = api(server, "GET", f"/api/files?{query}&limit=1")
+    assert status == 200
+    assert [f["name"] for f in page["files"]] == expected[:1]
+    assert page["matched"] == len(expected) and page["total"] == 7
+
+
+@pytest.mark.parametrize("query", [
+    pytest.param("kind=movies", id="unknown-kind"), pytest.param("limit=ten", id="text-limit"),
+    pytest.param("offset=-", id="text-offset"), pytest.param("limit=" + "9" * 5000, id="huge-limit"),
+])
+def test_library_rejects_bad_paging(library, query):
+    server, _ = library
+    status, body, _ = api(server, "GET", f"/api/files?{query}")
+    assert status == 400 and body["ok"] is False

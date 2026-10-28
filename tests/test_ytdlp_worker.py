@@ -1,7 +1,7 @@
-"""GIF source isolation, real yt-dlp trimming and cancellation of its FFmpeg child."""
+"""The real yt-dlp worker against a local server: ordinary downloads, GIF
+source isolation and trimming, and stopping its whole process tree."""
 import http.server
 import json
-import os
 from pathlib import Path
 import re
 import shlex
@@ -15,6 +15,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app
+from conftest import process_gone, processes_started_by
 
 
 requires_ffmpeg = pytest.mark.skipif(not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
@@ -63,7 +64,7 @@ def source_server(tmp_path):
                     pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
     thread.start()
     yield f"http://127.0.0.1:{server.server_port}", requested, cookies
     release.set()
@@ -87,12 +88,13 @@ def source_job(tmp_path, monkeypatch):
 
 
 @requires_ffmpeg
+@pytest.mark.real_worker
 @pytest.mark.parametrize("layout", ["checkout", "container"])
 def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monkeypatch, layout):
     if layout == "container":
         runtime = tmp_path / "runtime"
         runtime.mkdir()
-        for line in (app.BASE_DIR / "Dockerfile").read_text().splitlines():
+        for line in (app.BASE_DIR / "Dockerfile").read_text(encoding="utf-8").splitlines():
             if not line.startswith("COPY "):
                 continue
             source_name, destination_name = shlex.split(line)[1:]
@@ -119,21 +121,49 @@ def test_real_source_range_and_cookies(source_job, source_server, tmp_path, monk
     stream = json.loads(probe.stdout)["streams"][0]
     assert int(stream["nb_read_frames"]) == 10
     assert float(stream["duration"]) == pytest.approx(1, abs=0.02)
-    assert "proc" not in source_job and "gif_source_active" not in source_job
+    assert "proc" not in source_job
 
 
 @requires_ffmpeg
+@pytest.mark.real_worker
+def test_real_download_keeps_the_file_and_reports_progress(source_job, source_server, tmp_path):
+    url, _, cookies = source_server
+    source_job["quality"] = "best"
+    payload = {"url": url + "/video.mp4", "cookies_mode": "text",
+               "cookies_text": "# Netscape HTTP Cookie File\n127.0.0.1\tFALSE\t/\tFALSE\t2147483647\tsession\tfixture\n"}
+    app.run_ytdlp(source_job, payload, payload["url"], {"id": "generic"})
+    kept = sorted(app.DOWNLOAD_DIR.iterdir())
+    assert [path.name for path in kept] == ["video [video].mp4"]
+    assert kept[0].read_bytes() == (tmp_path / "video.mp4").read_bytes()
+    assert any("session=fixture" in value for value in cookies)
+    # The worker's events reached the job: progress, and the name that lets
+    # run_download tell this job's file from a concurrent job's.
+    assert source_job["progress"] == 100
+    assert "video [video].mp4" in source_job["seen_files"]
+    assert "proc" not in source_job
+
+
+@requires_ffmpeg
+@pytest.mark.real_worker
+@pytest.mark.parametrize("quality", ["gif", "best"])
 @pytest.mark.parametrize("reason", ["cancel", "disk"])
-def test_silent_source_stops_process_tree(source_job, source_server, monkeypatch, reason):
+def test_silent_download_stops_process_tree(source_job, source_server, monkeypatch, reason, quality):
+    # The server sends headers, then nothing: yt-dlp waits without a word,
+    # as it does while extracting or merging.
     url, requested, _ = source_server
-    payload = {"quality": "gif", "clip_from": "0.5", "clip_to": "1.5"}
+    source_job["quality"] = quality
+    if quality == "gif":
+        payload, run = {"quality": "gif", "clip_from": "0.5", "clip_to": "1.5"}, app.run_gif_ytdlp
+    else:
+        payload, run = {"quality": quality}, app.run_ytdlp
     errors = []
+    low_disk = threading.Event()
     if reason == "disk":
-        monkeypatch.setattr(app, "disk_low_locked", lambda _: requested.is_set())
+        monkeypatch.setattr(app, "disk_low_locked", lambda _: low_disk.is_set())
 
     def download():
         try:
-            app.run_gif_ytdlp(source_job, payload, url + "/slow.mp4", {"id": "generic"})
+            run(source_job, payload, url + "/slow.mp4", {"id": "generic"})
         except app.DownloadError as exc:
             errors.append(str(exc))
 
@@ -142,28 +172,50 @@ def test_silent_source_stops_process_tree(source_job, source_server, monkeypatch
     assert requested.wait(8), source_job["log"]
     proc = source_job["proc"]
     descendants = []
-    if os.name != "nt":
-        # A direct file is fetched by yt-dlp itself. ffmpeg is in the same
-        # process group only when the protocol needs it, and then it must die too.
-        deadline = time.monotonic() + 1
-        while time.monotonic() < deadline:
-            result = subprocess.run(["ps", "-axo", "pid=,pgid=,comm="], capture_output=True, text=True, check=True)
-            descendants = [int(parts[0]) for line in result.stdout.splitlines()
-                           if len(parts := line.split(maxsplit=2)) == 3 and int(parts[1]) == proc.pid and "ffmpeg" in parts[2]]
-            if descendants:
-                break
-            time.sleep(0.05)
+    if quality == "gif":
+        # A clip is fetched by ffmpeg under the worker, which must die with
+        # it. (yt-dlp fetches a whole file itself.)
+        deadline = time.monotonic() + 15
+        while not descendants:
+            assert time.monotonic() < deadline, "no ffmpeg under the worker"
+            descendants = [pid for pid, name in processes_started_by(proc.pid) if "ffmpeg" in name.lower()]
     start = time.monotonic()
     if reason == "cancel":
         source_job["cancel_requested"] = True
+    else:
+        low_disk.set()
     thread.join(timeout=3)
     assert not thread.is_alive() and time.monotonic() - start < 3
     assert proc.poll() is not None
     assert errors and ("Cancelled" if reason == "cancel" else "disk is almost full") in errors[0]
-    assert "proc" not in source_job and "gif_source_active" not in source_job
-    for pid in descendants:
-        state = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
-        assert not state.stdout.strip() or state.stdout.strip().startswith("Z")
+    assert "proc" not in source_job
+    deadline = time.monotonic() + 5
+    while not all(process_gone(pid) for pid in descendants):
+        assert time.monotonic() < deadline, f"ffmpeg outlived the stopped worker: {descendants}"
+        time.sleep(0.1)
+
+
+@pytest.mark.parametrize("payload", [
+    {},
+    {"quality": "720", "playlist_mode": "playlist", "playlist_items": "1-3,5",
+     "playlist_start": "2", "playlist_end": "9"},
+    {"quality": "audio_mp3", "clip_from": "0:30"},
+    {"quality": "audio_m4a", "subtitles": True, "auto_subs": True, "sub_lang": "en,de"},
+    {"quality": "gif", "clip_from": "1", "clip_to": "2"},
+    {"cookies_mode": "text",
+     "cookies_text": "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tFALSE\t9999999999\tSID\tx\n"},
+    {"cookies_mode": "browser", "cookies_browser": "firefox", "cookies_browser_profile": "default"},
+], ids=["defaults", "playlist", "mp3-from", "m4a-subs", "gif", "cookie-text", "cookie-browser"])
+def test_worker_request_is_plain_json(payload, tmp_path, monkeypatch):
+    # The request crosses a process boundary: a callable, an object or an
+    # infinite end time in it would fail the download before it starts.
+    monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
+    monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)
+    monkeypatch.setattr(app.shutil, "which", lambda _: "/ffmpeg")
+    gif_folder = tmp_path / "gif" if payload.get("quality") == "gif" else None
+    request = app.worker_request({"id": "plain"}, payload, "https://youtu.be/abc123abc12",
+                                 {"id": "youtube"}, gif_folder)
+    assert json.loads(json.dumps(request, allow_nan=False))["url"] == "https://youtu.be/abc123abc12"
 
 
 def test_worker_restores_options_and_retries_session(monkeypatch, capsys):
@@ -185,11 +237,11 @@ def test_worker_restores_options_and_retries_session(monkeypatch, capsys):
             assert urls == ["https://youtu.be/fixture"]
 
     monkeypatch.setattr(app.yt_dlp, "YoutubeDL", YoutubeDL)
-    app.gif_source_worker({"opts": {"cookiesfrombrowser": ["chrome", "Profile 2", None, None],
-                                   "noplaylist": False, "playlistitems": "2-4",
-                                   "js_runtimes": {"node": {}}, "remote_components": ["ejs:npm"]},
-                           "ranges": [{"start_time": 3.25, "end_time": None}],
-                           "clip": {"clip_from": "3.25"}, "source": "youtube", "url": "https://youtu.be/fixture"})
+    app.ytdlp_worker({"opts": {"cookiesfrombrowser": ["chrome", "Profile 2", None, None],
+                               "noplaylist": False, "playlistitems": "2-4",
+                               "js_runtimes": {"node": {}}, "remote_components": ["ejs:npm"],
+                               "download_ranges": [{"start_time": 3.25, "end_time": None}]},
+                      "clip": {"clip_from": "3.25"}, "source": "youtube", "url": "https://youtu.be/fixture"})
     assert len(seen) == 2
     assert seen[-1]["cookiesfrombrowser"] == ("chrome", "Profile 2", None, None)
     assert seen[-1]["noplaylist"] is False and seen[-1]["playlistitems"] == "2-4"

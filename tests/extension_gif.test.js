@@ -183,3 +183,32 @@ test('completed GIF preview uses the actual animation, with escaped links for ea
   s.api.showGifResult({ ...job, status: 'processing' }, 'http://localhost:8000');
   assert.equal(s.node('gifResult').classList.contains('hidden'), true);
 });
+
+test('side panel tallies print a collection count as text, never markup', () => {
+  const s = surface('sidepanel/sidepanel.js');
+  s.chosen.plmode = 'playlist';
+  s.run(`info = { type: 'playlist', media: 'video', count: '<img src=x>' }; infoUrl = url(); syncTally();`);
+  assert.match(s.node('tally').innerHTML, /&lt;img src=x&gt; items/);
+});
+
+test('side panel collection ranges are only editable when they apply', () => {
+  const s = surface('sidepanel/sidepanel.js');
+  s.chosen.plmode = 'single';
+  s.run('syncNotes()');
+  for (const id of ['plStart', 'plEnd', 'plItems']) assert.equal(s.node(id).disabled, true, id);
+  s.chosen.plmode = 'playlist';
+  s.run('syncNotes()');
+  for (const id of ['plStart', 'plEnd', 'plItems']) assert.equal(s.node(id).disabled, false, id);
+});
+
+test('side panel speaks each change of state once and stays quiet between', () => {
+  const s = surface('sidepanel/sidepanel.js');
+  const said = [];
+  Object.defineProperty(s.node('announce'), 'textContent', { set(v) { said.push(v); }, get() { return said.at(-1) || ''; } });
+  for (const pct of [10, 40, 80]) s.run(`showJob({ id: 'j', status: 'downloading', progress: ${pct} }, true)`);
+  s.run(`showJob({ id: 'j', status: 'error', detail: 'Private video.' }, true)`);
+  s.run(`OFFTUBE.speakJob('lost'); OFFTUBE.speakJob('lost')`);
+  assert.deepEqual(said, ['Downloading.', 'Private video.', 'Lost the server — retrying…']);
+  assert.equal(s.api.printSummary({ type: 'gallery', count: 24, more: true, title: 'Moodboard', source: { label: 'Pinterest' }, entries: [] }),
+    'Pinterest collection ready, 24+ items: Moodboard.');
+});

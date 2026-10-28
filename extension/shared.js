@@ -19,6 +19,8 @@ const OFFTUBE = {
   },
   // Errors that mean "give the site a signed-in session".
   NEEDS_ACCESS: /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership|login/i,
+  // Jobs live in the server's memory: one it no longer knows stopped with it.
+  RESTARTED: 'offtube restarted, so this keep stopped. Keep it again.',
   // Grease-pencil strokes in a 100×100 box, stretched over what they mark.
   MARKS: {
     circle: 'M20 28C34 9 76 6 91 27C103 44 92 75 60 89C33 99 5 84 6 57C7 37 23 21 47 15C55 13 62 13 69 15',
@@ -73,14 +75,14 @@ OFFTUBE.api = async function api(server, path, body) {
     body: JSON.stringify(body || {}),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 };
 
 OFFTUBE.apiGet = async function apiGet(server, path) {
   const res = await fetch(server + path);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 };
 
@@ -188,6 +190,11 @@ OFFTUBE.exposingHtml = function exposingHtml(label) {
   </figure>`;
 };
 
+// A cell is named by its visible text ("03 · Video"), which speech input
+// users say aloud, so it must stay in the name (WCAG 2.5.3). Where a
+// thumbnail stands in for the title, the title follows for screen readers.
+const hiddenTitle = (e) => (e.thumbnail && e.title ? `<span class="visually-hidden">, ${esc(e.title)}</span>` : '');
+
 /* The inspected link as a print (one item) or a sheet of circle-able cells
  * (a collection). `cells` caps how many cells a narrow surface shows. */
 OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {}) {
@@ -200,9 +207,9 @@ OFFTUBE.printHtml = function printHtml(info, { cells = 50, circle = true } = {})
       <div class="rebate">
         <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? '+' : ''} items</span></div>
         <ol class="contact">${entries.map((e, i) => `<li>
-          <${circle ? 'button type="button"' : 'span'} class="cell"${circle ? ` aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ''}"` : ''}>
+          <${circle ? 'button type="button"' : 'span'} class="cell"${circle ? ` aria-pressed="false" data-i="${i + 1}"` : ''}>
             <span class="cell-frame"><span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>${circle ? OFFTUBE.markSvg('circle') : ''}</span>
-            <span class="edge edge-dim cell-no">${pad2(i + 1)}${e.is_video ? ' · Video' : ''}</span>
+            <span class="edge edge-dim cell-no">${pad2(i + 1)}${e.is_video ? ' · Video' : ''}</span>${hiddenTitle(e)}
           </${circle ? 'button' : 'span'}></li>`).join('')}</ol>
         <div class="edge-row"><span class="edge edge-dim">${circle ? 'Circle prints to keep only those' : `${esc(site)}`}</span><span class="edge" id="sheetCount">All ${esc(count)}${info.more ? '+' : ''}</span></div>
       </div>
@@ -392,6 +399,66 @@ OFFTUBE.formatsHtml = function formatsHtml(list, selected, { chips = false } = {
       <span class="fmt-name">${esc(q.name)}${OFFTUBE.markSvg('circle')}</span>
       ${chips ? '' : `<span class="fmt-sub">${esc(q.sub || '')}</span>`}
     </label>`).join('');
+};
+
+/* ---------------- the deck and what is spoken ---------------- */
+
+/* One polite announcer per surface (#announce). The deck and the stage
+ * redraw on every poll; reading each redraw aloud would drown a screen
+ * reader, so only what a link turned out to be, each change of a job's
+ * state and failures are spoken. */
+OFFTUBE.announce = function announce(text) {
+  const el = document.getElementById('announce');
+  if (el) el.textContent = text;
+};
+
+OFFTUBE.SPOKEN = { queued: 'Waiting to start.', starting: 'Starting.', downloading: 'Downloading.', processing: 'Finishing the file.' };
+let spokenJob = '';
+
+OFFTUBE.jobSpeech = function jobSpeech(job) {
+  if (job.status === 'done') {
+    const files = job.files || [];
+    return files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`;
+  }
+  if (job.status === 'cancelled') return 'Cancelled.';
+  if (job.status === 'processing' && job.quality === 'gif') return 'Making the GIF.';
+  return OFFTUBE.SPOKEN[job.status] || '';
+};
+
+/* Speaks a job once per state ('lost' marks a server outage). */
+OFFTUBE.speakJob = function speakJob(job) {
+  const said = job === 'lost' ? 'lost' : `${job.id}:${job.status}`;
+  if (said === spokenJob) return;
+  spokenJob = said;
+  if (job === 'lost') OFFTUBE.announce('Lost the server — retrying…');
+  else if (job.status !== 'error') OFFTUBE.announce(OFFTUBE.jobSpeech(job)); // setDeck speaks every failure
+};
+
+OFFTUBE.printSummary = function printSummary(info) {
+  const site = (info.source && info.source.label) || 'Link';
+  const title = info.title || 'Untitled';
+  if (OFFTUBE.isCollection(info)) {
+    const count = `${info.count || (info.entries || []).length}${info.more ? '+' : ''}`;
+    return `${site} ${info.type === 'playlist' ? 'playlist' : 'collection'} ready, ${count} items: ${title}.`;
+  }
+  const kind = (OFFTUBE.MEDIA_WORD[info.media] || (info.type === 'gallery' ? 'Post' : 'Video')).toLowerCase();
+  return `${site} ${kind} ready: ${title}.`;
+};
+
+OFFTUBE.setDeck = function setDeck(text, mode, pct) {
+  const status = document.getElementById('jobStatus');
+  const meter = document.getElementById('meter');
+  status.textContent = text;
+  status.parentElement.classList.toggle('is-error', mode === 'error');
+  status.parentElement.classList.toggle('is-done', mode === 'done');
+  meter.classList.toggle('is-error', mode === 'error');
+  meter.classList.toggle('is-done', mode === 'done');
+  if (typeof pct === 'number') {
+    meter.style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
+    meter.setAttribute('aria-valuenow', String(Math.round(pct)));
+    document.getElementById('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
+  }
+  if (mode === 'error') OFFTUBE.announce(text);
 };
 
 /* Problem block: struck mark + message (+ optional fix button). */

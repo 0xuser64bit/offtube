@@ -46,19 +46,25 @@ def test_invalid_range_rejected_before_queue(extra, monkeypatch):
     assert jid is None and error[1] == 400
 
 
-def test_gif_options_use_private_source_and_disable_subtitles(tmp_path, monkeypatch):
+def test_gif_source_request_uses_private_folder_and_disables_subtitles(tmp_path, monkeypatch):
     monkeypatch.setattr(app.shutil, "which", lambda _: "/ffmpeg")
-    opts = app.build_download_opts({"id": "gif", "gif_dir": str(tmp_path)},
-                                   {"quality": "gif", "subtitles": True, "clip_from": "1.25", "clip_to": "2.5"})
-    assert str(tmp_path) in opts["outtmpl"]
+    payload = {"quality": "gif", "subtitles": True, "clip_from": "1.25", "clip_to": "2.5"}
+    request = app.worker_request({"id": "gif"}, payload, "https://youtu.be/abc123abc12",
+                                 {"id": "youtube"}, gif_folder=tmp_path)
+    opts = request["opts"]
+    assert Path(opts["outtmpl"]).parent.parent == tmp_path.resolve()
     assert opts["format"] == "bv/b[vcodec!=none]/b"
     assert not opts.get("writesubtitles")
-    assert len(opts["post_hooks"]) == 1
-    assert list(opts["download_ranges"]({}, None)) == [{"start_time": 1.25, "end_time": 2.5}]
+    assert opts["download_ranges"] == [{"start_time": 1.25, "end_time": 2.5}]
+    assert request["clip"] == {"clip_from": "1.25"}  # the worker's GIF-source filter
+
+
+def test_gif_source_filter_refuses_live_and_late_starts():
     with pytest.raises(app.DownloadError, match="finished video"):
-        opts["match_filter"]({"is_live": True}, incomplete=True)
+        app.gif_source_filter({"is_live": True}, {}, incomplete=True)
     with pytest.raises(app.DownloadError, match="past the end"):
-        opts["match_filter"]({"duration": 1})
+        app.gif_source_filter({"duration": 1}, {"clip_from": "1.25"})
+    assert app.gif_source_filter({"duration": 5}, {"clip_from": "1.25"}) is None
 
 
 @pytest.fixture
@@ -88,13 +94,13 @@ def test_gif_job_cleanup_on_failure(gif_job, monkeypatch):
 def test_gif_cancellation_before_conversion(gif_job):
     gif_job["cancel_requested"] = True
     with pytest.raises(app.DownloadError, match="Cancelled"):
-        app.check_gif_job(gif_job)
+        app.check_job(gif_job)
 
 
 def test_gif_stops_on_low_disk(gif_job, monkeypatch):
     monkeypatch.setattr(app, "disk_low_locked", lambda _: True)
     with pytest.raises(app.DownloadError, match="disk is almost full"):
-        app.check_gif_job(gif_job)
+        app.check_job(gif_job)
     assert gif_job["disk_full"]
 
 
@@ -307,7 +313,7 @@ def test_gif_source_keeps_finished_gifs_when_the_worker_exits_early(gif_job, tmp
     gif_job["gif_dir"] = str(folder)
     video = folder / "clip.mp4"
     video.write_bytes(b"v")
-    monkeypatch.setattr(app, "stop_gif_source", lambda proc: None)
+    monkeypatch.setattr(app, "stop_process_tree", lambda proc, wait=5: None)
     monkeypatch.setattr(app, "build_download_opts", lambda job, payload: {"outtmpl": str(folder / "x.mp4")})
     monkeypatch.setattr(app.subprocess, "Popen", _source_proc([
         json.dumps({"kind": "file", "data": str(video)}),
@@ -325,7 +331,7 @@ def test_gif_source_error_is_kept_when_nothing_was_fetched(gif_job, tmp_path, mo
     folder = tmp_path / "src"
     folder.mkdir()
     gif_job["gif_dir"] = str(folder)
-    monkeypatch.setattr(app, "stop_gif_source", lambda proc: None)
+    monkeypatch.setattr(app, "stop_process_tree", lambda proc, wait=5: None)
     monkeypatch.setattr(app, "build_download_opts", lambda job, payload: {"outtmpl": str(folder / "x.mp4")})
     monkeypatch.setattr(app.subprocess, "Popen", _source_proc([
         json.dumps({"kind": "error", "data": "playlist item failed"}),

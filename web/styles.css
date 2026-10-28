@@ -275,11 +275,14 @@ figure { margin: 0; }
 
 /* blank sheet */
 .is-blank .rebate { overflow: hidden; }
-.blank-frames { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+/* The call lies over the frames in one grid cell, which grows to fit it: it
+   never covers the edge rows, however large or widely spaced the text. */
+.blank-sheet { display: grid; }
+.blank-sheet > * { grid-area: 1 / 1; }
+.blank-frames { display: grid; grid-template-columns: repeat(3, 1fr); align-content: start; gap: 12px; }
 .blank-frames span { display: flex; align-items: flex-end; aspect-ratio: 3 / 2; padding: 8px 10px; background: var(--rebate-2); color: var(--edge-2); }
 .blank-call {
-  position: absolute;
-  inset: 0;
+  position: relative; /* its scrim over the frame numbers, as a layer */
   display: grid;
   place-content: center;
   gap: 8px;
@@ -523,7 +526,7 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
 .kept-more { grid-column: 1 / -1; }
 .kept-more .btn { border-color: var(--edge-2); color: var(--edge); }
 .kept-more .btn:hover { background: var(--rebate-2); }
-.pair.is-off { opacity: .45; }
+.pair.is-off, .field.is-off { opacity: .45; }
 
 /* ---------- the loupe: round by nature, the one circle besides the marks ---------- */
 .loupe { position: fixed; left: 0; top: 0; z-index: 40; width: 184px; height: 184px; border: 6px solid var(--rebate); border-radius: 50%; background-color: var(--rebate-2); background-repeat: no-repeat; pointer-events: none; opacity: 0; transition: opacity .18s var(--ease); will-change: transform; }
@@ -553,7 +556,11 @@ input::placeholder, textarea::placeholder { color: var(--ink-3); opacity: 1; }
   .blank-frames span:nth-child(n + 5) { display: none; }
   .contact { grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
   .kept-tools { margin-left: 0; width: 100%; }
-  .kept-tools .seg { flex: 1 1 100%; }
+  /* Five kinds fit a 320 px column (WCAG 1.4.10 reflow) as equal segments,
+     and wrap rather than overflow when text spacing widens them (1.4.12). */
+  .kept-tools .seg { display: flex; flex-wrap: wrap; flex: 1 1 100%; }
+  .kept-tools .seg label { flex: 1 1 0; min-width: max-content; }
+  .kept-tools .seg span { padding-inline: 8px; }
   .kept-tools input[type="search"] { flex: 1; width: auto; }
   .sheet-grid { grid-template-columns: repeat(2, 1fr); gap: 22px 10px; padding: 28px 12px 30px; }
   .strip-frame { flex-basis: 172px; }

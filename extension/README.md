@@ -54,12 +54,17 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
   `web/favicon.svg`).
 - No inline scripts, `async`/`await` only. The service worker holds no job
   state — polling lives in popup/side panel. Shared helpers are `shared.js`.
+- The service worker opens the side panel before anything is awaited in the
+  listener: Chrome honors a click or shortcut only that long. So the menu
+  entries' ids say whether Sign-in is a cookies file, and they are rebuilt
+  when it changes.
 
 ## Load it
 
 1. Start the server: `./run.sh` (must be running — the badge shows
    "server unreachable" otherwise).
-2. `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
+2. `chrome://extensions` (Chrome 116 or later) → Developer mode → Load unpacked →
+   `extension/`.
 3. Open a video, pin, post or track → click the offtube icon.
    - Popup shows `Site · tab title` with the URL prefilled → inspects → Download.
    - "Open side panel →" gives quality/trim/collection/access + queue/library.

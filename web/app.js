@@ -18,6 +18,8 @@ const checked = (name) => document.querySelector(`input[name="${name}"]:checked`
 const NEEDS_ACCESS = /not a bot|sign in|signed-in|needs to be reloaded|cookies|membership|login/i;
 const MEDIA_WORD = { image: "Image", video: "Video", audio: "Audio", mixed: "Post" };
 const ACTIVE = ["queued", "starting", "downloading", "processing"];
+// Jobs live in the server's memory: one it no longer knows stopped with it.
+const RESTARTED = "offtube restarted, so this keep stopped. Keep it again.";
 const STATE_WORD = {
   queued: "Waiting", starting: "Starting", downloading: "Developing", processing: "Fixing",
   done: "Kept", error: "Failed", cancelled: "Cancelled",
@@ -31,6 +33,42 @@ const MARKS = {
 };
 const markSvg = (kind) =>
   `<svg class="mark mark-${kind}" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="${MARKS[kind]}"/></svg>`;
+
+// One polite announcer for the desk (#announce). The deck and the print
+// redraw on every poll; reading each redraw aloud would drown a screen
+// reader, so only what a link turned out to be, each change of a job's
+// state and failures are spoken.
+function announce(text) { $("announce").textContent = text; }
+
+const SPOKEN = { queued: "Waiting to start.", starting: "Starting.", downloading: "Downloading.", processing: "Finishing the file." };
+
+function jobSpeech(job) {
+  if (job.status === "done") {
+    const files = job.files || [];
+    return files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || "the file"}.`;
+  }
+  if (job.status === "cancelled") return "Cancelled.";
+  if (job.status === "processing" && job.quality === "gif") return "Making the GIF.";
+  return SPOKEN[job.status] || "";
+}
+
+function speakJob(job) {
+  const said = `${job.id}:${job.status}`;
+  if (said === state.spoken) return;
+  state.spoken = said;
+  if (job.status !== "error") announce(jobSpeech(job)); // setDeck speaks every failure
+}
+
+function printSummary(info) {
+  const site = (info.source && info.source.label) || "Link";
+  const title = info.title || "Untitled";
+  if (info.type === "playlist" || (info.type === "gallery" && info.count > 1)) {
+    const count = `${info.count || (info.entries || []).length}${info.more ? "+" : ""}`;
+    return `${site} ${info.type === "playlist" ? "playlist" : "collection"} ready, ${count} items: ${title}.`;
+  }
+  const kind = (info.type === "gallery" ? MEDIA_WORD[info.media] || "Post" : MEDIA_WORD[info.media] || "Video").toLowerCase();
+  return `${site} ${kind} ready: ${title}.`;
+}
 
 const VIDEO_LADDER = [
   { id: "best", name: "Best available", sub: "highest stream" },
@@ -52,11 +90,14 @@ const state = {
   marks: new Set(),    // circled item numbers on a collection sheet
   fetchToken: 0,
   activeJobId: null,   // job shown on the deck
+  serverUp: true,      // what the health line last said
+  spoken: "",          // the job state last announced ("id:status")
   printJobId: null,    // job started from the current source (develops its print)
   previewJobId: null,  // source job or session job explicitly selected for its result
   pollTimer: null,
-  files: [],
-  shownFiles: 60,
+  files: [],           // kept files loaded so far, newest first
+  total: 0,            // files in the library
+  matched: 0,          // files matching the current search and kind
   diskFree: "",
   preferredOutput: "video",
   quality: { video: "best", audio: "audio_mp3" },
@@ -65,7 +106,7 @@ const state = {
 async function api(path, opts = {}) {
   const res = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(data.error || `Request failed (${res.status})`), { status: res.status });
   return data;
 }
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body || {}) });
@@ -209,7 +250,11 @@ function syncNotes() {
     pl = it ? `Items ${it}` : s || e ? `#${s || 1}–${e || "last"}` : "Whole collection";
   }
   setNote("plState", pl, Boolean(state.marks.size) || mode === "playlist");
-  $("plRangeRow").classList.toggle("is-off", mode !== "playlist");
+  // A range only applies to the whole collection; "This item" ignores it.
+  const ranged = mode === "playlist";
+  for (const id of ["plStart", "plEnd", "plItems"]) $(id).disabled = !ranged;
+  $("plRangeRow").classList.toggle("is-off", !ranged);
+  $("plItemsField").classList.toggle("is-off", !ranged);
 
   const subs = $("subs").checked;
   setNote("subsState", subs ? ($("subLang").value.trim() || "en") : "Off", subs);
@@ -240,10 +285,10 @@ function syncTally() {
     const perVideo = gif ? " · one GIF per video" : "";
     const many = info.type === "playlist" || (info.type === "gallery" && info.count > 1);
     if (state.marks.size) what = `<b>${state.marks.size} circled item${state.marks.size === 1 ? "" : "s"}</b>${perVideo}`;
-    else if (many && (checked("plmode") === "playlist")) what = `<b>${info.count || "All"}${info.more ? "+" : ""} items</b>${perVideo}`;
+    else if (many && (checked("plmode") === "playlist")) what = `<b>${esc(info.count || "All")}${info.more ? "+" : ""} items</b>${perVideo}`;
     else if (info.type === "gallery") what = gif
       ? "<b>1 GIF per video</b> · images are skipped"
-      : `<b>${info.count > 1 ? `${info.count} files` : "1 file"}</b>`;
+      : `<b>${info.count > 1 ? `${esc(info.count)} files` : "1 file"}</b>`;
     else {
       const size = (formatOptions().find((q) => q.id === selectedQuality()) || {}).size;
       what = `<b>1 ${gif ? "GIF" : outputType() === "audio" ? "audio file" : "video"}</b>${size && !gif ? ` · ~${esc(size)}` : ""}`;
@@ -278,6 +323,7 @@ function showBlank() {
 }
 
 function renderExposing(url) {
+  announce("Reading the link…");
   $("gifResult").classList.add("hidden");
   $("blank").classList.add("hidden");
   const host = (url.replace(/^https?:\/\//, "").split("/")[0] || "").replace(/^www\./, "");
@@ -296,6 +342,11 @@ function developHtml(src, extra = "") {
   return `<span class="develop"><img class="pos" src="${esc(src)}" alt="" />` +
     `<img class="neg" src="${esc(src)}" alt="" /><span class="mark-slot">${extra}</span></span>`;
 }
+
+// A cell is named by its visible text ("03 · Video 1:05"), which speech
+// input users say aloud, so it must stay in the name (WCAG 2.5.3). Where a
+// thumbnail stands in for the title, the title follows for screen readers.
+const hiddenTitle = (e) => (e.thumbnail && e.title ? `<span class="visually-hidden">, ${esc(e.title)}</span>` : "");
 
 function renderPrint(info) {
   $("gifResult").classList.add("hidden");
@@ -317,9 +368,9 @@ function renderPrint(info) {
       <div class="rebate">
         <div class="edge-row"><span class="edge">${esc(site)} · ${label}</span><span class="edge edge-dim">${esc(count)}${info.more ? "+" : ""} items</span></div>
         <ol class="contact">${entries.map((e, i) => `<li>
-          <button type="button" class="cell" aria-pressed="false" data-i="${i + 1}" aria-label="Item ${i + 1}${e.title ? `: ${esc(e.title)}` : ""}">
+          <button type="button" class="cell" aria-pressed="false" data-i="${i + 1}">
             <span class="cell-frame"><span class="cell-img">${e.thumbnail ? `<img src="${esc(e.thumbnail)}" alt="" loading="lazy" />` : `<span class="edge">${esc(e.title || `Item ${i + 1}`)}</span>`}</span>${markSvg("circle")}</span>
-            <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}${e.is_video ? " · Video" : ""}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>
+            <span class="edge-row"><span class="edge edge-dim">${pad2(i + 1)}${e.is_video ? " · Video" : ""}</span><span class="edge edge-dim">${esc(e.duration_str && e.duration_str !== "-" ? e.duration_str : "")}</span></span>${hiddenTitle(e)}
           </button></li>`).join("")}</ol>
         <div class="edge-row"><span class="edge edge-dim">Circle prints to keep only those</span><span class="edge" id="sheetCount"></span></div>
       </div>
@@ -358,6 +409,7 @@ function renderPrint(info) {
   }
   if (info.media === "audio") document.querySelector('input[name="otype"][value="audio"]').checked = true;
   box.classList.remove("hidden");
+  announce(printSummary(info));
   renderFormats();
   syncNotes();
 }
@@ -426,8 +478,7 @@ async function inspect() {
 
 let debounce = null;
 $("pasteForm").addEventListener("submit", (e) => { e.preventDefault(); clearTimeout(debounce); inspect(); });
-$("url").addEventListener("paste", () => { clearTimeout(debounce); debounce = setTimeout(inspect, 200); });
-$("url").addEventListener("input", () => {
+$("url").addEventListener("input", (e) => {
   clearTimeout(debounce);
   ++state.fetchToken;
   state.info = null;
@@ -444,7 +495,9 @@ $("url").addEventListener("input", () => {
   syncNotes();
   const v = $("url").value.trim();
   if (!v) return;
-  debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, 700);
+  // A paste or drop delivers the whole link at once; typing gets a pause to finish.
+  const whole = e.inputType === "insertFromPaste" || e.inputType === "insertFromDrop";
+  debounce = setTimeout(() => { if (looksLikeUrl(v) && v !== state.infoUrl) inspect(); }, whole ? 150 : 700);
 });
 $("infoErrorFix").addEventListener("click", () => {
   const d = $("discAccess");
@@ -551,6 +604,7 @@ function setDeck(text, mode, pct) {
     $("meter").setAttribute("aria-valuenow", String(Math.round(pct)));
     $("jobPct").textContent = mode === "busy" && pct > 0 ? `${Math.round(pct)}%` : "";
   }
+  if (mode === "error") announce(text);
 }
 
 // The print in the stage develops while its own job runs.
@@ -574,6 +628,7 @@ function finishPrint(kind, label) {
 
 function showJob(job, live) {
   const pct = job.progress || 0;
+  speakJob(job);
   $("jobLog").textContent = (job.log || []).slice(-40).join("\n");
   const isSource = state.printJobId === job.id;
   const isPrint = isSource && Boolean(currentInfo());
@@ -633,8 +688,18 @@ function pollJob(jobId) {
         if (job.status === "done") loadFiles();
         refreshQueue();
       }
-    } catch {
-      if (state.activeJobId === jobId) setDeck("Lost the server — retrying…", "busy");
+    } catch (err) {
+      if (state.activeJobId !== jobId) return;
+      if (err.status === 404) {
+        // The server answered without the job: no retry will bring it back.
+        clearInterval(state.pollTimer);
+        state.activeJobId = null;
+        showJob({ id: jobId, status: "error", detail: RESTARTED }, false);
+        refreshQueue();
+        return;
+      }
+      setDeck("Lost the server — retrying…", "busy");
+      if (state.spoken !== "lost") { state.spoken = "lost"; announce("Lost the server — retrying…"); }
     } finally {
       inFlight = false;
     }
@@ -741,7 +806,11 @@ async function refreshQueue() {
     $("queueCount").textContent = all.length ? `${active ? `${active} developing · ` : ""}${all.length} print${all.length === 1 ? "" : "s"}` : "";
     $("queueEmpty").classList.toggle("hidden", all.length > 0);
     $("clearQueue").classList.toggle("hidden", !all.some((j) => !ACTIVE.includes(j.status)));
-  } catch { /* the health line already says the server is down */ }
+    if (!state.serverUp) checkHealth();
+  } catch {
+    // Said now, not at the next health check.
+    if (state.serverUp) checkHealth();
+  }
 }
 
 $("queue").addEventListener("click", async (e) => {
@@ -799,17 +868,20 @@ function keptThumb(f) {
   return `<span class="edge">${esc(ext || "File")}</span>`;
 }
 
+const FILES_PAGE = 60;
+let filesRequest = 0; // the latest library request; older answers are dropped
+let filesFilter = null;
+let searchTimer = null;
+
 function renderFiles() {
-  const q = $("fileSearch").value.trim().toLowerCase();
-  const kind = checked("kind") || "all";
-  const list = state.files.filter((f) => (kind === "all" || (kind === "gif" ? /\.gif$/i.test(f.name) : f.kind === kind)) && (!q || f.name.toLowerCase().includes(q)));
-  const shown = list.slice(0, state.shownFiles);
-  $("footFiles").textContent = state.files.length
-    ? `${state.files.length} file${state.files.length === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
+  const list = state.files;
+  $("footFiles").textContent = state.total
+    ? `${state.total} file${state.total === 1 ? "" : "s"}${state.diskFree ? ` · ${state.diskFree} free` : ""}`
     : "";
-  $("filesEmpty").textContent = state.files.length ? "Nothing matches." : "Nothing kept yet. Files you keep land in downloads/.";
+  $("filesEmpty").textContent = state.total ? "Nothing matches." : "Nothing kept yet. Files you keep land in downloads/.";
   $("filesEmpty").classList.toggle("hidden", list.length > 0);
-  $("files").innerHTML = shown.map((f, i) => {
+  const more = state.matched - list.length;
+  $("files").innerHTML = list.map((f, i) => {
     const ext = (f.name.split(".").pop() || "").toUpperCase();
     const when = f.modified ? dateFmt.format(new Date(f.modified)) : "";
     return `<li class="kept-cell">
@@ -819,26 +891,80 @@ function renderFiles() {
       <p class="kept-meta">${esc(when)}</p>
       <div class="kept-actions"><a href="${esc(f.url)}" download>Save</a><button class="text-btn" type="button" data-del="${esc(f.name)}">Delete</button></div>
     </li>`;
-  }).join("") + (list.length > shown.length
-    ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(60, list.length - shown.length)} more</button></li>` : "");
+  }).join("") + (more > 0
+    ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(FILES_PAGE, more)} more</button></li>` : "");
   $$("video[data-src]", $("files")).forEach((v) => { if (lazyVideos) lazyVideos.observe(v); else v.src = v.dataset.src; });
 }
 
-async function loadFiles() {
+// The server searches and pages the whole library. A refresh keeps as many
+// rows as are showing, `more` appends the next page, and `reset` starts over
+// for a new search or kind.
+async function loadFiles({ more = false, reset = false } = {}) {
+  const q = $("fileSearch").value.trim();
+  const kind = checked("kind") || "all";
+  const filter = JSON.stringify([q, kind]);
+  if (more && filter !== filesFilter) {
+    more = false;
+    reset = true;
+  }
+  const my = ++filesRequest;
+  const shown = state.files.length;
+  const params = new URLSearchParams({
+    offset: String(more ? shown : 0),
+    limit: String(more || reset ? FILES_PAGE : Math.min(500, Math.max(FILES_PAGE, shown))),
+  });
+  if (q) params.set("q", q);
+  if (kind !== "all") params.set("kind", kind);
   try {
-    const { files, disk_free_str } = await api("/api/files");
-    state.files = files || [];
-    state.diskFree = disk_free_str || "";
+    let data = await api(`/api/files?${params}`);
+    if (my !== filesRequest) return;
+    const page = data.files || [];
+    if (!more && !reset && shown > 500) {
+      while (page.length < shown && page.length < data.matched) {
+        params.set("offset", String(page.length));
+        params.set("limit", String(Math.min(500, shown - page.length)));
+        data = await api(`/api/files?${params}`);
+        if (my !== filesRequest) return;
+        if (!data.files?.length) break;
+        page.push(...data.files);
+      }
+    }
+    if (more) {
+      const have = new Set(state.files.map((f) => f.name));
+      state.files = state.files.concat(page.filter((f) => !have.has(f.name)));
+    } else {
+      state.files = page;
+    }
+    filesFilter = filter;
+    state.total = data.total ?? state.files.length;
+    state.matched = data.matched ?? state.files.length;
+    state.diskFree = data.disk_free_str || "";
     renderFiles();
     syncTally();
-  } catch { /* server down */ }
+  } catch (err) {
+    if (my === filesRequest && (more || reset)) {
+      setDeck(`Couldn’t load files: ${err.message}. Try again.`, "error");
+    }
+  }
 }
 
-$("refreshFiles").addEventListener("click", loadFiles);
-$("fileSearch").addEventListener("input", () => { state.shownFiles = 60; renderFiles(); });
-$$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => { state.shownFiles = 60; renderFiles(); }));
+$("refreshFiles").addEventListener("click", () => loadFiles());
+$("fileSearch").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadFiles({ reset: true }), 200);
+});
+$$('input[name="kind"]').forEach((r) => r.addEventListener("change", () => loadFiles({ reset: true })));
 $("files").addEventListener("click", async (e) => {
-  if (e.target.closest("#moreFiles")) { state.shownFiles += 60; renderFiles(); return; }
+  const moreButton = e.target.closest("#moreFiles");
+  if (moreButton) {
+    moreButton.disabled = true;
+    try {
+      await loadFiles({ more: true });
+    } finally {
+      moreButton.disabled = false;
+    }
+    return;
+  }
   const btn = e.target.closest("[data-del]");
   if (!btn) return;
   const name = btn.dataset.del;
@@ -869,10 +995,12 @@ async function checkHealth() {
     const env = `yt-dlp ${checks.yt_dlp} · gallery-dl ${checks.gallery_dl || "?"} · ${(checks.ffmpeg_version || "ffmpeg ?").split(" Copyright")[0]} · JS ${checks.js_runtime || "none"}`;
     el.title = env;
     $("envLine").textContent = env;
+    state.serverUp = true;
   } catch {
     el.className = "health is-bad";
     $("healthText").textContent = "Server off — run ./run.sh";
     el.title = "";
+    state.serverUp = false;
   }
 }
 

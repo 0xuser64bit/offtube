@@ -15,6 +15,7 @@
 </head>
 <body>
 <a class="skip" href="#url">Skip to the link field</a>
+<p id="announce" class="visually-hidden" role="status"></p>
 <svg class="defs" aria-hidden="true" focusable="false"><filter id="wax" x="-10%" y="-10%" width="120%" height="120%"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="grain"/><feDisplacementMap in="SourceGraphic" in2="grain" scale="1.4" xChannelSelector="R" yChannelSelector="G"/></filter></svg>
 
 <header class="bar">
@@ -39,20 +40,22 @@
     <div id="blank" class="print is-blank">
       <div class="rebate">
         <div class="edge-row"><span class="edge">offtube</span><span class="edge">unexposed</span></div>
-        <div class="blank-frames" aria-hidden="true">
-          <span class="edge">01</span><span class="edge">02</span><span class="edge">03</span>
-          <span class="edge">04</span><span class="edge">05</span><span class="edge">06</span>
+        <div class="blank-sheet">
+          <div class="blank-frames" aria-hidden="true">
+            <span class="edge">01</span><span class="edge">02</span><span class="edge">03</span>
+            <span class="edge">04</span><span class="edge">05</span><span class="edge">06</span>
+          </div>
+          <div class="blank-call">
+            <p class="blank-title">Paste a link to make a print.</p>
+            <p class="blank-sub">You see exactly what’s there before anything is kept.</p>
+          </div>
         </div>
         <div class="edge-row"><span class="edge">Paste · preview · keep</span><span class="edge">This machine only</span></div>
-        <div class="blank-call">
-          <p class="blank-title">Paste a link to make a print.</p>
-          <p class="blank-sub">You see exactly what’s there before anything is kept.</p>
-        </div>
       </div>
-      <p class="sources" aria-label="Works with">YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
+      <p class="sources"><span class="visually-hidden">Works with: </span>YouTube · TikTok · Instagram · Pinterest · X · Reddit · Facebook · Bluesky · Tumblr · Vimeo · Twitch · Dailymotion · Bilibili · SoundCloud · Bandcamp · Mixcloud · Flickr · DeviantArt · ArtStation · Imgur <span>+ 2,000 more</span></p>
     </div>
 
-    <div id="print" class="hidden" aria-live="polite"></div>
+    <div id="print" class="hidden"></div>
     <div id="gifResult" class="gif-result hidden">
       <div id="gifPreviewFrame" class="rebate hidden">
         <div class="edge-row"><span class="edge">GIF preview</span><span class="edge edge-dim">offtube</span></div>
@@ -127,8 +130,8 @@
             <label class="field"><span class="label">Start #</span><input id="plStart" class="num" type="number" min="1" placeholder="1" /></label>
             <label class="field"><span class="label">End #</span><input id="plEnd" class="num" type="number" min="1" placeholder="last" /></label>
           </div>
-          <label class="field"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
-          <p class="hint" id="plHint">Playlists, boards, albums, profiles and multi-photo posts. Circle prints on the sheet to keep only those.</p>
+          <label class="field" id="plItemsField"><span class="label">Or items</span><input id="plItems" class="num" placeholder="1-5, 7, 10-12" autocomplete="off" spellcheck="false" /></label>
+          <p class="hint" id="plHint">Playlists, boards, albums, profiles and multi-photo posts. Choose Whole collection to set a range, or circle prints on the sheet to keep only those.</p>
         </div>
       </details>
 
@@ -187,12 +190,12 @@
       <button id="cancelBtn" class="btn btn-quiet hidden" type="button">Cancel</button>
     </div>
 
-    <div class="deck" aria-live="polite">
+    <div class="deck">
       <div class="meter" id="meter" role="progressbar" aria-label="Progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i id="bar"></i></div>
       <p class="deck-line"><span id="jobStatus">Nothing developing.</span><span class="deck-pct num" id="jobPct"></span></p>
       <details class="log" id="logBox">
         <summary>Log</summary>
-        <pre id="jobLog" tabindex="0" aria-label="Transfer log"></pre>
+        <pre id="jobLog" tabindex="0" role="region" aria-label="Transfer log"></pre>
       </details>
     </div>
   </aside>

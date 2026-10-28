@@ -18,6 +18,7 @@ let printJobId = null;
 let resultJobId = null;
 let pollTimer = null;
 let inspectToken = 0;
+let serverUp = true; // what the health line last said
 
 const url = () => $('url').value.trim();
 const access = () => checked('access') || 'none';
@@ -113,7 +114,11 @@ function syncNotes() {
     pl = it ? `Items ${it}` : s || e ? `#${s || 1}–${e || 'last'}` : 'Whole collection';
   }
   setNote('plState', pl, Boolean(marks.size) || mode === 'playlist');
-  $('plRangeRow').classList.toggle('is-off', mode !== 'playlist');
+  // A range only applies to the whole collection; "This item" ignores it.
+  const ranged = mode === 'playlist';
+  for (const id of ['plStart', 'plEnd', 'plItems']) $(id).disabled = !ranged;
+  $('plRangeRow').classList.toggle('is-off', !ranged);
+  $('plItemsField').classList.toggle('is-off', !ranged);
   setNote('subsState', $('subs').checked ? ($('subLang').value.trim() || 'en') : 'Off', $('subs').checked);
   const a = access();
   const browserName = $('cookieBrowserName').selectedOptions[0]?.textContent || 'Browser';
@@ -130,7 +135,7 @@ function syncTally() {
   let what;
   const perVideo = quality() === 'gif' ? ' · one GIF per video' : '';
   if (marks.size) what = `<b>${marks.size} circled</b>${perVideo}`;
-  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${i.count}${i.more ? '+' : ''} items</b>${perVideo}`;
+  else if (OFFTUBE.isCollection(i) && checked('plmode') === 'playlist') what = `<b>${esc(i.count)}${i.more ? '+' : ''} items</b>${perVideo}`;
   else if (i.type === 'gallery') what = quality() === 'gif' ? '<b>1 GIF per video</b> · images are skipped' : '<b>1 file</b> · kept as posted';
   else {
     const q = (i.qualities || []).find((x) => x.id === quality());
@@ -190,6 +195,7 @@ async function inspect() {
   invalidateSource();
   const my = inspectToken;
   $('stage').innerHTML = OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]);
+  OFFTUBE.announce('Reading the link…');
   $('sheetTools').classList.add('hidden');
   try {
     const { info: got } = await OFFTUBE.api(server, '/api/info', { url: u, ...accessFields() });
@@ -201,6 +207,7 @@ async function inspect() {
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     $('stage').innerHTML = OFFTUBE.printHtml(info);
+    OFFTUBE.announce(OFFTUBE.printSummary(info));
     setLink(u, { label: `${(info.source && info.source.label) || 'Link'} · ${u.replace(/^https?:\/\/(www\.)?/, '')}` });
     document.querySelector(`input[name="plmode"][value="${OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
     renderFormats();
@@ -240,22 +247,11 @@ $('markNone').addEventListener('click', () => {
 
 /* ---------------- keep + job ---------------- */
 
-function setDeck(text, mode, pct) {
-  $('jobStatus').textContent = text;
-  const line = $('jobStatus').parentElement;
-  line.classList.toggle('is-error', mode === 'error');
-  line.classList.toggle('is-done', mode === 'done');
-  $('meter').classList.toggle('is-error', mode === 'error');
-  $('meter').classList.toggle('is-done', mode === 'done');
-  if (typeof pct === 'number') {
-    $('meter').style.setProperty('--p', String(Math.max(0, Math.min(100, pct)) / 100));
-    $('meter').setAttribute('aria-valuenow', String(Math.round(pct)));
-    $('jobPct').textContent = mode === 'busy' && pct > 0 ? `${Math.round(pct)}%` : '';
-  }
-}
+const setDeck = OFFTUBE.setDeck;
 
 function showJob(job, live) {
   const pct = job.progress || 0;
+  OFFTUBE.speakJob(job);
   $('log').textContent = (job.log || []).slice(-30).join('\n');
   const isPrint = printJobId === job.id;
   if (resultJobId === job.id) OFFTUBE.showGifResult(job, server);
@@ -294,8 +290,18 @@ function pollJob(id) {
         refreshFiles();
         refreshQueue();
       }
-    } catch {
-      if (activeJobId === id) setDeck('Lost the server — retrying…', 'busy');
+    } catch (err) {
+      if (activeJobId !== id) return;
+      if (err.status === 404) {
+        // The server answered without the job: no retry will bring it back.
+        clearInterval(pollTimer);
+        activeJobId = null;
+        showJob({ id, status: 'error', detail: OFFTUBE.RESTARTED }, false);
+        refreshQueue();
+        return;
+      }
+      setDeck('Lost the server — retrying…', 'busy');
+      OFFTUBE.speakJob('lost');
     } finally {
       inFlight = false;
     }
@@ -400,7 +406,19 @@ async function refreshQueue() {
     $('queueCount').textContent = all.length ? `${active ? `${active} developing · ` : ''}${all.length} print${all.length === 1 ? '' : 's'}` : '';
     $('queueEmpty').classList.toggle('hidden', all.length > 0);
     $('clearQueue').classList.toggle('hidden', !all.some((j) => !OFFTUBE.ACTIVE.includes(j.status)));
-  } catch { /* health shows the server is down */ }
+    serverAnswered(true);
+  } catch {
+    serverAnswered(false);
+  }
+}
+
+// The panel stays open for hours: the queue refresh tells the health line
+// when offtube stops or starts, and a server that comes back gets the tab
+// read again, as the "Server off" print promises.
+async function serverAnswered(up) {
+  if (up === serverUp) return;
+  serverUp = await OFFTUBE.showHealth(server);
+  if (serverUp) followTab();
 }
 
 $('queue').addEventListener('click', async (e) => {
@@ -435,11 +453,12 @@ $('clearQueue').addEventListener('click', async () => {
 
 async function refreshFiles() {
   try {
-    const { files, disk_free_str: free } = await OFFTUBE.apiGet(server, '/api/files');
-    const list = files || [];
-    $('filesCount').textContent = list.length ? `${list.length}${free ? ` · ${free} free` : ''}` : '';
+    const { files, total, disk_free_str: free } = await OFFTUBE.apiGet(server, '/api/files?limit=12');
+    const list = (files || []).slice(0, 12);
+    const count = total ?? list.length; // a server before paging sent no total
+    $('filesCount').textContent = count ? `${count}${free ? ` · ${free} free` : ''}` : '';
     $('filesEmpty').classList.toggle('hidden', list.length > 0);
-    $('files').innerHTML = list.slice(0, 12).map((f, i) => {
+    $('files').innerHTML = list.map((f, i) => {
       const href = esc(server + f.url);
       const ext = (f.name.split('.').pop() || '').toUpperCase();
       const thumb = f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`
@@ -475,7 +494,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   OFFTUBE.wireLoupe();
   syncNotes();
 
-  await OFFTUBE.showHealth(server);
+  serverUp = await OFFTUBE.showHealth(server);
   const session = await chrome.storage.session.get(['pendingUrl', 'pendingOptions']);
   if (session.pendingUrl) {
     setLink(session.pendingUrl);
@@ -540,7 +559,7 @@ $('server').addEventListener('change', async () => {
     $('server').value = v;
     server = v;
     await chrome.storage.local.set({ serverUrl: v });
-    await OFFTUBE.showHealth(v);
+    serverUp = await OFFTUBE.showHealth(v);
     refreshQueue();
     refreshFiles();
   } catch (err) {
