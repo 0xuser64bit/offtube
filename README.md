@@ -202,10 +202,12 @@ In the extension, loaded unpacked: the popup with the server off and keeping
 a pasted link, a collection handed from the popup to the side panel, the
 side panel's library, and both surfaces used with the keyboard alone. Both
 get an axe-core WCAG 2.2 AA audit in light and dark. Chromium's own context
-menu ignores Playwright's input, so `background.test.mjs` runs a headed
-Chromium on a private Xvfb display and right-clicks through XTest
-(`xinput.py`): "Keep link with offtube" and "Keep this page with offtube"
-must reach the server. The suites are skipped when Playwright isn't
+menu and shortcuts ignore Playwright's input, so `background.test.mjs` runs
+a headed Chromium on a private Xvfb display and clicks and types through
+XTest (`xinput.py`): "Keep link with offtube" and "Keep this page with
+offtube" must reach the server, and with Sign-in set to a cookies file the
+menu, like `Alt+Shift+O`, must open the real side panel, which takes the
+link. The suites are skipped when Playwright isn't
 installed (the audits when axe-core isn't, and the real input without Xvfb,
 so on Linux only); to run them, install `playwright@1.63.0` and
 `axe-core@4.14.0` where Node finds them (or point `NODE_PATH` there) and run

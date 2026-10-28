@@ -54,6 +54,10 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
   `web/favicon.svg`).
 - No inline scripts, `async`/`await` only. The service worker holds no job
   state — polling lives in popup/side panel. Shared helpers are `shared.js`.
+- The service worker opens the side panel before anything is awaited in the
+  listener: Chrome honors a click or shortcut only that long. So the menu
+  entries' ids say whether Sign-in is a cookies file, and they are rebuilt
+  when it changes.
 
 ## Load it
 

@@ -51,6 +51,10 @@ a product decision, not a prerequisite for reliable local operation.
   file's bytes and length come from the same open descriptor.
 - Preserve the web/extension feature contract together. The engine and media
   type, not the URL hostname alone, determine available controls.
+- The extension's service worker calls `chrome.sidePanel.open()` before a
+  listener's first `await`: Chrome honors the click or shortcut only that
+  long. What decides it must be known without storage, so the menu entries'
+  ids carry the cookies-file Sign-in.
 - Verify the packaged layout, not just execution from a source checkout.
 
 ## Trust boundary
@@ -130,11 +134,11 @@ performance or browser-accessibility audit:
    both engines' HTTP layers.
 3. **Expand release verification.** The web desk, popup and side panel are
    exercised in Chromium with axe-core audits. The popup and side panel run
-   there as pages in tabs, and the right-click menu gets real input on a
-   private X display; the toolbar popup's own window, opening the side
-   panel and the keyboard shortcut are not exercised, nor are real-site
-   failures, the web and extension tests on Windows and macOS, and a
-   running systemd service (its unit is only verified).
+   there as pages in tabs, and the right-click menu and the keyboard
+   shortcut get real input on a private X display, opening the real side
+   panel; the toolbar popup's own window is not exercised, nor are
+   real-site failures, the web and extension tests on Windows and macOS,
+   and a running systemd service (its unit is only verified).
    All three surfaces are checked for keyboard-only use, and the desk for
    reflow at 320 CSS px; text spacing and screen readers themselves are
    not. An automated audit is a regression check, not accessibility
