@@ -63,7 +63,8 @@ YouTube, TikTok, Instagram, Pinterest, X, Reddit, SoundCloud and 2,000+ more.
 
 1. Start the server: `./run.sh` (must be running — the badge shows
    "server unreachable" otherwise).
-2. `chrome://extensions` → Developer mode → Load unpacked → `extension/`.
+2. `chrome://extensions` (Chrome 116 or later) → Developer mode → Load unpacked →
+   `extension/`.
 3. Open a video, pin, post or track → click the offtube icon.
    - Popup shows `Site · tab title` with the URL prefilled → inspects → Download.
    - "Open side panel →" gives quality/trim/collection/access + queue/library.
