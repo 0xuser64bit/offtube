@@ -491,7 +491,7 @@ def library_name(name) -> str | None:
     """`name` if it can name a kept file: one path component, taken verbatim."""
     if not isinstance(name, str) or not name or name.startswith(".") or "\x00" in name:
         return None
-    if any(sep in name for sep in (os.sep, os.altsep) if sep) or is_temp_file(name):
+    if Path(name).anchor or any(sep in name for sep in (os.sep, os.altsep) if sep) or is_temp_file(name):
         return None
     return name
 
@@ -2754,6 +2754,7 @@ class LocalServer(socketserver.ThreadingTCPServer):
     # answered 503 at once rather than given a thread to wait in.
     max_connections = 64
     refusal_read_wait = 0.2  # seconds a refused client gets to send its request
+    refusal_read_limit = 256 * 1024
 
     def __init__(self, server_address: tuple[str, int], handler_class: type[Handler]):
         self.address_family = socket.AF_INET6 if server_address[0] == "::1" else socket.AF_INET
@@ -2796,8 +2797,13 @@ class LocalServer(socketserver.ThreadingTCPServer):
                 waiting.select(timeout=self.refusal_read_wait)
             request.setblocking(False)
             try:
-                while request.recv(65536):
-                    pass
+                remaining = self.refusal_read_limit
+                deadline = time.monotonic() + self.refusal_read_wait
+                while remaining > 0 and time.monotonic() < deadline:
+                    chunk = request.recv(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
             except (BlockingIOError, InterruptedError):
                 pass
             request.settimeout(1)

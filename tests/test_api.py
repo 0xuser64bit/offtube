@@ -967,6 +967,31 @@ def test_a_refused_client_is_answered_after_its_request_arrives(small_server):
             connection.close()
 
 
+def test_a_refused_client_cannot_drain_forever():
+    class StreamingClient:
+        def __init__(self, connection):
+            self.connection = connection
+            self.reads = 0
+
+        def __getattr__(self, name):
+            return getattr(self.connection, name)
+
+        def recv(self, size):
+            self.reads += 1
+            assert self.reads <= 16, "refusal kept draining a continuously readable client"
+            return b"x" * size
+
+    with app.LocalServer(("127.0.0.1", 0), app.Handler) as httpd:
+        receiver, sender = socket.socketpair()
+        with receiver, sender:
+            sender.settimeout(2)
+            sender.sendall(b"x")
+            streaming = StreamingClient(receiver)
+            httpd.refuse_busy(streaming)
+            assert streaming.reads <= 16
+            assert sender.recv(65536).startswith(b"HTTP/1.0 503 ")
+
+
 def test_slow_requests_are_cut_off_at_the_deadline(small_server):
     port = small_server.server_address[1]
     for opening in (b"GET /api/health HTTP/1.1\r\n",

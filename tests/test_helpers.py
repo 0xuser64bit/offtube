@@ -5,7 +5,7 @@ import os
 import stat
 import sys
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -224,6 +224,15 @@ def test_safe_child_blocks_escape_and_dotfiles(name):
 ])
 def test_library_name(name, ok):
     assert app.library_name(name) == (name if ok else None)
+
+
+@pytest.mark.parametrize("name", ["C:secret.txt", "C:", "D:escape.mp4", "c:relative"])
+def test_library_name_rejects_windows_drive_paths(name, monkeypatch):
+    monkeypatch.setattr(app, "Path", PureWindowsPath)
+    assert PureWindowsPath("D:/offtube/downloads") / "C:secret.txt" == PureWindowsPath("C:secret.txt")
+    assert app.library_name(name) is None
+    assert app.open_library_file(name) is None
+    assert app.delete_library_file(name) is None
 
 
 @pytest.mark.parametrize("quality", [None, "", "best", "2160", "720", "4320", "audio_mp3", "audio_m4a", "gif"])
