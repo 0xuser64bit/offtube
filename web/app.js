@@ -910,9 +910,19 @@ async function loadFiles({ more = false, reset = false } = {}) {
   if (q) params.set("q", q);
   if (kind !== "all") params.set("kind", kind);
   try {
-    const data = await api(`/api/files?${params}`);
+    let data = await api(`/api/files?${params}`);
     if (my !== filesRequest) return;
     const page = data.files || [];
+    if (!more && !reset && shown > 500) {
+      while (page.length < shown && page.length < data.matched) {
+        params.set("offset", String(page.length));
+        params.set("limit", String(Math.min(500, shown - page.length)));
+        data = await api(`/api/files?${params}`);
+        if (my !== filesRequest) return;
+        if (!data.files?.length) break;
+        page.push(...data.files);
+      }
+    }
     if (more) {
       const have = new Set(state.files.map((f) => f.name));
       state.files = state.files.concat(page.filter((f) => !have.has(f.name)));

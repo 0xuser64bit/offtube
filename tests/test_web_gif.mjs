@@ -268,6 +268,64 @@ test("the library is searched and paged by the server, not the page", async () =
   assert.equal(asked.at(-1), "/api/files?offset=0&limit=60&q=clip&kind=gif");
 });
 
+test("refreshing the library preserves more than one server page of visible files", async () => {
+  const ui = desk();
+  const files = Array.from({ length: 620 }, (_, index) => ({
+    name: `file${index}.mp4`, kind: "video", url: `/files/file${index}.mp4`, size_str: "1 KB",
+  }));
+  const asked = [];
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    const offset = Number(params.get("offset"));
+    const limit = Number(params.get("limit"));
+    asked.push({ offset, limit });
+    return { ok: true, json: async () => ({
+      files: files.slice(offset, offset + limit), total: files.length, matched: files.length,
+    }) };
+  };
+  ui.run(`state.files = ${JSON.stringify(files.slice(0, 600))}`);
+  await ui.run("loadFiles()");
+  assert.equal(ui.run("state.files.length"), 600);
+  assert.deepEqual(asked, [{ offset: 0, limit: 500 }, { offset: 500, limit: 100 }]);
+  assert.match(ui.elements.get("files").innerHTML, /file599\.mp4/);
+  assert.match(ui.elements.get("files").innerHTML, /Show 20 more/);
+  files.splice(550);
+  await ui.run("loadFiles()");
+  assert.equal(ui.run("state.files.length"), 550);
+  assert.doesNotMatch(ui.elements.get("files").innerHTML, /Show \d+ more/);
+});
+
+test("a search supersedes an unfinished multi-page library refresh", async () => {
+  const ui = desk();
+  const files = Array.from({ length: 600 }, (_, index) => ({
+    name: `file${index}.mp4`, kind: "video", url: `/files/file${index}.mp4`, size_str: "1 KB",
+  }));
+  let finishPage;
+  let startPage;
+  const pageStarted = new Promise((resolve) => { startPage = resolve; });
+  ui.context.fetch = async (url) => {
+    const params = new URLSearchParams(url.split("?")[1]);
+    if (params.get("q")) {
+      return { ok: true, json: async () => ({ files: [], total: files.length, matched: 0 }) };
+    }
+    const offset = Number(params.get("offset"));
+    if (offset) await new Promise((resolve) => { finishPage = resolve; startPage(); });
+    return { ok: true, json: async () => ({
+      files: files.slice(offset, offset + Number(params.get("limit"))),
+      total: files.length, matched: files.length,
+    }) };
+  };
+  ui.run(`state.files = ${JSON.stringify(files)}`);
+  const refresh = ui.run("loadFiles()");
+  await pageStarted;
+  ui.elements.get("fileSearch").value = "absent";
+  await ui.run("loadFiles({ reset: true })");
+  finishPage();
+  await refresh;
+  assert.equal(ui.run("state.files.length"), 0);
+  assert.equal(ui.elements.get("filesEmpty").textContent, "Nothing matches.");
+});
+
 test("collection ranges are only editable when they apply", async () => {
   const ui = desk();
   ui.info({ type: "video", media: "video", part_of_playlist: true });
