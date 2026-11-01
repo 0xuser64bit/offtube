@@ -9,7 +9,7 @@ related_targets: ["extension/popup/popup.html","extension/sidepanel/sidepanel.ht
 
 Scope: one product across three surfaces. Extension popup (quick keep, ~370px), side panel (docked column: current tab, options, session strip, library), web app at 127.0.0.1:8000 (full desk + library). Mode: Operate.
 
-Audience/job: everyday keepers and power users (PRODUCT.md). Success = instant tab → kept; options never stand in the way. Must not feel like a generic SaaS, a dev tool, or a toy.
+Audience/job: everyday keepers and power users (DESIGN.md → What offtube is for). Success = instant tab → kept; options never stand in the way. Must not feel like a generic SaaS, a dev tool, or a toy.
 
 Constraints: no build step, strict CSP (self only, no inline script/style), self-hosted font only, MV3 no inline scripts. All existing behavior preserved (inspect, formats, clip, collection ranges, subtitles, access modes, queue/cancel/retry/clear, library save/delete/filter, health, prefs).
 

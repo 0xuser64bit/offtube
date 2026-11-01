@@ -1,14 +1,32 @@
 # Architecture and engineering priorities
 
+[Home](README.md) · [Contributing](CONTRIBUTING.md) ·
+[Product and design](DESIGN.md) · [API](docs/api.md)
+
 ## Product boundary
 
 offtube is a single-user, local media keeper, not a hosted download service.
 Keep the no-build web app, the MV3 extension, progressive controls and the
-contact-sheet design described in `PRODUCT.md` and `DESIGN.md`. There is no
+contact-sheet design described in [Product and design](DESIGN.md). There is no
 account system, database, payment provider or cloud backend. Adding those is
 a product decision, not a prerequisite for reliable local operation.
 
 ## System map
+
+```mermaid
+flowchart LR
+    Desk["Web desk"] --> API["Local HTTP API"]
+    Extension["Chrome extension"] --> API
+    API --> Inspect["Metadata inspection"]
+    API --> Queue["Queue: 5 active, 2 workers"]
+    Inspect --> Sites["Source sites"]
+    Queue --> Engines["yt-dlp worker / gallery-dl"]
+    Engines --> Sites
+    Engines --> Encode["FFmpeg / GIF pipeline"]
+    Engines --> Files["downloads/"]
+    Encode --> Files
+    API --> Files
+```
 
 | Area | Implementation | Important constraints |
 | --- | --- | --- |
@@ -90,37 +108,16 @@ machine whose local programs and accounts are trusted, and on nothing wider.
 
 ## Validation
 
-Install `requirements.txt` and `requirements-dev.txt` into a Python 3.10+
-environment. With Node.js, ffmpeg and ffprobe on PATH, run:
+The local gate is:
 
 ```sh
 bash tools/check.sh
 ```
 
-The gate compiles Python, runs pytest (including real generated-media
-encoding, the Docker COPY-layout regression, and `tests/test_shutdown.py`,
-which runs `main()` in a subprocess and sends it real SIGINT/SIGTERM), checks
-shipped JavaScript syntax, runs the web/extension Node tests and the
-Chromium suites in `tests/browser/` for the web desk and the unpacked
-extension (skipped without Playwright; the one that right-clicks through a
-private Xvfb display also without Xvfb), and checks patch whitespace. It
-uses `.venv/bin/python` by default; set `PYTHON` to select another
-interpreter.
-
-GitHub CI runs the gate on Python 3.10 and 3.12, pytest on Windows (process
-trees stopped with `taskkill`, the exclusive port bind, Windows file and
-encoding behavior) and macOS, with the desk and extension browser suites on
-both, the launchers from a fresh checkout
-(`tools/launcher_smoke.sh` for `run.sh`; `run.bat` on Windows), the README's
-launchd agent under `launchctl` and its systemd unit under a user manager,
-from a fresh clone (both must find ffmpeg and a JS runtime; systemd must see
-a clean stop), the browser suite with pinned
-Playwright and axe-core (required there, never skipped), and, on amd64 and
-arm64, a Docker build, packaged-worker check, HTTP startup smoke test, and a
-check that the container reaps an orphaned child and stops on SIGTERM with
-exit status 0. Actions are commit-pinned and the workflow has read-only
-repository permissions. A COPY-layout test is not a substitute for the actual
-container build.
+See [Contributing](CONTRIBUTING.md#run-the-checks) for dependencies, focused
+test commands, optional browser setup, CI coverage, and its limits. A
+source-layout test is not a substitute for a real container build, and an
+automated accessibility audit is not certification.
 
 ## Next priorities
 

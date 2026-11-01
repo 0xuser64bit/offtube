@@ -40,9 +40,9 @@ jobs:
         run: bash tools/check.sh
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
-      - name: Run offtube as the README's systemd user service
+      - name: Run offtube as the user guide's systemd service
         run: |
-          # The README's Linux setup, from a fresh clone: run.sh builds .venv
+          # The user guide's Linux setup, from a fresh clone: run.sh builds .venv
           # with the system python3, as the service starts it.
           rm -rf .venv
           sudo apt-get install -y python3-venv
@@ -167,9 +167,9 @@ jobs:
         run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
       - name: Start and stop offtube with run.sh
         run: bash tools/launcher_smoke.sh
-      - name: Run offtube as the README's launchd agent
+      - name: Run offtube as the user guide's launchd agent
         run: |
-          # The README's install commands, then the tools must be found:
+          # The user guide's install commands, then the tools must be found:
           # launchd's own PATH has no Homebrew.
           mkdir -p ~/Library/LaunchAgents ~/Library/Logs
           DIR="$(pwd)"
