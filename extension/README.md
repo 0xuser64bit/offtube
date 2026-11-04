@@ -43,8 +43,8 @@ its entry at `chrome://extensions`.
 
 The right-click action sends a **page or link URL**, not an image/video
 element's `blob:` or CDN source. The engines need the original supported
-site URL. The badge flashes `↓` when queued and `!` when a request fails
-or the link is unsupported.
+site URL. The badge shows `…` while a right-click keep is running, `↓`
+once its files are kept, and `!` if it fails or the link is unsupported.
 
 If the shortcut does not work, check `chrome://extensions/shortcuts` and
 assign or confirm it there. **Open side panel** closes the popup so only
@@ -82,6 +82,7 @@ client.
 | `storage` | Saves local preferences and pending selections, not cookie contents. |
 | `sidePanel` | Opens Chrome's persistent side panel. |
 | `contextMenus` | Adds the right-click keep actions. |
+| `alarms` | Wakes the service worker to report a right-click keep that finishes after the menu has closed. |
 | Loopback `host_permissions` | Calls the local server. No `<all_urls>` permission or source-site content scripts. |
 
 The server is the authority on supported URLs (`GET /api/source`); there
@@ -95,7 +96,9 @@ necessary access may reach the local API; see the
 - [`shared.js`](shared.js) holds API, settings, and UI helpers;
   [`ui.css`](ui.css) shares the contact-sheet visual language.
 - The MV3 [`background.js`](background.js) worker holds no durable job
-  state. Popup and side-panel pages poll the server.
+  state: right-click jobs are tracked in session storage and an alarm
+  wakes the worker to report a late outcome. Popup and side-panel pages
+  poll the server directly.
 - Opening a side panel must happen **before the listener's first await**
   while Chrome still recognizes the user gesture. Context-menu IDs encode
   whether cookies-file mode needs the panel; rebuild them when it changes.

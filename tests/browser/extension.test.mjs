@@ -72,6 +72,15 @@ async function keepAndWait(page) {
   await page.waitForFunction(() => /^Kept /.test(document.getElementById("jobStatus").textContent), null, { timeout: 15000 });
 }
 
+async function eventually(check, failure, ms = 15000) {
+  for (const deadline = Date.now() + ms; ;) {
+    const value = await check();
+    if (value) return value;
+    assert.ok(Date.now() < deadline, failure);
+    await new Promise((resolve) => { setTimeout(resolve, 50); });
+  }
+}
+
 test("the popup says plainly when offtube isn't running", { skip }, async () => {
   await useServer(`http://127.0.0.1:${await freePort()}`);
   const { page, problems } = await openSurface("popup");
@@ -105,6 +114,32 @@ test("the popup keeps a pasted link and says so once", { skip }, async () => {
     assert.deepEqual(problems, []);
   } finally {
     await page.close();
+    await server.stop();
+  }
+});
+
+test("a quick keep reports success only when the job finishes", { skip }, async () => {
+  const server = await startServer();
+  await useServer(server.base);
+  const link = "https://www.youtube.com/watch?v=quick123456";
+  const jobs = async () => (await (await fetch(`${server.base}/api/jobs`)).json()).jobs;
+  const jobFor = async () => (await jobs()).find((job) => job.url === link);
+  try {
+    await worker.evaluate(async (url) => {
+      await chrome.action.setBadgeText({ text: "" });
+      await keepUrl(url);
+    }, link);
+    const queued = await eventually(jobFor, "the server got no job for the quick keep");
+    assert.equal(queued.quality, "1080");
+    // The menu returns as soon as the job is queued; the badge must not
+    // call that a kept file.
+    assert.equal(await worker.evaluate(() => chrome.action.getBadgeText({})), "…");
+    assert.notEqual(queued.status, "done");
+    await eventually(async () => (await jobFor())?.status === "done", "the quick keep never finished");
+    await eventually(async () => (await worker.evaluate(() => chrome.action.getBadgeText({}))) === "↓",
+      "the badge never reported the finished keep");
+    assert.equal(await worker.evaluate(() => chrome.action.getTitle({})), "Kept A test video [abc123abc12].mp4");
+  } finally {
     await server.stop();
   }
 });

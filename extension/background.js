@@ -46,6 +46,98 @@ async function setBadge(text, color) {
   }
 }
 
+async function setTitle(title) {
+  try { await chrome.action.setTitle({ title }); } catch { /* tests */ }
+}
+
+/* Quick keeps finish long after the menu click. The worker is ephemeral, so
+ * the ids live in session storage and an alarm wakes the worker to finish
+ * the report if a poll is cut short. */
+const QUICK_KEEPS = 'quickKeeps';
+const QUICK_ALARM = 'offtube-job-';
+const WAITING = '#1b1a17';
+
+async function readQuickKeeps() {
+  return (await chrome.storage.session.get(QUICK_KEEPS))[QUICK_KEEPS] || {};
+}
+
+async function writeQuickKeeps(keeps) {
+  await chrome.storage.session.set({ [QUICK_KEEPS]: keeps });
+}
+
+async function finishQuickKeep(id, job) {
+  const keeps = await readQuickKeeps();
+  // Already reported, perhaps by a poll racing the alarm.
+  if (!keeps[id]) return;
+  delete keeps[id];
+  await writeQuickKeeps(keeps);
+  try { await chrome.alarms.clear(QUICK_ALARM + id); } catch { /* no alarm */ }
+  if (Object.keys(keeps).length) return; // a newer keep still owns the badge
+  if (job.status === 'done') {
+    const files = job.files || [];
+    await setBadge('↓', '#20663c');
+    await setTitle(files.length > 1 ? `Kept ${files.length} files` : `Kept ${files[0] || 'the file'}`);
+  } else if (job.status === 'cancelled') {
+    await setBadge('');
+    await setTitle('Keep cancelled');
+  } else {
+    await setBadge('!', '#bc3d1e');
+    await setTitle(job.detail || 'Keep failed');
+  }
+}
+
+const quickPolling = new Set();
+async function pollQuickKeep(id, server) {
+  if (quickPolling.has(id)) return;
+  quickPolling.add(id);
+  try {
+    for (;;) {
+      if (!(await readQuickKeeps())[id]) return;
+      let job;
+      try {
+        job = await OFFTUBE.apiGet(server, `/api/job?id=${encodeURIComponent(id)}`);
+      } catch (err) {
+        // A job the server no longer knows stopped with it.
+        if (err.status === 404) {
+          await finishQuickKeep(id, { id, status: 'error', detail: OFFTUBE.RESTARTED });
+          return;
+        }
+        await new Promise((resolve) => { setTimeout(resolve, 1500); });
+        continue;
+      }
+      if (OFFTUBE.ACTIVE.includes(job.status)) {
+        await new Promise((resolve) => { setTimeout(resolve, 700); });
+        continue;
+      }
+      await finishQuickKeep(id, job);
+      return;
+    }
+  } finally {
+    quickPolling.delete(id);
+  }
+}
+
+async function trackQuickKeep(id, server) {
+  const keeps = await readQuickKeeps();
+  keeps[id] = { server, started: Date.now() };
+  await writeQuickKeeps(keeps);
+  // The alarm is the backstop for a worker that shuts down mid-download;
+  // pollQuickKeep gives prompt feedback while it is alive.
+  try {
+    await chrome.alarms.create(QUICK_ALARM + id, { delayInMinutes: 0.5, periodInMinutes: 0.5 });
+  } catch { /* alarms unavailable in tests */ }
+  pollQuickKeep(id, server);
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm.name.startsWith(QUICK_ALARM)) return;
+  const id = alarm.name.slice(QUICK_ALARM.length);
+  readQuickKeeps().then((keeps) => {
+    if (keeps[id]) pollQuickKeep(id, keeps[id].server);
+  });
+});
+
+
 // Only from a listener, before its first await (see IN_PANEL).
 function openPanel(tab) {
   chrome.sidePanel.open({ windowId: tab?.windowId ?? chrome.windows.WINDOW_ID_CURRENT })
@@ -64,18 +156,20 @@ async function keepUrl(url) {
     await chrome.storage.session.set({ pendingUrl: url });
     return;
   }
-  await setBadge('…', '#1b1a17');
+  await setBadge('…', WAITING);
+  await setTitle('Keeping…');
   try {
     const cookies = access === 'browser'
       ? { cookies_mode: 'browser', cookies_browser: cookiesBrowser }
       : { cookies_mode: 'none' };
-    await OFFTUBE.api(server, '/api/download', {
+    const { job_id: id } = await OFFTUBE.api(server, '/api/download', {
       url, quality, ...cookies,
       ...(quality === 'gif' ? { gif_size: gif.gif_size ?? 480, gif_fps: gif.gif_fps ?? 15, gif_loop: gif.gif_loop ?? true } : {}),
     });
-    await setBadge('↓', '#20663c');
-  } catch {
+    await trackQuickKeep(id, server);
+  } catch (err) {
     await setBadge('!', '#bc3d1e');
+    await setTitle(err.message || 'Keep failed');
   }
 }
 

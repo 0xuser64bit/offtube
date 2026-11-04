@@ -129,14 +129,17 @@ test("“Keep link with offtube” keeps the link that was right-clicked", { ski
   await input(`menu:${SPOT}`, ...LINK_ENTRY);
   const job = await eventually(() => jobFor(LINKED), "the server got no job for the link");
   assert.equal(job.quality, "1080");
-  await eventually(async () => (await badge()) === "↓", "the badge doesn't say the link was queued");
+  // Queued is not kept: the badge waits for the terminal job state.
+  assert.equal(await badge(), "…", "the badge claimed success before the keep finished");
+  await eventually(async () => (await badge()) === "↓", "the badge doesn't report the finished keep", 15000);
+  assert.equal((await jobFor(LINKED)).status, "done");
 });
 
 test("“Keep this page with offtube” keeps the page itself", { skip }, async () => {
   await startAt(PAGE, "offtube-keep-page");
   await input(`menu:${SPOT}`, ...PAGE_ENTRY);
   await eventually(() => jobFor(PAGE), "the server got no job for the page");
-  await eventually(async () => (await badge()) === "↓", "the badge doesn't say the page was queued");
+  await eventually(async () => (await badge()) === "↓", "the badge doesn't report the finished keep");
 });
 
 test("Alt+Shift+O opens the side panel", { skip }, async () => {
