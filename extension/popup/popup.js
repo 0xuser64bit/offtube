@@ -196,6 +196,9 @@ async function openPanel() {
     pendingOptions: {
       quality: chosenQuality(), gif: OFFTUBE.gifFields(),
       clip_from: $('clipFrom').value.trim(), clip_to: $('clipTo').value.trim(),
+      // The circles are the scope: without them the panel would keep the
+      // whole collection instead of just the prints chosen here.
+      marks: OFFTUBE.isCollection(info) ? [...marks].sort((a, b) => a - b) : [],
     },
   });
   const win = await chrome.windows.getLastFocused();

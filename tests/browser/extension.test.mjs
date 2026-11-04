@@ -118,6 +118,10 @@ test("a collection moves from the popup to the side panel with its link and form
     await paste(popup, "https://www.youtube.com/playlist?list=PLabc");
     await popup.waitForSelector("#stage .cell");
     await popup.click('label:has(input[name="q"][value="720"])');
+    // Circled prints are the scope: the panel must keep exactly these.
+    await popup.click('.cell[data-i="2"]');
+    await popup.click('.cell[data-i="3"]');
+    assert.equal(await popup.textContent("#markCount"), "2 circled — only these are kept");
     // Opening the real panel is the browser's part, and it would take the
     // handover before the tab below could.
     await popup.evaluate(() => {
@@ -136,11 +140,18 @@ test("a collection moves from the popup to the side panel with its link and form
     await panel.waitForSelector("#stage .cell");
     assert.equal(await panel.inputValue("#url"), "https://www.youtube.com/playlist?list=PLabc");
     assert.equal(await panel.isChecked('input[name="q"][value="720"]'), true);
-    await panel.click('.cell[data-i="2"]');
+    // Inspecting the playlist must not throw the popup's circling away.
     assert.equal(await panel.getAttribute('.cell[data-i="2"]', "aria-pressed"), "true");
+    assert.equal(await panel.getAttribute('.cell[data-i="3"]', "aria-pressed"), "true");
+    assert.equal(await panel.getAttribute('.cell[data-i="1"]', "aria-pressed"), "false");
+    assert.equal(await panel.textContent("#markCount"), "2 circled — only these are kept");
+    assert.equal(await panel.isChecked('input[name="plmode"][value="playlist"]'), true);
+    assert.equal(await panel.textContent("#plState"), "2 circled");
+    await panel.click('.cell[data-i="2"]');
+    assert.equal(await panel.getAttribute('.cell[data-i="2"]', "aria-pressed"), "false");
     assert.equal(await panel.textContent("#markCount"), "1 circled — only these are kept");
     // The handover is used once.
-    assert.deepEqual(await worker.evaluate(() => chrome.storage.session.get(["pendingUrl"])), {});
+    assert.deepEqual(await worker.evaluate(() => chrome.storage.session.get(["pendingUrl", "pendingOptions"])), {});
     assert.deepEqual(problems, []);
   } finally {
     await popup.close();

@@ -19,6 +19,8 @@ let resultJobId = null;
 let pollTimer = null;
 let inspectToken = 0;
 let serverUp = true; // what the health line last said
+let pendingMarks = []; // circled prints handed over by the popup
+let pendingMarksUrl = '';
 
 const url = () => $('url').value.trim();
 const access = () => checked('access') || 'none';
@@ -192,6 +194,7 @@ async function inspect() {
   const u = url();
   OFFTUBE.showProblem('');
   if (!u) return;
+  if (pendingMarksUrl && pendingMarksUrl !== u) { pendingMarks = []; pendingMarksUrl = ''; }
   invalidateSource();
   const my = inspectToken;
   $('stage').innerHTML = OFFTUBE.exposingHtml(u.replace(/^https?:\/\/(www\.)?/, '').split('/')[0]);
@@ -203,13 +206,23 @@ async function inspect() {
     info = got;
     infoUrl = u;
     marks.clear();
+    // A popup handover can arrive before the panel has read the link: apply
+    // its circles now, after inspect's own reset, so the sheet opens exactly
+    // as it was left.
+    if (pendingMarksUrl === u && pendingMarks.length) {
+      const shown = OFFTUBE.isCollection(got) ? (got.entries || []).length : 0;
+      for (const i of pendingMarks) if (i >= 1 && i <= shown) marks.add(i);
+    }
+    pendingMarks = [];
+    pendingMarksUrl = '';
     printJobId = null;
     document.body.dataset.kind = info.type === 'gallery' ? 'gallery' : '';
     document.body.dataset.media = info.media || '';
     $('stage').innerHTML = OFFTUBE.printHtml(info);
+    $$('.cell').forEach((cell) => cell.setAttribute('aria-pressed', String(marks.has(Number(cell.dataset.i)))));
     OFFTUBE.announce(OFFTUBE.printSummary(info));
     setLink(u, { label: `${(info.source && info.source.label) || 'Link'} · ${u.replace(/^https?:\/\/(www\.)?/, '')}` });
-    document.querySelector(`input[name="plmode"][value="${OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
+    document.querySelector(`input[name="plmode"][value="${marks.size || OFFTUBE.isCollection(info) ? 'playlist' : 'single'}"]`).checked = true;
     renderFormats();
     syncSheet();
     syncNotes();
@@ -477,6 +490,8 @@ function restorePendingOptions(options = {}) {
   OFFTUBE.restoreGifOptions(options.gif || {});
   $('clipFrom').value = typeof options.clip_from === 'string' ? options.clip_from : '';
   $('clipTo').value = typeof options.clip_to === 'string' ? options.clip_to : '';
+  pendingMarks = Array.isArray(options.marks) ? options.marks.filter((i) => Number.isInteger(i)) : [];
+  pendingMarksUrl = pendingMarks.length ? url() : '';
   renderFormats(options.quality);
   syncNotes();
 }
