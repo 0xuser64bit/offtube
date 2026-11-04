@@ -1355,12 +1355,15 @@ def gallery_range_args(payload: dict) -> list[str]:
     for. --range counts files, so single means the first file at the link."""
     if (payload.get("playlist_mode") or "single").lower() == "single":
         return ["--range", "1"]
-    items = (payload.get("playlist_items") or "").strip().replace(";", ",")
+    items = playlist_items_value(payload.get("playlist_items"))
     if items:
         return ["--range", items]
-    start, end = payload.get("playlist_start"), payload.get("playlist_end")
+    start = playlist_bound(payload.get("playlist_start"), "start")
+    end = playlist_bound(payload.get("playlist_end"), "end")
+    if start is not None and end is not None and start > end:
+        raise ValueError("Playlist start must not be after end.")
     if start or end:
-        return ["--range", f"{int(start or 1)}-{int(end) if end else ''}"]
+        return ["--range", f"{start or 1}-{end or ''}"]
     return []
 
 
@@ -1504,6 +1507,47 @@ def run_gallery(job: dict, payload: dict, url: str) -> list[str]:
     return files
 
 
+def playlist_bound(value, label: str) -> int | None:
+    """A one-based collection bound, or None when the field is empty."""
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"Playlist {label} must be a number.")
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"Playlist {label} must be numbers.")
+    if number < 1:
+        raise ValueError(f"Playlist {label} are one-based; use 1 or more.")
+    return number
+
+
+def playlist_items_value(raw) -> str:
+    """Canonical item selection, validated against the one-based syntax the
+    UI advertises. Empty is valid (the whole collection)."""
+    items = (raw or "").strip().replace(";", ",")
+    if not items:
+        return ""
+    if len(items) > MAX_PLAYLIST_ITEMS_LEN:
+        raise ValueError("Playlist items is too long. Example: 1-5,7,10-12")
+    if not re.fullmatch(r"[\d\s,\-]+", items):
+        raise ValueError("Playlist items looks invalid. Example: 1-5,7,10-12")
+    parts = [part.strip() for part in items.split(",")]
+    if any(not part for part in parts):
+        raise ValueError("Playlist items looks invalid. Example: 1-5,7,10-12")
+    for part in parts:
+        match = re.fullmatch(r"(\d+)(?:-(\d+))?", part)
+        if not match:
+            raise ValueError("Playlist items looks invalid. Example: 1-5,7,10-12")
+        first = int(match.group(1))
+        last = int(match.group(2) or first)
+        if first < 1:
+            raise ValueError("Playlist items are one-based; use 1 or more.")
+        if last < first:
+            raise ValueError("Playlist item range must end after it starts.")
+    return ",".join(parts)
+
+
 def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
     """yt-dlp options for a download, as plain data for the worker process,
     which adds the hooks, logger and filters. Raises ValueError for a bad
@@ -1556,20 +1600,17 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
     else:
         opts["noplaylist"] = False
         opts["yes_playlist"] = True
-        try:
-            if payload.get("playlist_start"):
-                opts["playliststart"] = int(payload["playlist_start"])
-            if payload.get("playlist_end"):
-                opts["playlistend"] = int(payload["playlist_end"])
-        except (TypeError, ValueError):
-            raise ValueError("Playlist start/end must be numbers.")
-        items = (payload.get("playlist_items") or "").strip()
+        start = playlist_bound(payload.get("playlist_start"), "start")
+        end = playlist_bound(payload.get("playlist_end"), "end")
+        if start is not None and end is not None and start > end:
+            raise ValueError("Playlist start must not be after end.")
+        if start is not None:
+            opts["playliststart"] = start
+        if end is not None:
+            opts["playlistend"] = end
+        items = playlist_items_value(payload.get("playlist_items"))
         if items:
-            if len(items) > MAX_PLAYLIST_ITEMS_LEN:
-                raise ValueError("Playlist items is too long. Example: 1-5,7,10-12")
-            if not re.fullmatch(r"[\d\s,\-:;]+", items):
-                raise ValueError("Playlist items looks invalid. Example: 1-5,7,10-12")
-            opts["playlistitems"] = items.replace(";", ",")
+            opts["playlistitems"] = items
 
     # Subtitles (optional)
     if payload.get("subtitles") and quality != "gif":

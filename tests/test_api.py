@@ -219,6 +219,20 @@ def test_download_end_to_end_and_files_and_delete(server):
     assert status == 404
 
 
+@pytest.mark.parametrize("scope, message", [
+    ({"playlist_start": "0"}, "one-based"),
+    ({"playlist_start": "5", "playlist_end": "2"}, "after"),
+    ({"playlist_items": "0-2"}, "one-based"),
+    ({"playlist_items": "5-2"}, "after"),
+])
+def test_download_rejects_bad_collection_bounds(server, scope, message):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123abc12",
+                            "playlist_mode": "playlist", **scope})
+    assert status == 400 and message in body["error"]
+    assert not app.jobs
+
+
 def test_download_rejects_bad_input(server):
     status, body, _ = api(server, "POST", "/api/download", {"url": ""})
     assert status == 400

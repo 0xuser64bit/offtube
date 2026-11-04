@@ -688,6 +688,15 @@ def test_build_download_opts_rejects_bad_ranges():
     with pytest.raises(ValueError, match="invalid"):
         app.build_download_opts(job, {"playlist_mode": "playlist",
                                       "playlist_items": "1-5; DROP TABLE"})
+    for payload, message in [
+        ({"playlist_mode": "playlist", "playlist_start": "0"}, "one-based"),
+        ({"playlist_mode": "playlist", "playlist_end": "0"}, "one-based"),
+        ({"playlist_mode": "playlist", "playlist_start": "5", "playlist_end": "2"}, "after"),
+        ({"playlist_mode": "playlist", "playlist_items": "0-2"}, "one-based"),
+        ({"playlist_mode": "playlist", "playlist_items": "5-2"}, "after"),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            app.build_download_opts(job, payload)
     with pytest.raises(ValueError, match="language"):
         app.build_download_opts(job, {"subtitles": True, "sub_lang": "en; rm -rf"})
 

@@ -119,8 +119,8 @@ not successful completion. Poll the job until it reaches a terminal state.
 | `quality` | string, `best` | Output choice; see below. |
 | `clip_from`, `clip_to` | strings, empty | Seconds, `MM:SS`, or `HH:MM:SS`; fractional seconds accepted. To must follow From. |
 | `playlist_mode` | string, `single` | `single` or `playlist`. Set `playlist` explicitly for collection downloads. With gallery-dl, `single` keeps the first file at the link. |
-| `playlist_start`, `playlist_end` | integer or numeric string | One-based collection bounds. |
-| `playlist_items` | string, empty | Item selection, such as `1-5,7,10-12`; at most 200 characters. |
+| `playlist_start`, `playlist_end` | integer or numeric string | One-based collection bounds; both positive, with Start not after End. |
+| `playlist_items` | string, empty | Item selection, such as `1-5,7,10-12`; one-based, ascending ranges, at most 200 characters. |
 | `subtitles` | boolean, `false` | Request subtitle sidecars, not embedded subtitles. |
 | `auto_subs` | boolean, `false` | Also request automatic captions when subtitles are enabled. |
 | `sub_lang` | string, `en` | Comma-separated language codes, such as `en,de`; at most 100 characters. |
