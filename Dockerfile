@@ -38,6 +38,18 @@ COPY web/ ./web/
 RUN mkdir -p downloads cookies \
     && touch cookies/.gitkeep downloads/.gitkeep
 
+# Root-owned files in a bind mount are awkward to edit on the host, and the
+# app needs no privileges. Build as the host user's IDs: compose passes
+# OFFTUBE_UID/OFFTUBE_GID, defaulting to the first account on most Linux
+# systems. The home dir gives yt-dlp a writable cache.
+ARG UID=1000
+ARG GID=1000
+RUN groupadd --gid "$GID" offtube \
+    && useradd --uid "$UID" --gid "$GID" --create-home --shell /usr/sbin/nologin offtube \
+    && chown -R offtube:offtube /app/downloads /app/cookies
+ENV HOME=/home/offtube
+USER offtube
+
 VOLUME ["/app/downloads", "/app/cookies"]
 EXPOSE 8000
 

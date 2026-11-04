@@ -227,6 +227,8 @@ jobs:
           persist-credentials: false
       - name: Build runtime image
         run: docker build --tag offtube:ci .
+      - name: Check the runtime is unprivileged
+        run: test "$(docker run --rm --entrypoint id offtube:ci -u)" != "0"
       - name: Check packaged yt-dlp worker
         run: docker run --rm --entrypoint python offtube:ci -m py_compile app.py tools/ytdlp_worker.py
       - name: Check HTTP startup

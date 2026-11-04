@@ -261,6 +261,19 @@ Open `http://127.0.0.1:8000`; the extension uses the same address. The image
 includes Python, FFmpeg/ffprobe, Deno, and both download engines. `tini`
 forwards stop signals and reaps orphaned child processes.
 
+The container runs as an unprivileged user, because files it creates land
+in the bind-mounted folders and should stay editable on the host. The image
+defaults to UID/GID `1000`, the first account on most Linux systems. If
+`id -u` or `id -g` is different, build once with those IDs:
+
+```sh
+OFFTUBE_UID="$(id -u)" OFFTUBE_GID="$(id -g)" docker compose up -d --build
+```
+
+If you used an older root-running image, reclaim its files first with
+`sudo chown -R "$(id -u):$(id -g)" downloads cookies`. On macOS and Windows,
+Docker Desktop maps ownership itself; the defaults are fine.
+
 - `./downloads` and `./cookies` are bind-mounted, so completed files stay
   in the checkout when the container is removed.
 - Compose restarts the service unless you explicitly stop it.

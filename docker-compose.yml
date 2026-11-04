@@ -7,7 +7,11 @@
 # ./run.sh + launchd/systemd keep the from-browser mode working.
 services:
   offtube:
-    build: .
+    build:
+      context: .
+      args:
+        UID: "${OFFTUBE_UID:-1000}"
+        GID: "${OFFTUBE_GID:-1000}"
     image: offtube:latest
     environment:
       HOST: "0.0.0.0" # container must bind all interfaces; publishing stays loopback-only
