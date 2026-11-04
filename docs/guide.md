@@ -146,7 +146,9 @@ internal interface, not for sharing offtube over a network.
 Circle the individual previews you want, choose **Whole collection**, or
 enter **Start / End** or **Items** such as `1-5,7,10-12`. Item positions are
 one-based. This applies to the collections supported by the selected
-engine: playlists, boards, albums, and multi-photo posts.
+engine: playlists, boards, albums, and multi-photo posts. **This item**
+keeps one file from a gallery, not the rest of the board or album it came
+from.
 
 The contact sheet is a bounded preview, not necessarily the entire
 collection. Use ranges or Whole collection for items beyond the previews.

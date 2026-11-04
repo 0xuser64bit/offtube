@@ -1148,7 +1148,8 @@ def test_gallery_cmd_cookie_args(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("payload, args", [
-    ({"playlist_mode": "single", "playlist_items": "1-3"}, []),
+    ({"playlist_mode": "single", "playlist_items": "1-3"}, ["--range", "1"]),
+    ({}, ["--range", "1"]),
     ({"playlist_mode": "playlist"}, []),
     ({"playlist_mode": "playlist", "playlist_items": "1-5;7"}, ["--range", "1-5,7"]),
     ({"playlist_mode": "playlist", "playlist_start": "3"}, ["--range", "3-"]),

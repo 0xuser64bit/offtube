@@ -1349,9 +1349,12 @@ def gallery_cmd(payload: dict, cookie_id: str) -> list[str]:
 
 
 def gallery_range_args(payload: dict) -> list[str]:
-    """The playlist range controls, as gallery-dl --range (same syntax)."""
+    """The playlist range controls, as gallery-dl --range (same syntax).
+    "This item" (the default) still has to bound gallery-dl: without a range
+    it would walk a board, album or profile even though only one was asked
+    for. --range counts files, so single means the first file at the link."""
     if (payload.get("playlist_mode") or "single").lower() == "single":
-        return []
+        return ["--range", "1"]
     items = (payload.get("playlist_items") or "").strip().replace(";", ",")
     if items:
         return ["--range", items]
