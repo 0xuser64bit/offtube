@@ -65,7 +65,9 @@ cd offtube
 
 On Windows, run `run.bat` instead of `./run.sh`. The launcher creates a
 project-local `.venv` and installs the pinned Python dependencies if they
-are missing. Keep the terminal open while you use offtube.
+are missing. Run `./run.sh --upgrade` (or `run.bat --upgrade`) to refresh
+the pins and move `yt-dlp` and `gallery-dl` to their latest releases when
+a site stops working. Keep the terminal open while you use offtube.
 
 ### 3. Keep something
 

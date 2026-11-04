@@ -79,10 +79,11 @@ python3 -m venv .venv
 ```
 
 On Windows the equivalent interpreter is `.venv\Scripts\python.exe`.
-If a site stops working after you update the checkout, run `./run.sh
---upgrade` or `run.bat --upgrade` to install the dependency versions pinned
-by that checkout. The flag does **not** opt into arbitrary newer engine
-versions.
+If a site stops working, run `./run.sh --upgrade` or `run.bat --upgrade`.
+That refreshes the pinned dependencies and then installs the latest
+`yt-dlp` and `gallery-dl` releases, because site changes usually need a
+newer engine rather than the version pinned in this checkout. Review the
+engine changelogs if you need to stay on the pins instead.
 
 ### Check your environment
 

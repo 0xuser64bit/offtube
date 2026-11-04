@@ -8,8 +8,13 @@ if [ ! -x .venv/bin/python ] || [ "$(./.venv/bin/python -c 'import sys; print(sy
   rm -rf .venv
   python3 -m venv .venv
 fi
-# Install deps only when missing (fast restarts); --upgrade forces refresh.
-if [ "$1" = "--upgrade" ] || ! ./.venv/bin/python -c "import yt_dlp, gallery_dl" 2>/dev/null; then
+# Install deps only when missing (fast restarts). --upgrade refreshes the
+# pinned set and then moves the download engines to their latest releases:
+# a site that changed its player often needs a newer engine, not the pin.
+if [ "$1" = "--upgrade" ]; then
+  ./.venv/bin/pip install -q -r requirements.txt
+  ./.venv/bin/pip install -q -U yt-dlp gallery-dl
+elif ! ./.venv/bin/python -c "import yt_dlp, gallery_dl" 2>/dev/null; then
   ./.venv/bin/pip install -q -r requirements.txt
 fi
 exec ./.venv/bin/python app.py
