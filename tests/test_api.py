@@ -184,6 +184,17 @@ def test_info_video_with_stub(server):
     assert any(q["id"] == "720" for q in info["qualities"])
 
 
+def test_download_reports_a_file_that_was_already_kept(server):
+    name = "Test Video [abc123].mp4"
+    (app.DOWNLOAD_DIR / name).write_bytes(b"already kept")
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/alreadyalready"})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["status"] == "done", job
+    assert job["files"] == [name]
+
+
 def test_download_end_to_end_and_files_and_delete(server):
     status, body, _ = api(server, "POST", "/api/download",
                            {"url": "https://youtu.be/abc123abc12", "quality": "720"})

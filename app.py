@@ -2109,6 +2109,7 @@ def run_download(job_id: str, payload: dict):
         url, src = check_url(payload.get("url"))
         before = set(DOWNLOAD_DIR.iterdir())
         files = None
+        reported: list[Path] = []
         if payload.get("quality") == "gif":
             files = run_gif_download(job, payload, url, src)
         engines = [] if files is not None else src["engines"]
@@ -2117,7 +2118,7 @@ def run_download(job_id: str, payload: dict):
                 if engine == "gallery-dl":
                     files = run_gallery(job, payload, url)
                 else:
-                    run_ytdlp(job, payload, url, src)
+                    reported = run_ytdlp(job, payload, url, src)
                 break
             except DownloadError as exc:
                 if job.get("cancel_requested") or job.get("disk_full") or i == len(engines) - 1:
@@ -2141,7 +2142,11 @@ def run_download(job_id: str, payload: dict):
             job["status"] = "done"
             job["progress"] = 100
             job["detail"] = "Done."
-            job["files"] = files if files is not None else attribute_new_files(job, before)
+            # The worker names what it saved, including a file yt-dlp found
+            # already downloaded (which the directory diff cannot see). Only
+            # fall back to the diff when it reported nothing.
+            job["files"] = files if files is not None else (
+                [path.name for path in reported] or attribute_new_files(job, before))
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except DownloadError as exc:
         msg = str(exc)
@@ -2189,15 +2194,17 @@ def run_download(job_id: str, payload: dict):
             evict_jobs_locked()
 
 
-def run_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
+def run_ytdlp(job: dict, payload: dict, url: str, src: dict) -> list[Path]:
     """A normal download, in the worker process: a cancel or shutdown stops
     it at once even mid-extraction or mid-merge. The worker also retries a
-    rejected YouTube session with alternate player clients."""
+    rejected YouTube session with alternate player clients. Returns the files
+    it reported, including one it found already downloaded."""
     if yt_dlp is None:
         raise DownloadError("yt-dlp is not installed. Run: pip install -r requirements.txt")
-    _, code, errors = run_ytdlp_worker(job, payload, url, src)
+    files, code, errors = run_ytdlp_worker(job, payload, url, src)
     if code:
         raise DownloadError(errors[-1] if errors else "yt-dlp stopped unexpectedly; details are in the log.")
+    return files
 
 
 def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:

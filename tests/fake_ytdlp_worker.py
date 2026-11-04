@@ -6,6 +6,7 @@ stdout, no network. What it does follows markers in the URL:
   chatty   reports progress every 50 ms for a minute
   fail     fails the way a private video does
   novideo  fails the way an image-only post does, so gallery-dl takes over
+  already  reports the existing file, as yt-dlp does when it has already kept it
   (none)   reports progress and saves "Test Video [abc123].mp4"
 """
 import json
@@ -41,6 +42,9 @@ if "fail" in url:
 if "novideo" in url:
     emit("error", "ERROR: [twitter] 1234567890: No video could be found in this tweet")
     sys.exit(1)
+if "already" in url:
+    emit("file", str(folder / NAME))
+    sys.exit(0)
 progress(5)
 emit("progress", {"status": "finished", "filename": str(folder / NAME), "info_dict": INFO})
 (folder / NAME).write_bytes(b"fake-video")
