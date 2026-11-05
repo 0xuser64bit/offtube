@@ -60,13 +60,25 @@ export function startXServer() {
 }
 
 // The real server, a stubbed yt-dlp, and its own downloads/ holding `files`
-// (newest first).
+// (newest first). Media names hold real bytes: the library now renders
+// thumbnails, and ffmpeg must be able to read the source to make one.
+const IMAGE_BYTES = Buffer.from("R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==", "base64");
+function writeMedia(file, name) {
+  if (/\.(jpe?g|png|gif|webp|avif|heic)$/i.test(name)) return writeFileSync(file, IMAGE_BYTES);
+  if (/\.(mp4|webm|mkv|mov|m4v)$/i.test(name)) {
+    const made = spawnSync("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "testsrc2=size=64x36:rate=5:duration=1",
+      "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-y", file]);
+    if (made.status !== 0) throw new Error(`ffmpeg could not make a test video:\n${made.stderr}`);
+    return;
+  }
+  writeFileSync(file, "x");
+}
 export async function startServer(files = []) {
   const data = mkdtempSync(path.join(tmpdir(), "offtube-browser-"));
   mkdirSync(path.join(data, "downloads"));
   files.forEach((name, age) => {
     const file = path.join(data, "downloads", name);
-    writeFileSync(file, "x");
+    writeMedia(file, name);
     utimesSync(file, 1_700_000_000 - age * 60, 1_700_000_000 - age * 60);
   });
   const port = await freePort();

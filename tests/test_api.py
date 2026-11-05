@@ -11,8 +11,11 @@ import http.client
 import mimetypes
 import os
 import selectors
+import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -720,6 +723,86 @@ def test_media_types_do_not_depend_on_the_platform(server, monkeypatch):
     assert served == {"/": "text/html", "/app.js": "text/javascript", "/styles.css": "text/css",
                       "/favicon.svg": "image/svg+xml", "/fonts/archivo.woff2": "font/woff2",
                       "/files/Clip%20%5Ba%5D.mkv": "video/x-matroska"}
+
+
+# --- library thumbnails: the grid reads small copies, never the originals --------
+requires_ffmpeg = pytest.mark.skipif(
+    not shutil.which("ffmpeg") or not shutil.which("ffprobe"),
+    reason="ffmpeg and ffprobe needed to build and measure thumbnails")
+
+
+def _make_media(path, *args):
+    subprocess.run(["ffmpeg", "-v", "error", *args, "-y", str(path)],
+                   check=True, capture_output=True)
+
+
+def _image_size(data: bytes) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
+        tmp.write(data)
+        tmp.flush()
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", tmp.name],
+            capture_output=True, text=True, check=True)
+    return probe.stdout.strip()
+
+
+@requires_ffmpeg
+def test_library_thumbnails_are_bounded_and_cached(server):
+    name = "Wide shot [thumb].png"
+    source = app.DOWNLOAD_DIR / name
+    _make_media(source, "-f", "lavfi", "-i", "testsrc2=size=1600x900:rate=1:duration=1",
+                "-frames:v", "1")
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200
+    entry = next(f for f in listing["files"] if f["name"] == name)
+    assert entry["thumb"].startswith("/thumb/")
+    with urllib.request.urlopen(server + entry["thumb"], timeout=10) as res:
+        thumb = res.read()
+        assert res.headers["Content-Type"] == "image/jpeg"
+        assert res.headers["X-Content-Type-Options"] == "nosniff"
+    assert len(thumb) < source.stat().st_size
+    assert _image_size(thumb) == "480,270"
+    # The second render reads the cache rather than generating again.
+    cache = app.DOWNLOAD_DIR / ".thumbs"
+    cached = list(cache.glob("*.jpg"))
+    assert len(cached) == 1
+    before = cached[0].stat().st_mtime_ns
+    with urllib.request.urlopen(server + entry["thumb"], timeout=10) as res:
+        assert res.read() == thumb
+    assert cached[0].stat().st_mtime_ns == before
+    # Deleting the original takes its thumbnail with it.
+    status, _, _ = api(server, "POST", "/api/files/delete", {"name": name})
+    assert status == 200
+    assert not list(cache.glob("*.jpg"))
+
+
+@requires_ffmpeg
+def test_video_library_thumbnails_are_a_single_frame(server):
+    name = "Clip [thumb].mp4"
+    source = app.DOWNLOAD_DIR / name
+    _make_media(source, "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=10:duration=2",
+                "-c:v", "mpeg4", "-movflags", "+faststart")
+    status, listing, _ = api(server, "GET", "/api/files")
+    entry = next(f for f in listing["files"] if f["name"] == name)
+    with urllib.request.urlopen(server + entry["thumb"], timeout=10) as res:
+        thumb = res.read()
+        assert res.headers["Content-Type"] == "image/jpeg"
+    assert _image_size(thumb) == "480,270"
+
+
+def test_thumbnails_exist_only_for_media_that_can_have_one(server):
+    (app.DOWNLOAD_DIR / "notes.txt").write_text("not media", encoding="utf-8")
+    (app.DOWNLOAD_DIR / "track.mp3").write_bytes(b"not really audio")
+    status, listing, _ = api(server, "GET", "/api/files")
+    assert status == 200
+    entries = {f["name"]: f for f in listing["files"]}
+    assert entries["notes.txt"].get("thumb") is None
+    assert entries["track.mp3"].get("thumb") is None
+    assert _http_status(server, "/thumb/notes.txt")[0] == 404
+    assert _http_status(server, "/thumb/track.mp3")[0] == 404
+    assert _http_status(server, "/thumb/missing.jpg")[0] == 404
+    assert _http_status(server, "/thumb/..%2Fapp.py")[0] == 404
 
 
 # --- library snapshots: what is listed is exactly what is served -----------------

@@ -37,6 +37,9 @@ test("keeps a video from a pasted link to the Kept sheet", { skip }, async () =>
     await keepAndWait(page);
     await page.waitForSelector(".kept-cell");
     assert.deepEqual(await page.$$eval(".kept-name", (els) => els.map((el) => el.textContent)), ["A test video [abc123abc12].mp4"]);
+    // The grid loads a small JPEG from /thumb/, not the full video.
+    await page.waitForFunction(() => document.querySelector(".kept-thumb img")?.naturalWidth > 0);
+    assert.match(await page.getAttribute(".kept-thumb img", "src"), /^\/thumb\//);
     await page.waitForSelector('.strip-frame[aria-label$=": Kept"]');
     assert.deepEqual(problems, []);
   } finally {

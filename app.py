@@ -36,6 +36,7 @@ import concurrent.futures
 import email.utils
 import errno
 import functools
+import hashlib
 import http.server
 import io
 import ipaddress
@@ -527,29 +528,33 @@ def library_page(query: str = "", kind: str = "all", offset: int = 0,
                if needle in name.casefold()
                and (kind == "all" or (name.lower().endswith(".gif") if kind == "gif"
                                       else file_kind(name) == kind))]
-    return {
-        "files": [{
+    page = []
+    for name, info in matched[offset:offset + limit]:
+        file_type = file_kind(name)
+        page.append({
             "name": name,
             "size": info.st_size,
             "size_str": format_bytes(info.st_size) or "?",
             "modified": _dt.datetime.fromtimestamp(info.st_mtime).isoformat(timespec="seconds"),
             "url": f"/files/{urllib.parse.quote(name)}",
-            "kind": file_kind(name),
-        } for name, info in matched[offset:offset + limit]],
+            "kind": file_type,
+            # A versioned URL so a replaced file busts the browser cache.
+            "thumb": (f"/thumb/{urllib.parse.quote(name)}?v={info.st_mtime_ns:x}"
+                      if file_type in ("image", "video") else None),
+        })
+    return {
+        "files": page,
         "total": len(snapshot),
         "matched": len(matched),
     }
 
 
-def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
-    """A kept file opened for reading plus its fstat, or None. The descriptor
-    is checked rather than the path: open refuses a symlink (O_NOFOLLOW) and
-    never blocks on a FIFO (O_NONBLOCK), and fstat refuses anything but a
-    regular file, so the bytes and length served belong to one file."""
-    name = library_name(name)
-    if name is None:
-        return None
-    path = DOWNLOAD_DIR / name
+def open_regular_file(path: Path) -> tuple[io.BufferedReader, os.stat_result] | None:
+    """A regular file opened for reading plus its fstat, or None. The
+    descriptor is checked rather than the path: open refuses a symlink
+    (O_NOFOLLOW) and never blocks on a FIFO (O_NONBLOCK), and fstat refuses
+    anything but a regular file, so the bytes and length served belong to
+    one file."""
     if not hasattr(os, "O_NOFOLLOW") and path.is_symlink():
         return None
     flags = (os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
@@ -567,6 +572,129 @@ def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
         pass
     handle.close()
     return None
+
+
+def open_library_file(name) -> tuple[io.BufferedReader, os.stat_result] | None:
+    """A kept file opened for reading plus its fstat, or None."""
+    name = library_name(name)
+    if name is None:
+        return None
+    return open_regular_file(DOWNLOAD_DIR / name)
+
+
+# The library grid asks for one small JPEG per image or video instead of
+# decoding originals at full size. The cache is a dot directory, so the
+# library scanner never lists it, and each thumbnail is keyed by file name;
+# the source mtime decides whether it is still current.
+THUMB_DIR_NAME = ".thumbs"
+THUMB_MAX_EDGE = 480
+THUMB_TIMEOUT = 30
+THUMB_SLOTS = threading.Semaphore(2)  # concurrent ffmpeg runs, not HTTP threads
+
+
+def thumbnail_path(name: str) -> Path:
+    digest = hashlib.sha256(os.fsencode(name)).hexdigest()
+    return DOWNLOAD_DIR / THUMB_DIR_NAME / f"{digest}.jpg"
+
+
+def _ffmpeg_thumbnail(source: Path, target: Path, kind: str) -> bool:
+    """Write one JPEG frame no larger than THUMB_MAX_EDGE. A video seeks a
+    little in for a representative frame, falling back to the opening frame
+    of a clip too short to seek."""
+    scale = (f"scale=w='min({THUMB_MAX_EDGE},iw)':h='min({THUMB_MAX_EDGE},ih)'"
+             ":force_original_aspect_ratio=decrease")
+    for at in ((0.5, 0) if kind == "video" else (None,)):
+        cmd = ["ffmpeg", "-v", "error", "-nostdin", "-y"]
+        if at is not None:
+            cmd += ["-ss", str(at)]
+        cmd += ["-i", str(source), "-frames:v", "1", "-vf", scale,
+                "-q:v", "5", str(target)]
+        try:
+            made = subprocess.run(cmd, capture_output=True, timeout=THUMB_TIMEOUT)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        try:
+            if made.returncode == 0 and target.stat().st_size:
+                return True
+        except OSError:
+            pass
+        try:
+            target.unlink()
+        except OSError:
+            pass
+    return False
+
+
+def thumbnail_file(name) -> Path | None:
+    """A cached thumbnail for a kept image or video, generated on first use.
+    None for anything else, a missing file, or a source ffmpeg cannot read."""
+    name = library_name(name)
+    if name is None:
+        return None
+    kind = file_kind(name)
+    if kind not in ("image", "video"):
+        return None
+    source = DOWNLOAD_DIR / name
+    try:
+        info = os.lstat(source)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    target = thumbnail_path(name)
+
+    def current() -> bool:
+        try:
+            cached = os.lstat(target)
+        except OSError:
+            return False
+        return (stat.S_ISREG(cached.st_mode) and cached.st_size > 0
+                and cached.st_mtime_ns >= info.st_mtime_ns)
+
+    if current():
+        return target
+    with THUMB_SLOTS:
+        if current():  # another request finished while this one waited
+            return target
+        temp: Path | None = None
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            fd, temp_name = tempfile.mkstemp(dir=target.parent, prefix="thumb-", suffix=".jpg")
+            os.close(fd)
+            temp = Path(temp_name)
+            if not _ffmpeg_thumbnail(source, temp, kind):
+                return None
+            os.replace(temp, target)
+            return target
+        except OSError:
+            return None
+        finally:
+            if temp is not None:
+                try:
+                    temp.unlink()
+                except OSError:
+                    pass
+
+
+def delete_library_file(name) -> str | None:
+    """Unlink a kept file and return its name, or None if there's no such
+    file. The entry itself is checked (lstat), so deleting a symlink can
+    never resolve into deleting the file it points at."""
+    name = library_name(name)
+    if name is None:
+        return None
+    path = DOWNLOAD_DIR / name
+    try:
+        if not stat.S_ISREG(os.lstat(path).st_mode):
+            return None
+    except FileNotFoundError:
+        return None
+    path.unlink()
+    try:
+        thumbnail_path(name).unlink()
+    except OSError:
+        pass
+    return name
 
 
 def byte_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -587,23 +715,6 @@ def byte_range(header: str | None, size: int) -> tuple[int, int] | None:
     if first >= size:
         raise HttpError(416, "Range not satisfiable.")
     return first, min(int(match[2]), size - 1) if match[2] else size - 1
-
-
-def delete_library_file(name) -> str | None:
-    """Unlink a kept file and return its name, or None if there's no such
-    file. The entry itself is checked (lstat), so deleting a symlink can
-    never resolve into deleting the file it points at."""
-    name = library_name(name)
-    if name is None:
-        return None
-    path = DOWNLOAD_DIR / name
-    try:
-        if not stat.S_ISREG(os.lstat(path).st_mode):
-            return None
-    except FileNotFoundError:
-        return None
-    path.unlink()
-    return name
 
 
 def clean_text(value, limit: int = 2000) -> str:
@@ -909,6 +1020,16 @@ def cleanup_stale_files() -> None:
                     p.unlink()
                 except OSError:
                     pass
+    except OSError:
+        pass
+    # A killed thumbnail build leaves only its temporary JPEG; cached
+    # thumbnails stay and are reused until their source changes.
+    try:
+        for p in (DOWNLOAD_DIR / THUMB_DIR_NAME).glob("thumb-*"):
+            try:
+                p.unlink()
+            except OSError:
+                pass
     except OSError:
         pass
 
@@ -2591,6 +2712,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not getattr(self, "_omit_body", False):
                 self.send_file_body(handle, first, last - first + 1)
 
+    def serve_thumbnail(self, raw_name: str):
+        """A small JPEG for a library image or video, generated on first use.
+        Kept files are served whole by /files/; the grid reads this instead,
+        so a page of large photos does not decode every original."""
+        name = urllib.parse.unquote(raw_name)
+        path = thumbnail_file(name)
+        opened = open_regular_file(path) if path is not None else None
+        if opened is None:
+            self.send_error(404)
+            return
+        handle, info = opened
+        with handle:
+            size = info.st_size
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(size))
+            self.send_header("ETag", f'"{size:x}-{info.st_mtime_ns:x}"')
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "private, max-age=300")
+            self.end_headers()
+            if not getattr(self, "_omit_body", False):
+                self.send_file_body(handle, 0, size)
+
     def send_file_body(self, handle: io.BufferedReader, offset: int, count: int) -> None:
         """Send `count` bytes of `handle` from `offset` (zero-copy where the
         OS allows). A client that stops reading - a media element that has
@@ -2688,6 +2832,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except OSError:
                 free = None
             return self.send_json({**page, "disk_free": free, "disk_free_str": format_bytes(free)})
+        if route.startswith("/thumb/"):
+            return self.serve_thumbnail(route[len("/thumb/"):])
         if route.startswith("/files/"):
             return self.serve_download_file(route[len("/files/"):])
         if route.startswith("/api/"):

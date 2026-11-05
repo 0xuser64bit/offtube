@@ -223,14 +223,20 @@ when stored history exceeds 50.
 Returns `{files, total, matched, disk_free, disk_free_str}`, newest first.
 `total` counts the full library; `matched` counts all files matching the
 search before pagination. A file has `name`, `size` (bytes), `size_str`,
-`modified`, `url`, and `kind`. A GIF's file `kind` is `image`; the `gif`
-query filter selects `.gif` files specifically. Other files, such as
-subtitle sidecars, can have kind `other` and appear with `kind=all`.
+`modified`, `url`, `kind`, and `thumb`. For images and videos, `thumb` is a
+versioned relative URL to a cached JPEG preview no larger than 480 px; it is
+`null` for other files. A GIF's file `kind` is `image`; the `gif` query
+filter selects `.gif` files specifically. Other files, such as subtitle
+sidecars, can have kind `other` and appear with `kind=all`.
 
 Follow the returned relative `url` against your server base URL to retrieve
 a file. `GET /files/<encoded-name>` supports a single byte range with 206
 or 416 responses, and supplies `ETag` / `Last-Modified` for `If-Range`.
-Use the provided URL rather than interpolating an unescaped filename.
+`GET /thumb/<encoded-name>` returns the JPEG preview for an image or video,
+building it on first request (or after the source changes) with FFmpeg; it
+returns 404 when no preview can be made. Use `thumb` only for display and
+`url` to save or play the original. Use the provided URLs rather than
+interpolating an unescaped filename.
 
 `POST /api/files/delete` accepts `{ "name": "<exact filename>" }` and
 returns `{ "ok": true, "deleted": "<name>" }`, or 404. This deletes the

@@ -186,7 +186,10 @@ not just the preview.
 Library search and media filters cover the whole downloads folder, even
 when only a page of results is loaded. GIFs are image files, with a separate
 GIF filter. Subtitle sidecars remain files too. Dotfiles, unfinished
-fragments, symlinks, and special files are not part of the library.
+fragments, symlinks, and special files are not part of the library. The grid
+loads small JPEG previews from a `.thumbs/` cache inside `downloads/`
+instead of decoding full-size images and videos; opening or saving a file
+still uses the original.
 
 **Clear finished** removes session records, not saved media. Job history
 and retry parameters live in server memory and disappear on restart;

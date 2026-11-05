@@ -745,10 +745,11 @@ function jobDisplay(job) {
   const kind = /^(jpe?g|png|gif|webp|avif|heic)$/.test(ext) ? "image"
     : /^(mp4|webm|mkv|mov|m4v)$/.test(ext) ? "video" : /^(mp3|m4a|opus|ogg|flac|wav)$/.test(ext) ? "audio" : "";
   const fileUrl = file ? `/files/${encodeURIComponent(file)}` : "";
+  const thumbUrl = file ? `/thumb/${encodeURIComponent(file)}` : "";
   const tail = ((job.url || "").replace(/[?#].*$/, "").split("/").filter(Boolean).pop() || "").slice(0, 24);
   const word = { image: "image", video: "video", audio: "track" }[kind] || "post";
   return {
-    thumb: ext === "gif" ? fileUrl : job.thumbnail || (kind === "image" ? fileUrl : ""),
+    thumb: ext === "gif" ? fileUrl : job.thumbnail || (kind === "image" ? thumbUrl : ""),
     video: !job.thumbnail && kind === "video" ? fileUrl : "",
     title: job.title || `${job.source || "Saved"} ${word}`,
     meta: [job.source, job.title ? (job.quality && job.quality !== "best" ? job.quality.replace("audio_", "") : "") : tail].filter(Boolean).join(" · "),
@@ -863,6 +864,9 @@ const lazyVideos = "IntersectionObserver" in window ? new IntersectionObserver((
 
 function keptThumb(f) {
   const ext = (f.name.split(".").pop() || "").toUpperCase();
+  // The grid reads the server's small JPEG; the original stays behind Save.
+  // An unreadable image falls back to the original once.
+  if (f.thumb) return `<img src="${esc(f.thumb)}" alt="" loading="lazy"${f.kind === "image" ? ` data-fallback="${esc(f.url)}"` : ""} />`;
   if (f.kind === "image") return `<img src="${esc(f.url)}" alt="" loading="lazy" />`;
   if (f.kind === "video") return `<video data-src="${esc(f.url)}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`;
   return `<span class="edge">${esc(ext || "File")}</span>`;
@@ -893,6 +897,9 @@ function renderFiles() {
     </li>`;
   }).join("") + (more > 0
     ? `<li class="kept-more"><button class="btn btn-quiet" type="button" id="moreFiles">Show ${Math.min(FILES_PAGE, more)} more</button></li>` : "");
+  $$("img[data-fallback]", $("files")).forEach((img) => {
+    img.addEventListener("error", () => { img.src = img.dataset.fallback; }, { once: true });
+  });
   $$("video[data-src]", $("files")).forEach((v) => { if (lazyVideos) lazyVideos.observe(v); else v.src = v.dataset.src; });
 }
 

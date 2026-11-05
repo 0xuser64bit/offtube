@@ -474,13 +474,21 @@ async function refreshFiles() {
     $('files').innerHTML = list.map((f, i) => {
       const href = esc(server + f.url);
       const ext = (f.name.split('.').pop() || '').toUpperCase();
-      const thumb = f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`
-        : f.kind === 'video' ? `<video src="${href}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`
-          : `<span class="edge">${esc(ext || 'File')}</span>`;
+      // The server's small JPEG, not the original: a dozen full-size photos
+      // would be decoded to fill a strip of thumbnails. Older servers omit
+      // `thumb`, and an unreadable image falls back to the originals once.
+      const thumb = f.thumb
+        ? `<img src="${esc(server + f.thumb)}" alt="" loading="lazy"${f.kind === 'image' ? ` data-fallback="${href}"` : ''} />`
+        : f.kind === 'image' ? `<img src="${href}" alt="" loading="lazy" />`
+          : f.kind === 'video' ? `<video src="${href}#t=0.5" preload="metadata" muted playsinline aria-hidden="true"></video>`
+            : `<span class="edge">${esc(ext || 'File')}</span>`;
       return `<li class="kept-cell"><div class="kept-thumb">${thumb}</div>
         <div class="edge-row"><span class="edge edge-dim">${String(i + 1).padStart(2, '0')}</span><span class="edge">${esc(f.size_str)}</span></div>
         <p class="kept-name"><a href="${href}" target="_blank" rel="noreferrer" title="Save ${esc(f.name)}">${esc(f.name)}</a></p></li>`;
     }).join('');
+    $$('img[data-fallback]', $('files')).forEach((img) => {
+      img.addEventListener('error', () => { img.src = img.dataset.fallback; }, { once: true });
+    });
   } catch { /* ignore */ }
 }
 

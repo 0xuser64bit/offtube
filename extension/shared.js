@@ -249,10 +249,11 @@ OFFTUBE.jobDisplay = function jobDisplay(job, server) {
   const kind = /^(jpe?g|png|gif|webp|avif|heic)$/.test(ext) ? 'image'
     : /^(mp4|webm|mkv|mov|m4v)$/.test(ext) ? 'video' : /^(mp3|m4a|opus|ogg|flac|wav)$/.test(ext) ? 'audio' : '';
   const fileUrl = file ? `${server}/files/${encodeURIComponent(file)}` : '';
+  const thumbUrl = file ? `${server}/thumb/${encodeURIComponent(file)}` : '';
   const tail = ((job.url || '').replace(/[?#].*$/, '').split('/').filter(Boolean).pop() || '').slice(0, 24);
   const word = { image: 'image', video: 'video', audio: 'track' }[kind] || 'post';
   return {
-    thumb: ext === 'gif' ? fileUrl : job.thumbnail || (kind === 'image' ? fileUrl : ''),
+    thumb: ext === 'gif' ? fileUrl : job.thumbnail || (kind === 'image' ? thumbUrl : ''),
     video: !job.thumbnail && kind === 'video' ? fileUrl : '',
     title: job.title || `${job.source || 'Saved'} ${word}`,
     meta: job.title ? job.source || '' : [job.source, tail].filter(Boolean).join(' · '),

@@ -271,6 +271,11 @@ test("the side panel shows the newest kept files and the library's size", { skip
     assert.equal(await page.$$eval(".kept-cell", (els) => els.length), 12);
     assert.equal(await page.textContent(".kept-name"), "pin_14.jpg");
     assert.match(await page.textContent("#filesCount"), /^15( · |$)/);
+    // Recent photos use the server's small thumbnails, not the originals.
+    assert.match(await page.getAttribute(".kept-thumb img", "src"), /\/thumb\/pin_14\.jpg/);
+    // A preview the server cannot make falls back to the kept image once.
+    await page.$eval(".kept-thumb img", (img) => img.dispatchEvent(new Event("error")));
+    assert.match(await page.getAttribute(".kept-thumb img", "src"), /\/files\/pin_14\.jpg$/);
     assert.deepEqual(problems, []);
   } finally {
     await page.close();
