@@ -60,6 +60,7 @@ function surface(script, local = {}, session = {}) {
     action: { async setBadgeText() {}, async setBadgeBackgroundColor() {} },
     windows: { async getLastFocused() { return { id: 1 }; } },
     sidePanel: { async open(value) { opened.push(value); } },
+    alarms: { onAlarm: eventSource(), async create() {}, async clear() {} },
     runtime: { onInstalled: eventSource() }, contextMenus: { onClicked: eventSource() }, commands: { onCommand: eventSource() },
   };
   const context = vm.createContext({
@@ -142,6 +143,7 @@ test('opening the side panel preserves the popup URL, GIF selection, times and p
   assert.equal(s.session.pendingUrl, 'https://example.com/video');
   assert.deepEqual(s.session.pendingOptions, {
     quality: 'gif', clip_from: '1:02', clip_to: '1:07', gif: { gif_size: 320, gif_fps: 10, gif_loop: false },
+    marks: [],
   });
   assert.equal(s.opened.length, 1);
 });
