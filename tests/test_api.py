@@ -737,12 +737,14 @@ def _make_media(path, *args):
 
 
 def _image_size(data: bytes) -> str:
-    with tempfile.NamedTemporaryFile(suffix=".jpg") as tmp:
-        tmp.write(data)
-        tmp.flush()
+    # A NamedTemporaryFile stays open on Windows, where ffprobe cannot read
+    # it; a closed file in a temporary directory works on every platform.
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "thumb.jpg"
+        path.write_bytes(data)
         probe = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "csv=p=0", tmp.name],
+             "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, check=True)
     return probe.stdout.strip()
 
