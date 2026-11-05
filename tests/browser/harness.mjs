@@ -118,16 +118,32 @@ export async function startServer(files = []) {
     },
     async stop() {
       await halt();
-      rmSync(data, { recursive: true, force: true });
+      // Windows refuses to delete a file still open by a thumbnail's ffmpeg
+      // child for a moment after the server exits; retry rather than fail
+      // the test on cleanup that the next startup would clean anyway.
+      rmSync(data, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     },
   };
+}
+
+// Chromium on Windows occasionally answers a resource with
+// net::ERR_NO_BUFFER_SPACE (WSAENOBUFS): the runner briefly had no local
+// socket buffer. It is a kernel condition, not an HTTP answer, and a kept
+// file that cannot be read still surfaces as a 404/500. Tolerate it only for
+// library media; an app page, script or stylesheet that failed would leave
+// the test judging a page that never loaded, so it still counts.
+function transientMediaError(message) {
+  if (!/net::ERR_NO_BUFFER_SPACE\b/.test(message.text())) return false;
+  return /\/(?:files|thumb)\//.test(message.location()?.url || "");
 }
 
 // Page errors and console errors, which every test expects to stay empty.
 export function watchProblems(page) {
   const problems = [];
   page.on("pageerror", (error) => problems.push(error.message));
-  page.on("console", (message) => { if (message.type() === "error") problems.push(message.text()); });
+  page.on("console", (message) => {
+    if (message.type() === "error" && !transientMediaError(message)) problems.push(message.text());
+  });
   return problems;
 }
 

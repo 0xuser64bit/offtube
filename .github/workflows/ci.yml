@@ -107,7 +107,10 @@ jobs:
           NODE_PATH: ${{ runner.temp }}/browser/node_modules
           OFFTUBE_BROWSER_TESTS: required
           PYTHON: python
-        run: node --test tests/browser/desk.test.mjs tests/browser/extension.test.mjs
+        # One suite at a time: two Chromium instances generating library
+        # thumbnails at once can exhaust Windows' loopback socket buffers,
+        # which surfaces as net::ERR_NO_BUFFER_SPACE in an unrelated page.
+        run: node --test --test-concurrency=1 tests/browser/desk.test.mjs tests/browser/extension.test.mjs
       - name: Start offtube with run.bat
         run: |
           # run.bat builds its venv on first run, then starts offtube.

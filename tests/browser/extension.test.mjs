@@ -28,7 +28,8 @@ before(async () => {
 });
 after(async () => {
   await context?.close();
-  if (profile) rmSync(profile, { recursive: true, force: true });
+  // Chromium can briefly keep a profile file open after close on Windows.
+  if (profile) rmSync(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 // A fresh start against `base`: no saved choices and no link handed over.
