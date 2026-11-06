@@ -1444,6 +1444,15 @@ def watch_job_process(job: dict, proc: subprocess.Popen, done: threading.Event) 
 GALLERY_INSPECT_LIMIT = 50
 VIDEO_EXTS = frozenset({"mp4", "webm", "mov", "m4v", "mkv"})
 
+# X (Twitter) rejects anything outside MP4/MOV with H.264 video, yuv420p
+# pixels, AAC-LC audio (mono or stereo) and at most 60 fps, reporting it as
+# "video not supported". Downloads from sites that ship AV1/VP9/Opus are
+# converted to this shape; files already in it are kept byte-for-byte.
+X_VIDEO_CODECS = frozenset({"h264"})
+X_AUDIO_CODECS = frozenset({"aac"})
+X_PIX_FMTS = frozenset({"yuv420p", "yuvj420p"})
+X_MAX_FPS = 60.0
+
 
 def python_child_env() -> dict:
     """Environment for the Python programs offtube starts (gallery-dl, the
@@ -1963,13 +1972,20 @@ def run_gif_ytdlp(job: dict, payload: dict, url: str, src: dict) -> None:
         JobLogger(job["id"]).warning(f"{note} Finished GIFs were kept.")
 
 
-def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
-                   start_pct: float, end_pct: float, duration: float) -> None:
+def run_ffmpeg(job: dict, args: list[str], detail: str, log_path: Path, *,
+               duration: float = 0.0, progress_range: tuple[float, float] | None = None,
+               failure: str) -> None:
+    """Run ffmpeg under the job, reading its progress and stopping its tree
+    on cancel or low disk. With progress_range the job's meter advances
+    between those percentages; without one, the detail line carries the
+    encoder's percentage instead."""
     check_job(job)
     with jobs_lock:
-        job.update(status="processing", detail=detail, progress=start_pct, speed=None, eta=None)
+        job.update(status="processing", detail=detail, speed=None, eta=None)
+        if progress_range is not None:
+            job["progress"] = progress_range[0]
     # A file avoids full pipes stalling cancellation while ffmpeg is silent.
-    log_path = Path(job["gif_dir"]) / "ffmpeg.log"
+    tail = ""
     with log_path.open("w+b") as progress, log_path.open("rb") as reader:
         proc = subprocess.Popen(["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
                                  "-nostats", "-progress", "pipe:1", "-y", *args],
@@ -1988,20 +2004,31 @@ def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
                 reader.seek(max(0, length - 8192))
                 tail = reader.read(8192).decode("utf-8", "replace")
                 times = re.findall(r"(?m)^out_time_us=(\d+)$", tail)
-                with jobs_lock:
-                    if times and duration > 0:
-                        fraction = min(1, int(times[-1]) / 1_000_000 / duration)
-                        job["progress"] = round(start_pct + (end_pct - start_pct) * fraction, 1)
+                if times and duration > 0:
+                    fraction = min(1, int(times[-1]) / 1_000_000 / duration)
+                    with jobs_lock:
+                        if progress_range is not None:
+                            start, end = progress_range
+                            job["progress"] = round(start + (end - start) * fraction, 1)
+                        else:
+                            job["detail"] = f"{detail} {round(fraction * 100)}%"
                 if proc.returncode is not None:
                     break
             check_job(job)
             if proc.returncode:
                 JobLogger(job["id"]).error(tail[-2000:])
-                raise DownloadError("GIF conversion failed. Try a shorter range or smaller size; details are in the log.")
+                raise DownloadError(failure)
         finally:
             stop_process_tree(proc)
             with jobs_lock:
                 job.pop("proc", None)
+
+
+def run_gif_ffmpeg(job: dict, args: list[str], detail: str,
+                   start_pct: float, end_pct: float, duration: float) -> None:
+    run_ffmpeg(job, args, detail, Path(job["gif_dir"]) / "ffmpeg.log",
+               duration=duration, progress_range=(start_pct, end_pct),
+               failure="GIF conversion failed. Try a shorter range or smaller size; details are in the log.")
 
 
 def convert_gif(job: dict, source: Path, payload: dict, *, trimmed: bool = False,
@@ -2260,6 +2287,210 @@ def attribute_new_files(job: dict, before: set[Path]) -> list[str]:
     return diff
 
 
+def probe_media(path: Path) -> dict | None:
+    """ffprobe's streams and format for a downloaded file, or None when it
+    cannot be read (missing ffprobe, a corrupt file, or something that is
+    not media)."""
+    try:
+        done = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries",
+             "stream=index,codec_type,codec_name,profile,pix_fmt,width,height,"
+             "channels,sample_aspect_ratio,avg_frame_rate,r_frame_rate:"
+             "stream_disposition=attached_pic:"
+             "format=format_name,duration",
+             "-of", "json", str(path)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode:
+        return None
+    try:
+        info = json.loads(done.stdout)
+    except (TypeError, ValueError):
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def stream_frame_rate(stream: dict) -> float | None:
+    """A stream's average or nominal frame rate, as a finite number."""
+    for key in ("avg_frame_rate", "r_frame_rate"):
+        raw = stream.get(key)
+        if not isinstance(raw, str) or "/" not in raw:
+            continue
+        numerator, denominator = raw.split("/", 1)
+        try:
+            rate = float(numerator) / float(denominator)
+        except (ValueError, ZeroDivisionError):
+            continue
+        if math.isfinite(rate) and rate > 0:
+            return rate
+    return None
+
+
+def stream_channels(stream: dict | None) -> int:
+    """An audio stream's channel count, or 0 when ffprobe omits it."""
+    try:
+        return int((stream or {}).get("channels") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def x_ready_plan(info: dict | None, suffix: str) -> dict | None:
+    """What about this file X would reject, or None when it can go as-is.
+    The returned flags tell ffmpeg whether to re-encode video and/or audio;
+    the container is only kept when it is already MP4."""
+    streams = [s for s in (info or {}).get("streams") or [] if isinstance(s, dict)]
+    video = next((s for s in streams if s.get("codec_type") == "video"
+                  and not (s.get("disposition") or {}).get("attached_pic")), None)
+    if video is None:
+        return None  # not really a video: never rewrite it
+    audios = [s for s in streams if s.get("codec_type") == "audio"]
+    audio = audios[0] if audios else None
+    format_name = str(((info or {}).get("format") or {}).get("format_name") or "").lower()
+    fps = stream_frame_rate(video)
+    sar = video.get("sample_aspect_ratio")
+    channels = stream_channels(audio)
+    video_profile = str(video.get("profile") or "").lower()
+    video_ok = (
+        video.get("codec_name") in X_VIDEO_CODECS
+        and video_profile in ("", "constrained baseline", "baseline", "main", "high")
+        and video.get("pix_fmt") in X_PIX_FMTS
+        and (fps is None or fps <= X_MAX_FPS + 0.01)
+        and sar in (None, "", "N/A", "0:1", "1:1")
+    )
+    audio_ok = all(
+        track.get("codec_name") in X_AUDIO_CODECS
+        and str(track.get("profile") or "").lower() in ("", "lc")
+        and stream_channels(track) <= 2
+        for track in audios
+    )
+    container_ok = (suffix.lower() == ".mp4"
+                    and (not format_name or "mp4" in format_name))
+    if video_ok and audio_ok and container_ok:
+        return None
+    return {
+        "video": not video_ok,
+        "audio": not audio_ok,
+        "fps": fps,
+        "channels": channels,
+        "anamorphic": sar not in (None, "", "N/A", "0:1", "1:1"),
+        "video_index": video.get("index"),
+        "audio_index": audio.get("index") if audio else None,
+    }
+
+
+def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) -> Path:
+    """Convert one downloaded video to the shape X accepts: MP4 with H.264
+    video, yuv420p pixels and AAC-LC mono/stereo, capped at 60 fps. Streams
+    that already fit are copied, not re-encoded. Returns the kept path."""
+    if not path.is_file():
+        return path
+    info = probe_media(path)
+    if info is None:
+        raise DownloadError("Couldn’t inspect the downloaded video.")
+    plan = x_ready_plan(info, path.suffix)
+    if plan is None:
+        return path
+    if not shutil.which("ffmpeg"):
+        raise DownloadError("Making this video X-ready needs ffmpeg.")
+
+    if path.suffix.lower() == ".mp4":
+        final = path
+    else:
+        final = path.with_suffix(".mp4")
+        number = 2
+        while final.exists():
+            final = path.with_name(f"{path.stem} ({number}).mp4")
+            number += 1
+    # A sibling temp file keeps the final replace atomic on every platform.
+    temp = path.with_name(f".{path.stem}.{job['id']}.x-ready.tmp")
+    descriptor, log_name = tempfile.mkstemp(prefix=f"offtube-{job['id']}-x-", suffix=".log")
+    os.close(descriptor)
+    log_path = Path(log_name)
+    has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams") or []
+                    if isinstance(s, dict))
+    video_map = (f"0:{plan['video_index']}" if isinstance(plan.get("video_index"), int)
+                 else "0:v:0")
+    audio_map = (f"0:{plan['audio_index']}" if isinstance(plan.get("audio_index"), int)
+                 else "0:a:0?")
+    args = [
+        "-i", str(path), "-map", video_map, "-map", audio_map,
+        "-sn", "-dn", "-map_metadata", "0", "-map_chapters", "-1",
+        "-max_muxing_queue_size", "1024",
+    ]
+    if plan["video"]:
+        # Full re-encode for codec/pixel-format compatibility. The scale
+        # filter also makes odd dimensions even and square pixels, which
+        # yuv420p and X both require; anamorphic sources keep their display
+        # aspect by widening to square pixels.
+        scale = ("scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1"
+                 if plan.get("anamorphic") else
+                 "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
+        args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+                 "-pix_fmt", "yuv420p", "-vf", scale]
+        if plan["fps"] and plan["fps"] > X_MAX_FPS:
+            args += ["-r", str(int(X_MAX_FPS))]
+    else:
+        args += ["-c:v", "copy"]
+    if not has_audio:
+        args += ["-an"]
+    elif plan["audio"]:
+        args += ["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "192k"]
+        if plan.get("channels", 0) > 2:
+            args += ["-ac", "2"]
+    else:
+        args += ["-c:a", "copy"]
+    args += ["-movflags", "+faststart", "-f", "mp4", str(temp)]
+
+    try:
+        try:
+            duration = float((info.get("format") or {}).get("duration") or 0)
+        except (TypeError, ValueError):
+            duration = 0
+        run_ffmpeg(job, args, f"Making video X-ready — {index}/{total}…", log_path,
+                   duration=duration if math.isfinite(duration) and duration > 0 else 0,
+                   failure="Couldn’t make this video X-ready; the downloaded file is unchanged.")
+        # Don't trust the encoder blindly: probe what was actually written.
+        converted = probe_media(temp)
+        if converted is None or x_ready_plan(converted, ".mp4") is not None:
+            raise DownloadError("The converted video did not pass the X compatibility check.")
+        os.replace(temp, final)
+        if final != path:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass  # the converted file is kept; a stale original is harmless
+    finally:
+        temp.unlink(missing_ok=True)
+        log_path.unlink(missing_ok=True)
+    action = "Converted" if plan["video"] or plan["audio"] else "Remuxed"
+    JobLogger(job["id"]).info(f"{action} {final.name} to X-ready H.264/AAC MP4.")
+    return final
+
+
+def make_videos_x_ready(job: dict, paths: list[Path]) -> list[Path]:
+    """Make every video in a finished download X-ready. One stubborn file
+    doesn't discard the rest; its original is kept and the log says why."""
+    videos = [p for p in paths if p.suffix.lower().lstrip(".") in VIDEO_EXTS]
+    replacements: dict[Path, Path] = {}
+    total = len(videos)
+    for index, path in enumerate(videos, 1):
+        check_job(job)
+        try:
+            replacements[path] = make_video_x_ready(job, path, index, total)
+        except DownloadError as exc:
+            if job.get("cancel_requested") or job.get("disk_full"):
+                raise
+            JobLogger(job["id"]).warning(f"{path.name}: {exc} Kept the original.")
+            replacements[path] = path
+        except OSError as exc:
+            JobLogger(job["id"]).warning(
+                f"{path.name}: {exc.strerror or exc}. Kept the original.")
+            replacements[path] = path
+    return [replacements.get(path, path) for path in paths]
+
+
 def run_download(job_id: str, payload: dict):
     with jobs_lock:
         job = jobs.get(job_id)
@@ -2295,6 +2526,19 @@ def run_download(job_id: str, payload: dict):
                         f"{engine}: {_engine_error(exc)} — trying {engines[i + 1]}…"))
                     job["detail"] = f"Trying {engines[i + 1]}…"
                     job["progress"] = 0
+        # Videos that arrived as AV1/VP9/Opus or another shape X rejects are
+        # converted once here, after either engine. Compatible files are
+        # left byte-for-byte alone.
+        if payload.get("quality") not in ("gif", "audio_mp3", "audio_m4a"):
+            if files is None and not reported:
+                reported = [DOWNLOAD_DIR / name for name in attribute_new_files(job, before)]
+            candidates = ([DOWNLOAD_DIR / name for name in files]
+                          if files is not None else reported)
+            candidates = make_videos_x_ready(job, candidates)
+            if files is not None:
+                files = [path.name for path in candidates]
+            else:
+                reported = candidates
         with jobs_lock:
             job = jobs.get(job_id)
             if job is None:
@@ -2308,10 +2552,9 @@ def run_download(job_id: str, payload: dict):
             job["progress"] = 100
             job["detail"] = "Done."
             # The worker names what it saved, including a file yt-dlp found
-            # already downloaded (which the directory diff cannot see). Only
-            # fall back to the diff when it reported nothing.
-            job["files"] = files if files is not None else (
-                [path.name for path in reported] or attribute_new_files(job, before))
+            # already downloaded (which the directory diff cannot see). The
+            # diff fallback above also runs after postprocessing renames.
+            job["files"] = files if files is not None else [path.name for path in reported]
             job["finished_at"] = _dt.datetime.now().isoformat(timespec="seconds")
     except DownloadError as exc:
         msg = str(exc)

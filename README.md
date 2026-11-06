@@ -26,7 +26,7 @@ receive the requests needed to inspect and fetch their media.
 
 | Keep what you mean | Without losing the details |
 | --- | --- |
-| **Video and audio** | Best available, 2160p–360p choices, or MP3/M4A audio. |
+| **Video and audio** | Best available, 2160p–360p choices, or MP3/M4A audio. Videos are made X-ready (H.264/AAC MP4) when their source isn't already. |
 | **Photos and galleries** | Original files from posts, pins, albums, and boards. |
 | **Just a moment** | Trim a video, or make a silent GIF with size, frame-rate, and loop controls. |
 | **A few from a collection** | Circle the previews you want, keep everything, or enter a range like `1-5,7`. |

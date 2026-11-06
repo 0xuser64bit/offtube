@@ -135,6 +135,12 @@ internal interface, not for sharing offtube over a network.
   below that height, with an engine fallback if none matches. They do not
   upscale media or guarantee a file size.
 - **Audio only** offers MP3 or M4A. Extraction and conversion need FFmpeg.
+- **X-ready video** means every kept video is checked with ffprobe. When it
+  is not already an MP4 with H.264 video, yuv420p pixels and AAC audio
+  (mono or stereo, at most 60 fps), offtube converts it once with FFmpeg so
+  X/Twitter and most editors accept it. A file that already fits is left
+  byte-for-byte unchanged. This does not crop, shorten, or resize a video,
+  so X's file-size, duration, and account limits still apply.
 - **Trim** accepts seconds (`90`, `1.25`), `MM:SS` (`01:30`), or `HH:MM:SS`
   (`1:02:03`). Leave either endpoint empty to use the start or end of the
   video. To must be after From. Image galleries do not have video trimming.
