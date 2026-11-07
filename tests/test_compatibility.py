@@ -163,6 +163,59 @@ def test_compatible_video_is_left_byte_for_byte(x_job, tmp_path):
     assert x_job["log"] == []
 
 
+def test_accelerated_video_uses_one_x_ready_pass_with_matched_filters(x_job, tmp_path, monkeypatch):
+    video = tmp_path / "ready.mp4"
+    video.write_bytes(b"source")
+    source_info = probe_info(
+        ("vp9", {"pix_fmt": "yuv420p", "avg_frame_rate": "30/1", "sample_aspect_ratio": "1:1"}),
+        ("opus", {"channels": 2}),
+    )
+    source_info["format"] = {"duration": "10", "format_name": "matroska,webm"}
+    converted_info = probe_info(
+        ("h264", {"pix_fmt": "yuv420p", "avg_frame_rate": "30/1", "sample_aspect_ratio": "1:1"}),
+        ("aac", {"channels": 2}),
+    )
+    converted_info["format"] = {"duration": "8", "format_name": "mov,mp4,m4a,3gp,3g2,mj2"}
+    calls = {}
+
+    monkeypatch.setattr(app, "probe_media", lambda path: source_info if path == video else converted_info)
+    monkeypatch.setattr(app.shutil, "which", lambda _: "/ffmpeg")
+
+    def convert(job, args, detail, _log, *, duration, failure):
+        calls.update(args=args, detail=detail, duration=duration, failure=failure)
+        Path(args[-1]).write_bytes(b"accelerated")
+
+    monkeypatch.setattr(app, "run_ffmpeg", convert)
+    x_job["video_speed"] = 1.25
+    kept = app.make_video_x_ready(x_job, video)
+
+    assert kept == tmp_path / "ready [1.25x].mp4"
+    assert calls["duration"] == 8
+    assert calls["detail"] == "Speeding up video — 1/1 · 1.25x…"
+    assert calls["args"][calls["args"].index("-vf") + 1].startswith("setpts=PTS/1.25,")
+    assert calls["args"][calls["args"].index("-filter:a") + 1] == "atempo=1.25"
+    assert app.x_ready_plan(converted_info, ".mp4") is None
+
+
+@requires_ffmpeg
+def test_accelerated_video_without_audio_is_a_valid_shorter_mp4(x_job, tmp_path):
+    video = tmp_path / "silent.mp4"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i",
+         "testsrc2=size=160x90:rate=30:duration=1", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+         "-an", "-movflags", "+faststart", "-y", str(video)],
+        check=True, capture_output=True)
+    x_job["video_speed"] = 2
+
+    kept = app.make_video_x_ready(x_job, video)
+    info = app.probe_media(kept)
+
+    assert kept == tmp_path / "silent [2x].mp4"
+    assert app.x_ready_plan(info, ".mp4") is None
+    assert not any(s["codec_type"] == "audio" for s in info["streams"])
+    assert float(info["format"]["duration"]) == pytest.approx(0.5, abs=0.08)
+
+
 def test_one_failed_conversion_keeps_its_original(x_job, tmp_path, monkeypatch):
     broken, good = tmp_path / "broken.mp4", tmp_path / "good.mp4"
     broken.write_bytes(b"source")
@@ -177,6 +230,19 @@ def test_one_failed_conversion_keeps_its_original(x_job, tmp_path, monkeypatch):
     assert app.make_videos_x_ready(x_job, [broken, good]) == [broken, good]
     assert any("encoder refused" in line and "Kept the original" in line
                for line in x_job["log"])
+
+
+def test_acceleration_failure_does_not_claim_to_keep_the_original(x_job, tmp_path, monkeypatch):
+    broken = tmp_path / "broken.mp4"
+    broken.write_bytes(b"source")
+    x_job["video_speed"] = 1.5
+
+    monkeypatch.setattr(app, "make_video_x_ready",
+                        lambda *args: (_ for _ in ()).throw(app.DownloadError("encoder refused")))
+
+    with pytest.raises(app.DownloadError, match="encoder refused"):
+        app.make_videos_x_ready(x_job, [broken])
+    assert not x_job["log"]
 
 
 def test_run_download_makes_videos_x_ready(tmp_path, monkeypatch):

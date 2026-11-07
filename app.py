@@ -2403,13 +2403,38 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
     info = probe_media(path)
     if info is None:
         raise DownloadError("Couldn’t inspect the downloaded video.")
+    speed = video_speed(job)
     plan = x_ready_plan(info, path.suffix)
-    if plan is None:
+    streams = [s for s in info.get("streams") or [] if isinstance(s, dict)]
+    video = next((s for s in streams if s.get("codec_type") == "video"
+                  and not (s.get("disposition") or {}).get("attached_pic")), None)
+    if video is None:
+        return path
+    if plan is None and speed == 1:
         return path
     if not shutil.which("ffmpeg"):
-        raise DownloadError("Making this video X-ready needs ffmpeg.")
+        action = "Changing video speed" if speed > 1 else "Making this video X-ready"
+        raise DownloadError(f"{action} needs ffmpeg.")
 
-    if path.suffix.lower() == ".mp4":
+    if plan is None:
+        audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        plan = {
+            "video": False,
+            "audio": False,
+            "fps": stream_frame_rate(video),
+            "channels": stream_channels(audio),
+            "anamorphic": False,
+            "video_index": video.get("index"),
+            "audio_index": audio.get("index") if audio else None,
+        }
+
+    if speed > 1:
+        final = path.with_name(f"{path.stem} [{speed:g}x].mp4")
+        number = 2
+        while final.exists():
+            final = path.with_name(f"{path.stem} [{speed:g}x] ({number}).mp4")
+            number += 1
+    elif path.suffix.lower() == ".mp4":
         final = path
     else:
         final = path.with_suffix(".mp4")
@@ -2422,8 +2447,7 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
     descriptor, log_name = tempfile.mkstemp(prefix=f"offtube-{job['id']}-x-", suffix=".log")
     os.close(descriptor)
     log_path = Path(log_name)
-    has_audio = any(s.get("codec_type") == "audio" for s in info.get("streams") or []
-                    if isinstance(s, dict))
+    has_audio = any(s.get("codec_type") == "audio" for s in streams)
     video_map = (f"0:{plan['video_index']}" if isinstance(plan.get("video_index"), int)
                  else "0:v:0")
     audio_map = (f"0:{plan['audio_index']}" if isinstance(plan.get("audio_index"), int)
@@ -2433,24 +2457,28 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
         "-sn", "-dn", "-map_metadata", "0", "-map_chapters", "-1",
         "-max_muxing_queue_size", "1024",
     ]
-    if plan["video"]:
+    if plan["video"] or speed > 1:
         # Full re-encode for codec/pixel-format compatibility. The scale
         # filter also makes odd dimensions even and square pixels, which
         # yuv420p and X both require; anamorphic sources keep their display
         # aspect by widening to square pixels.
-        scale = ("scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1"
-                 if plan.get("anamorphic") else
-                 "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
+        filters = [f"setpts=PTS/{speed:g}"] if speed > 1 else []
+        if plan["video"]:
+            filters.append("scale=trunc(iw*sar/2)*2:trunc(ih/2)*2,setsar=1"
+                           if plan.get("anamorphic") else
+                           "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1")
         args += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
-                 "-pix_fmt", "yuv420p", "-vf", scale]
+                 "-pix_fmt", "yuv420p", "-vf", ",".join(filters)]
         if plan["fps"] and plan["fps"] > X_MAX_FPS:
             args += ["-r", str(int(X_MAX_FPS))]
     else:
         args += ["-c:v", "copy"]
     if not has_audio:
         args += ["-an"]
-    elif plan["audio"]:
+    elif plan["audio"] or speed > 1:
         args += ["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "192k"]
+        if speed > 1:
+            args += ["-filter:a", f"atempo={speed:g}"]
         if plan.get("channels", 0) > 2:
             args += ["-ac", "2"]
     else:
@@ -2462,9 +2490,14 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
             duration = float((info.get("format") or {}).get("duration") or 0)
         except (TypeError, ValueError):
             duration = 0
-        run_ffmpeg(job, args, f"Making video X-ready — {index}/{total}…", log_path,
+        duration = duration / speed if speed > 1 else duration
+        detail = (f"Speeding up video — {index}/{total} · {speed:g}x…"
+                  if speed > 1 else f"Making video X-ready — {index}/{total}…")
+        failure = (f"Couldn’t export the video at {speed:g}x; the downloaded file is unchanged."
+                   if speed > 1 else "Couldn’t make this video X-ready; the downloaded file is unchanged.")
+        run_ffmpeg(job, args, detail, log_path,
                    duration=duration if math.isfinite(duration) and duration > 0 else 0,
-                   failure="Couldn’t make this video X-ready; the downloaded file is unchanged.")
+                   failure=failure)
         # Don't trust the encoder blindly: probe what was actually written.
         converted = probe_media(temp)
         if converted is None or x_ready_plan(converted, ".mp4") is not None:
@@ -2478,8 +2511,10 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
     finally:
         temp.unlink(missing_ok=True)
         log_path.unlink(missing_ok=True)
-    action = "Converted" if plan["video"] or plan["audio"] else "Remuxed"
-    JobLogger(job["id"]).info(f"{action} {final.name} to X-ready H.264/AAC MP4.")
+    action = f"Exported {final.name} at {speed:g}x" if speed > 1 else (
+        "Converted" if plan["video"] or plan["audio"] else "Remuxed")
+    suffix = "to X-ready H.264/AAC MP4." if speed == 1 else "as X-ready H.264/AAC MP4."
+    JobLogger(job["id"]).info(f"{action} {suffix}")
     return final
 
 
@@ -2489,16 +2524,19 @@ def make_videos_x_ready(job: dict, paths: list[Path]) -> list[Path]:
     videos = [p for p in paths if p.suffix.lower().lstrip(".") in VIDEO_EXTS]
     replacements: dict[Path, Path] = {}
     total = len(videos)
+    speed = video_speed(job)
     for index, path in enumerate(videos, 1):
         check_job(job)
         try:
             replacements[path] = make_video_x_ready(job, path, index, total)
         except DownloadError as exc:
-            if job.get("cancel_requested") or job.get("disk_full"):
+            if job.get("cancel_requested") or job.get("disk_full") or speed > 1:
                 raise
             JobLogger(job["id"]).warning(f"{path.name}: {exc} Kept the original.")
             replacements[path] = path
         except OSError as exc:
+            if speed > 1:
+                raise DownloadError(f"Couldn’t export {path.name} at {speed:g}x: {exc}") from exc
             JobLogger(job["id"]).warning(
                 f"{path.name}: {exc.strerror or exc}. Kept the original.")
             replacements[path] = path
