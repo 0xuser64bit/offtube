@@ -118,8 +118,9 @@ internal interface, not for sharing offtube over a network.
 1. **Paste and Preview.** Use a specific post, video, pin, track, board, or
    playlist URL. The preview shows what was found and only the controls
    relevant to that media.
-2. **Choose the output.** Pick a video quality, Audio only, or GIF. Image
-   posts keep their original files; audio-only sources select audio output.
+2. **Choose the output.** Pick a video quality, Audio only, or GIF. For video,
+   choose normal speed or 1.25×, 1.5×, or 2× export. Image posts keep their
+   original files; audio-only sources select audio output.
 3. **Open an option if needed.** Trim, Collection, Subtitles, and Sign-in
    stay folded until you need them.
 4. **Keep.** Follow progress in the session strip. Queue another link, cancel
@@ -135,6 +136,12 @@ internal interface, not for sharing offtube over a network.
   below that height, with an engine fallback if none matches. They do not
   upscale media or guarantee a file size.
 - **Audio only** offers MP3 or M4A. Extraction and conversion need FFmpeg.
+- **Speed up video** offers 1.25×, 1.5×, and 2×, with 1× as the normal
+  default. offtube makes a new H.264/AAC MP4 with matched video and audio
+  timing, so an accelerated export takes an FFmpeg conversion even when the
+  original file already fits the X-ready shape. Once it finishes, the desk or
+  extension shows the real local export in a video preview alongside **Save**;
+  it does not generate a separate remote preview before keeping the file.
 - **X-ready video** means every kept video is checked with ffprobe. When it
   is not already an MP4 with H.264 video, yuv420p pixels and AAC audio
   (mono or stereo, at most 60 fps), offtube converts it once with FFmpeg so
