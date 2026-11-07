@@ -230,6 +230,16 @@ def test_download_records_requested_video_speed(server):
     assert job["video_speed"] == 1.25
 
 
+@pytest.mark.parametrize("quality", ["gif", "audio_mp3", "audio_m4a"])
+def test_download_rejects_acceleration_for_non_video_outputs(server, quality):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123abc12", "quality": quality,
+                            "video_speed": 2})
+    assert status == 400
+    assert "Video speed" in body["error"]
+    assert not app.jobs
+
+
 @pytest.mark.parametrize("scope, message", [
     ({"playlist_start": "0"}, "one-based"),
     ({"playlist_start": "5", "playlist_end": "2"}, "after"),

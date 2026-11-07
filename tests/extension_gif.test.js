@@ -219,8 +219,9 @@ test('completed accelerated video preview uses the local escaped export', () => 
   const s = surface();
   const job = { id: 'speedy', quality: 'best', video_speed: 1.25, status: 'done', files: ['one & two.mp4'] };
   s.api.showVideoResult(job, 'http://localhost:8000');
-  assert.match(s.node('videoResult').innerHTML, /<video[^>]+controls[^>]+preload="metadata"/);
+  assert.match(s.node('videoResult').innerHTML, /<video[^>]+controls[^>]+preload="metadata"[^>]+aria-describedby="video-result-caption"/);
   assert.match(s.node('videoResult').innerHTML, /one%20%26%20two.mp4/);
+  assert.match(s.node('videoResult').innerHTML, /id="video-result-caption"[^>]*>Your 1.25x video is ready/);
   assert.match(s.node('videoResult').innerHTML, /Save video/);
   assert.equal(s.node('videoResult').classList.contains('hidden'), false);
   s.api.showVideoResult({ ...job, video_speed: 1 }, 'http://localhost:8000');

@@ -245,6 +245,21 @@ def test_acceleration_failure_does_not_claim_to_keep_the_original(x_job, tmp_pat
     assert not x_job["log"]
 
 
+def test_acceleration_requires_a_transformable_video(x_job, tmp_path, monkeypatch):
+    image = tmp_path / "still.jpg"
+    image.write_bytes(b"image")
+    audio_named_as_video = tmp_path / "track.mp4"
+    audio_named_as_video.write_bytes(b"audio")
+    x_job["video_speed"] = 2
+
+    monkeypatch.setattr(app, "probe_media", lambda _: {"streams": [{"codec_type": "audio"}]})
+
+    with pytest.raises(app.DownloadError, match="no video"):
+        app.make_videos_x_ready(x_job, [image])
+    with pytest.raises(app.DownloadError, match="no video"):
+        app.make_video_x_ready(x_job, audio_named_as_video)
+
+
 def test_run_download_makes_videos_x_ready(tmp_path, monkeypatch):
     monkeypatch.setattr(app, "DOWNLOAD_DIR", tmp_path)
     monkeypatch.setattr(app, "COOKIES_DIR", tmp_path)

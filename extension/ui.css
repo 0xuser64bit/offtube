@@ -350,6 +350,7 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .video-speed-options select { font-size: 12.5px; padding-left: 6px; }
 .video-result { display: grid; gap: 10px; margin-top: 12px; }
 .export-preview { display: block; width: 100%; max-height: 300px; background: var(--rebate-2); }
+.export-caption { margin: 0; font-size: 12.5px; color: var(--ink-2); }
 
 /* popup sizing */
 .popup { width: 380px; }

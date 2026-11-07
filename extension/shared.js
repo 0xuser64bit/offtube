@@ -421,7 +421,8 @@ OFFTUBE.showVideoResult = function showVideoResult(job, server) {
   if (result.dataset.job !== job.id) {
     result.dataset.job = job.id;
     const first = `${server}/files/${encodeURIComponent(files[0])}`;
-    result.innerHTML = `<video class="export-preview" controls preload="metadata" src="${esc(first)}" aria-label="Your finished ${esc(job.video_speed)}x video"></video>`
+    result.innerHTML = `<video class="export-preview" controls preload="metadata" src="${esc(first)}" aria-label="Your finished ${esc(job.video_speed)}x video" aria-describedby="video-result-caption"></video>`
+      + `<p class="export-caption" id="video-result-caption">Your ${esc(job.video_speed)}x video is ready.</p>`
       + `<p class="gif-actions">${files.map((name, i) => `<a class="text-btn" href="${esc(`${server}/files/${encodeURIComponent(name)}`)}" download target="_blank" rel="noreferrer">Save ${files.length > 1 ? `video ${i + 1}` : 'video'}</a>`).join('')}</p>`;
   }
   result.classList.remove('hidden');

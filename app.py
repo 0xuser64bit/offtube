@@ -2409,6 +2409,8 @@ def make_video_x_ready(job: dict, path: Path, index: int = 1, total: int = 1) ->
     video = next((s for s in streams if s.get("codec_type") == "video"
                   and not (s.get("disposition") or {}).get("attached_pic")), None)
     if video is None:
+        if speed > 1:
+            raise DownloadError(f"Couldn’t export {path.name} at {speed:g}x: no video stream found.")
         return path
     if plan is None and speed == 1:
         return path
@@ -2525,6 +2527,8 @@ def make_videos_x_ready(job: dict, paths: list[Path]) -> list[Path]:
     replacements: dict[Path, Path] = {}
     total = len(videos)
     speed = video_speed(job)
+    if speed > 1 and not videos:
+        raise DownloadError(f"Couldn’t export at {speed:g}x: no video files were downloaded.")
     for index, path in enumerate(videos, 1):
         check_job(job)
         try:
@@ -2674,6 +2678,8 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     try:
         validate_media_payload(body)
         speed = video_speed(body)
+        if speed > 1 and (body.get("quality") or "best") in ("gif", "audio_mp3", "audio_m4a"):
+            raise ValueError("Video speed applies only to video exports.")
         url, src = check_url(body.get("url"))
     except ValueError as exc:
         return None, (str(exc), 400)
