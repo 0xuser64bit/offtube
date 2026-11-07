@@ -63,6 +63,13 @@
       </div>
       <p class="gif-result-actions"><span id="gifReady" role="status">Your GIF is ready.</span><a id="gifSave" class="text-btn" download>Save GIF</a></p>
     </div>
+    <div id="videoResult" class="video-result hidden" aria-live="polite">
+      <div class="rebate">
+        <div class="edge-row"><span class="edge">Export preview</span><span class="edge edge-dim">offtube</span></div>
+        <div id="videoPreview" class="frame"></div>
+      </div>
+      <p class="gif-result-actions"><span id="videoReady" role="status">Your accelerated video is ready.</span><a id="videoSave" class="text-btn" download>Save video</a></p>
+    </div>
 
     <div id="infoError" class="problem hidden" role="alert">
       <svg class="mark mark-strike" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><path d="M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86"/></svg>
@@ -86,6 +93,15 @@
       <legend class="label">Format</legend>
       <div id="qualities" class="format-list"></div>
       <p class="hint" id="qualityNote"></p>
+    </fieldset>
+
+    <fieldset class="video-speed-options" id="videoSpeedOptions">
+      <legend class="label">Export speed</legend>
+      <label class="field"><span class="visually-hidden">Video export speed</span><select id="videoSpeed">
+        <option value="1" selected>1× · Normal</option><option value="1.25">1.25× · Faster</option>
+        <option value="1.5">1.5× · Fast</option><option value="2">2× · Double speed</option>
+      </select></label>
+      <p class="hint">Makes a new MP4 with matching video and audio timing.</p>
     </fieldset>
 
     <fieldset id="gifOptions" class="gif-options hidden" aria-describedby="gifHint">

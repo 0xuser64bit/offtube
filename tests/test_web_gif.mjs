@@ -103,7 +103,7 @@ test("GIF keeps whole videos or fractional timeframes with its own settings and 
   await ui.choose("otype", "gif");
   ui.elements.get("subs").checked = true;
   assert.deepEqual(JSON.parse(ui.run("JSON.stringify(payload())")), {
-    url: "https://example.com/video", quality: "gif", subtitles: false,
+    url: "https://example.com/video", quality: "gif", video_speed: 1, subtitles: false,
     gif_size: 480, gif_fps: 15, gif_loop: true, auto_subs: true, sub_lang: "en",
     clip_from: "", clip_to: "", playlist_mode: "single", playlist_start: "", playlist_end: "", playlist_items: "",
     cookies_mode: "none", cookies_text: "", cookies_browser: "", title: "", thumbnail: "",
@@ -119,6 +119,29 @@ test("GIF keeps whole videos or fractional timeframes with its own settings and 
   ui.elements.get("clipTo").value = "1:01.25";
   ui.run("syncNotes()");
   assert.match(ui.elements.get("gifSummary").textContent, /Selected timeframe · 1 second · about 15 frames/);
+});
+
+test("video speed stays with video exports, persists, and previews the completed local MP4", async () => {
+  const ui = desk();
+  ui.info({ type: "video", media: "video" });
+  const speed = ui.elements.get("videoSpeed");
+  assert.ok(speed, "the video export speed selector should be rendered");
+  speed.value = "1.5";
+  assert.equal(ui.run("payload().video_speed"), 1.5);
+  ui.run("savePrefs()");
+  assert.equal(JSON.parse(ui.saved.get("offtube.prefs")).videoSpeed, "1.5");
+
+  ui.run('state.previewJobId = "speed-job"; showJob({ id: "speed-job", status: "done", quality: "best", video_speed: 1.5, files: ["A & B.mp4"] }, false)');
+  assert.equal(ui.elements.get("videoResult").classList.contains("hidden"), false);
+  assert.match(ui.elements.get("videoPreview").innerHTML, /<video[^>]+controls[^>]+preload="metadata"/);
+  assert.match(ui.elements.get("videoPreview").innerHTML, /\/files\/A%20%26%20B.mp4/);
+
+  await ui.choose("otype", "gif");
+  assert.equal(ui.elements.get("videoSpeedOptions").classList.contains("hidden"), true);
+  assert.equal(ui.run("payload().video_speed"), 1);
+  await ui.choose("otype", "audio");
+  assert.equal(ui.elements.get("videoSpeedOptions").classList.contains("hidden"), true);
+  assert.equal(ui.run("payload().video_speed"), 1);
 });
 
 test("source restrictions preserve the preferred GIF output and separate video/audio quality", async () => {

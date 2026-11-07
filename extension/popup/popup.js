@@ -24,6 +24,7 @@ function invalidateSource() {
   infoUrl = '';
   marks.clear();
   $('gifResult').classList.add('hidden');
+  $('videoResult').classList.add('hidden');
   document.body.dataset.kind = '';
   document.body.dataset.media = '';
 }
@@ -50,6 +51,7 @@ function renderChips(selected) {
   const sel = info && info.media === 'audio' && !String(selected).startsWith('audio') ? 'audio_mp3' : selected;
   $('qualities').innerHTML = OFFTUBE.formatsHtml(list, sel, { chips: true });
   OFFTUBE.syncGifOptions();
+  OFFTUBE.syncVideoSpeedOptions(info, chosenQuality());
 }
 const chosenQuality = () => document.querySelector('input[name="q"]:checked')?.value || 'best';
 OFFTUBE.initGifOptions(() => info, chosenQuality, true);
@@ -126,7 +128,10 @@ async function pollJob(id, sourceUrl, sourceToken) {
     const isPrint = sourceUrl === url() && sourceToken === inspectToken;
     const pct = job.progress || 0;
     OFFTUBE.speakJob(job);
-    if (isPrint) OFFTUBE.showGifResult(job, server);
+    if (isPrint) {
+      OFFTUBE.showGifResult(job, server);
+      OFFTUBE.showVideoResult(job, server);
+    }
     if (job.status === 'done') {
       const files = job.files || [];
       setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`, 'done', 100);
@@ -162,6 +167,7 @@ async function keep() {
   const body = {
     url: u,
     quality: chosenQuality(),
+    video_speed: OFFTUBE.canExportAtSpeed(info, chosenQuality()) ? OFFTUBE.videoSpeed() : 1,
     ...(chosenQuality() === 'gif' ? { ...OFFTUBE.gifFields(), clip_from: $('clipFrom').value.trim(), clip_to: $('clipTo').value.trim() } : {}),
     playlist_mode: collection ? 'playlist' : 'single',
     playlist_items: marks.size ? OFFTUBE.ranges(marks) : '',
@@ -174,9 +180,10 @@ async function keep() {
   const sourceToken = inspectToken;
   $('dlBtn').disabled = true;
   $('gifResult').classList.add('hidden');
+  $('videoResult').classList.add('hidden');
   setDeck('Starting…', 'busy', 0);
   try {
-    await chrome.storage.local.set({ quality: body.quality, access: $('access').value });
+    await chrome.storage.local.set({ quality: body.quality, access: $('access').value, video_speed: body.video_speed });
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', body);
     jobId = id;
     $('cancelBtn').classList.remove('hidden');
@@ -191,10 +198,12 @@ async function keep() {
 }
 
 async function openPanel() {
+  const exportSpeed = OFFTUBE.canExportAtSpeed(info, chosenQuality()) ? OFFTUBE.videoSpeed() : 1;
   if (url()) await chrome.storage.session.set({
     pendingUrl: url(),
     pendingOptions: {
       quality: chosenQuality(), gif: OFFTUBE.gifFields(),
+      video_speed: exportSpeed,
       clip_from: $('clipFrom').value.trim(), clip_to: $('clipTo').value.trim(),
       // The circles are the scope: without them the panel would keep the
       // whole collection instead of just the prints chosen here.
@@ -212,6 +221,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   server = s.serverUrl;
   savedBrowser = s.cookiesBrowser;
   OFFTUBE.restoreGifOptions(s.gif);
+  $('videoSpeed').value = String(s.videoSpeed);
   $('access').value = s.access;
   $('accessBrowser').textContent = `Use ${savedBrowser[0].toUpperCase()}${savedBrowser.slice(1)}’s cookies`;
   renderChips(s.quality);
@@ -243,7 +253,12 @@ $('cancelBtn').addEventListener('click', async () => {
   if (!jobId) return;
   try { await OFFTUBE.api(server, '/api/cancel', { job_id: jobId }); setDeck('Stopping…', 'busy'); } catch (err) { setDeck(err.message, 'error'); }
 });
-$('qualities').addEventListener('change', () => { syncSheet(); chrome.storage.local.set({ quality: chosenQuality() }); });
+$('qualities').addEventListener('change', () => {
+  OFFTUBE.syncVideoSpeedOptions(info, chosenQuality());
+  syncSheet();
+  chrome.storage.local.set({ quality: chosenQuality() });
+});
+$('videoSpeed').addEventListener('change', () => chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() }));
 $('access').addEventListener('change', async () => {
   await chrome.storage.local.set({ access: $('access').value });
   if ($('access').value !== 'upload' && url()) inspect();

@@ -340,6 +340,9 @@ figure { margin: 0; }
 
 .formats { min-width: 0; margin: 0; padding: 0; border: 0; }
 .formats .label { margin-bottom: 8px; }
+.video-speed-options { min-width: 0; margin: 18px 0 0; padding: 0; border: 0; }
+.video-speed-options .label { margin-bottom: 8px; }
+.video-speed-options select { font-size: 13.5px; padding-left: 8px; }
 .gif-options { min-width: 0; margin: 0; padding: 0; border: 0; }
 .gif-options legend { margin-bottom: 16px; }
 .gif-options .check { margin-top: 16px; }
@@ -349,6 +352,8 @@ figure { margin: 0; }
 .gif-result-actions { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
 .gif-result-actions a { flex: none; }
 .gif-preview { display: block; max-width: 100%; max-height: min(64vh, 620px); object-fit: contain; }
+.video-result { margin-top: 18px; }
+.export-preview { display: block; width: 100%; max-height: min(64vh, 620px); background: var(--rebate); object-fit: contain; }
 [data-output="gif"][data-kind="gallery"] #discTrim { display: block !important; }
 [data-output="gif"] #discSubs { display: none !important; }
 .format-list { border-top: 1px solid var(--rule); }

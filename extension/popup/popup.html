@@ -32,6 +32,10 @@
     </div>
 
     <fieldset class="chips" id="qualities" aria-label="Format"></fieldset>
+    <label class="field video-speed-options" id="videoSpeedOptions"><span class="label">Export speed</span><select id="videoSpeed">
+      <option value="1" selected>1× · Normal</option><option value="1.25">1.25× · Faster</option>
+      <option value="1.5">1.5× · Fast</option><option value="2">2× · Double speed</option>
+    </select></label>
     <div id="gifOptions" class="hidden"></div>
 
     <div class="keep-actions">
@@ -48,6 +52,7 @@
     </div>
 
     <div id="gifResult" class="gif-result hidden" aria-live="polite"></div>
+    <div id="videoResult" class="video-result hidden" aria-live="polite"></div>
 
     <div class="access-row">
       <label class="label" for="access">Sign-in</label>

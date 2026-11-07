@@ -52,6 +52,7 @@ function payload() {
   return {
     url: url(),
     quality: quality(),
+    video_speed: OFFTUBE.canExportAtSpeed(i, quality()) ? OFFTUBE.videoSpeed() : 1,
     subtitles: quality() !== 'gif' && $('subs').checked,
     ...(quality() === 'gif' ? OFFTUBE.gifFields() : {}),
     auto_subs: true,
@@ -77,6 +78,7 @@ function renderFormats(selected) {
   if (i && i.media === 'audio' && !String(sel).startsWith('audio')) sel = 'audio_mp3';
   $('qualities').innerHTML = OFFTUBE.formatsHtml(list, sel, { chips: true });
   OFFTUBE.syncGifOptions();
+  OFFTUBE.syncVideoSpeedOptions(i, quality());
   syncTally();
 }
 
@@ -88,6 +90,7 @@ function invalidateSource() {
   printJobId = null;
   resultJobId = null;
   $('gifResult').classList.add('hidden');
+  $('videoResult').classList.add('hidden');
   document.body.dataset.kind = '';
   document.body.dataset.media = '';
 }
@@ -267,7 +270,10 @@ function showJob(job, live) {
   OFFTUBE.speakJob(job);
   $('log').textContent = (job.log || []).slice(-30).join('\n');
   const isPrint = printJobId === job.id;
-  if (resultJobId === job.id) OFFTUBE.showGifResult(job, server);
+  if (resultJobId === job.id) {
+    OFFTUBE.showGifResult(job, server);
+    OFFTUBE.showVideoResult(job, server);
+  }
   if (job.status === 'done') {
     const files = job.files || [];
     setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || 'the file'}.`, 'done', 100);
@@ -330,9 +336,10 @@ $('dlBtn').addEventListener('click', async () => {
   const sourceToken = inspectToken;
   $('dlBtn').disabled = true;
   $('gifResult').classList.add('hidden');
+  $('videoResult').classList.add('hidden');
   setDeck('Starting…', 'busy', 0);
   try {
-    await chrome.storage.local.set({ quality: quality(), access: access() });
+    await chrome.storage.local.set({ quality: quality(), access: access(), video_speed: p.video_speed });
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', p);
     const sameSource = sourceToken === inspectToken && p.url === url();
     printJobId = sameSource && current() ? id : null;
@@ -496,6 +503,7 @@ async function refreshFiles() {
 
 function restorePendingOptions(options = {}) {
   OFFTUBE.restoreGifOptions(options.gif || {});
+  if (OFFTUBE.VIDEO_SPEEDS.includes(options.video_speed)) $('videoSpeed').value = String(options.video_speed);
   $('clipFrom').value = typeof options.clip_from === 'string' ? options.clip_from : '';
   $('clipTo').value = typeof options.clip_to === 'string' ? options.clip_to : '';
   pendingMarks = Array.isArray(options.marks) ? options.marks.filter((i) => Number.isInteger(i)) : [];
@@ -513,6 +521,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
   pick('access', s.access);
   OFFTUBE.restoreGifOptions(s.gif);
+  $('videoSpeed').value = String(s.videoSpeed);
   renderFormats(s.quality);
   OFFTUBE.wireLoupe();
   syncNotes();
@@ -557,7 +566,12 @@ $('url').addEventListener('input', () => {
   renderFormats();
   syncSheet();
 });
-$('qualities').addEventListener('change', () => { syncTally(); chrome.storage.local.set({ quality: quality() }); });
+$('qualities').addEventListener('change', () => {
+  OFFTUBE.syncVideoSpeedOptions(current(), quality());
+  syncTally();
+  chrome.storage.local.set({ quality: quality() });
+});
+$('videoSpeed').addEventListener('change', () => chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() }));
 ['clipFrom', 'clipTo', 'plStart', 'plEnd', 'plItems', 'subLang'].forEach((id) => $(id).addEventListener('input', syncNotes));
 $$('input[name="plmode"]').forEach((r) => r.addEventListener('change', syncNotes));
 $$('input[name="access"]').forEach((r) => r.addEventListener('change', async () => {

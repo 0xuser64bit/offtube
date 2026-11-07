@@ -134,6 +134,26 @@ test('popup GIF requests carry subsecond trim and encoding preferences', async (
   assert.equal(s.requests[0].body.gif_loop, false);
 });
 
+test('extension video speeds persist through popup, side panel and quick keeps', async () => {
+  const popup = surface('popup/popup.js');
+  popup.node('videoSpeed').value = '1.5';
+  await popup.run('keep()');
+  assert.equal(popup.requests[0].body.video_speed, 1.5);
+  await popup.run('openPanel()');
+  assert.equal(popup.session.pendingOptions.video_speed, 1.5);
+
+  const panel = surface('sidepanel/sidepanel.js', {}, {
+    pendingUrl: 'https://example.com/right-clicked-link',
+    pendingOptions: { quality: 'best', video_speed: 2 },
+  });
+  await panel.boot();
+  assert.equal(panel.run('payload().video_speed'), 2);
+
+  const quick = surface('background.js', { quality: 'best', video_speed: 1.25 });
+  await quick.run('keepUrl("https://example.com/video")');
+  assert.equal(quick.requests[0].body.video_speed, 1.25);
+});
+
 test('opening the side panel preserves the popup URL, GIF selection, times and preferences', async () => {
   const s = surface('popup/popup.js');
   s.chosen.q = 'gif';
@@ -142,7 +162,7 @@ test('opening the side panel preserves the popup URL, GIF selection, times and p
   await s.run('openPanel()');
   assert.equal(s.session.pendingUrl, 'https://example.com/video');
   assert.deepEqual(s.session.pendingOptions, {
-    quality: 'gif', clip_from: '1:02', clip_to: '1:07', gif: { gif_size: 320, gif_fps: 10, gif_loop: false },
+    quality: 'gif', video_speed: 1, clip_from: '1:02', clip_to: '1:07', gif: { gif_size: 320, gif_fps: 10, gif_loop: false },
     marks: [],
   });
   assert.equal(s.opened.length, 1);
@@ -166,12 +186,21 @@ test('side panel consumes a pending GIF without overwriting the requested link',
 });
 
 test('context-menu GIF saves reuse saved encoding preferences', async () => {
-  const s = surface('background.js', { quality: 'gif', gif: { gif_size: 640, gif_fps: 20, gif_loop: false } });
+  const s = surface('background.js', { quality: 'gif', video_speed: 2, gif: { gif_size: 640, gif_fps: 20, gif_loop: false } });
   await s.run('keepUrl("https://example.com/video")');
   assert.equal(s.requests[0].body.quality, 'gif');
+  assert.equal(s.requests[0].body.video_speed, 1);
   assert.equal(s.requests[0].body.gif_size, 640);
   assert.equal(s.requests[0].body.gif_fps, 20);
   assert.equal(s.requests[0].body.gif_loop, false);
+});
+
+test('popup hands a GIF to the panel at normal speed', async () => {
+  const s = surface('popup/popup.js');
+  s.chosen.q = 'gif';
+  s.node('videoSpeed').value = '2';
+  await s.run('openPanel()');
+  assert.equal(s.session.pendingOptions.video_speed, 1);
 });
 
 test('completed GIF preview uses the actual animation, with escaped links for each file', () => {
@@ -184,6 +213,18 @@ test('completed GIF preview uses the actual animation, with escaped links for ea
   assert.equal(s.api.jobDisplay(job, 'http://localhost:8000').thumb, 'http://localhost:8000/files/one%20%26%20two.gif');
   s.api.showGifResult({ ...job, status: 'processing' }, 'http://localhost:8000');
   assert.equal(s.node('gifResult').classList.contains('hidden'), true);
+});
+
+test('completed accelerated video preview uses the local escaped export', () => {
+  const s = surface();
+  const job = { id: 'speedy', quality: 'best', video_speed: 1.25, status: 'done', files: ['one & two.mp4'] };
+  s.api.showVideoResult(job, 'http://localhost:8000');
+  assert.match(s.node('videoResult').innerHTML, /<video[^>]+controls[^>]+preload="metadata"/);
+  assert.match(s.node('videoResult').innerHTML, /one%20%26%20two.mp4/);
+  assert.match(s.node('videoResult').innerHTML, /Save video/);
+  assert.equal(s.node('videoResult').classList.contains('hidden'), false);
+  s.api.showVideoResult({ ...job, video_speed: 1 }, 'http://localhost:8000');
+  assert.equal(s.node('videoResult').classList.contains('hidden'), true);
 });
 
 test('side panel tallies print a collection count as text, never markup', () => {

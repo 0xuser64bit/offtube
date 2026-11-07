@@ -347,6 +347,9 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .gif-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; }
 .gif-result { display: grid; gap: 10px; margin-top: 12px; }
 .gif-result > img { display: block; max-width: 100%; max-height: 300px; margin-inline: auto; }
+.video-speed-options select { font-size: 12.5px; padding-left: 6px; }
+.video-result { display: grid; gap: 10px; margin-top: 12px; }
+.export-preview { display: block; width: 100%; max-height: 300px; background: var(--rebate-2); }
 
 /* popup sizing */
 .popup { width: 380px; }

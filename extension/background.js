@@ -149,7 +149,7 @@ async function keepUrl(url) {
     await setBadge('!', '#bc3d1e');
     return;
   }
-  const { serverUrl: server, quality, access, cookiesBrowser, gif } = await OFFTUBE.getSettings();
+  const { serverUrl: server, quality, access, cookiesBrowser, gif, videoSpeed } = await OFFTUBE.getSettings();
   if (access === 'upload') {
     // Only while the menus catch up with a Sign-in change: too late to open
     // the panel here, so the link waits for the next time it opens.
@@ -163,7 +163,7 @@ async function keepUrl(url) {
       ? { cookies_mode: 'browser', cookies_browser: cookiesBrowser }
       : { cookies_mode: 'none' };
     const { job_id: id } = await OFFTUBE.api(server, '/api/download', {
-      url, quality, ...cookies,
+      url, quality, video_speed: quality === 'gif' || quality.startsWith('audio') ? 1 : videoSpeed, ...cookies,
       ...(quality === 'gif' ? { gif_size: gif.gif_size ?? 480, gif_fps: gif.gif_fps ?? 15, gif_loop: gif.gif_loop ?? true } : {}),
     });
     await trackQuickKeep(id, server);

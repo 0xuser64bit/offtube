@@ -28,6 +28,7 @@ const OFFTUBE = {
     strike: 'M14 18C38 40 62 62 88 84M86 16C62 40 38 62 14 86',
   },
   VIDEO_LADDER: ['best', '2160', '1440', '1080', '720', '480', '360'],
+  VIDEO_SPEEDS: [1, 1.25, 1.5, 2],
 };
 
 OFFTUBE.escapeHtml = function escapeHtml(s) {
@@ -96,7 +97,7 @@ OFFTUBE.sourceOf = async function sourceOf(server, url) {
 };
 
 OFFTUBE.getSettings = async function getSettings() {
-  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser', 'gif']);
+  const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser', 'gif', 'video_speed']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
   try {
     serverUrl = OFFTUBE.normalizeServerUrl(s.serverUrl);
@@ -110,6 +111,7 @@ OFFTUBE.getSettings = async function getSettings() {
     access: s.access || 'none',
     cookiesBrowser: s.cookies_browser || 'chrome',
     gif: s.gif || {},
+    videoSpeed: OFFTUBE.VIDEO_SPEEDS.includes(s.video_speed) ? s.video_speed : 1,
   };
 };
 
@@ -297,6 +299,23 @@ OFFTUBE.formatOptions = function formatOptions(info, otype) {
   return [...video, ...gif];
 };
 
+OFFTUBE.videoSpeed = function videoSpeed() {
+  const value = Number(document.getElementById('videoSpeed')?.value);
+  return OFFTUBE.VIDEO_SPEEDS.includes(value) ? value : 1;
+};
+
+OFFTUBE.canExportAtSpeed = function canExportAtSpeed(info, quality) {
+  return quality !== 'gif' && !String(quality).startsWith('audio')
+    && info?.media !== 'audio' && info?.media !== 'image';
+};
+
+OFFTUBE.syncVideoSpeedOptions = function syncVideoSpeedOptions(info, quality) {
+  const options = document.getElementById('videoSpeedOptions');
+  const enabled = OFFTUBE.canExportAtSpeed(info, quality);
+  if (options) options.classList.toggle('hidden', !enabled);
+  return enabled;
+};
+
 OFFTUBE.gifFields = function gifFields() {
   return {
     gif_size: Number(document.getElementById('gifSize').value),
@@ -388,6 +407,22 @@ OFFTUBE.showGifResult = function showGifResult(job, server) {
     result.dataset.job = job.id;
     result.innerHTML = `<img src="${esc(`${server}/files/${encodeURIComponent(files[0])}`)}" alt="Your finished GIF" />`
       + `<div class="gif-actions">${files.map((name, i) => `<a class="text-btn" href="${esc(`${server}/files/${encodeURIComponent(name)}`)}" download target="_blank" rel="noreferrer">Save ${files.length > 1 ? `GIF ${i + 1}` : 'GIF'}</a>`).join('')}</div>`;
+  }
+  result.classList.remove('hidden');
+};
+
+OFFTUBE.showVideoResult = function showVideoResult(job, server) {
+  const result = document.getElementById('videoResult');
+  const files = (job.files || []).filter((name) => /\.(mp4|webm|mkv|mov|m4v)$/i.test(name));
+  if (job.status !== 'done' || Number(job.video_speed) <= 1 || !files.length) {
+    result.classList.add('hidden');
+    return;
+  }
+  if (result.dataset.job !== job.id) {
+    result.dataset.job = job.id;
+    const first = `${server}/files/${encodeURIComponent(files[0])}`;
+    result.innerHTML = `<video class="export-preview" controls preload="metadata" src="${esc(first)}" aria-label="Your finished ${esc(job.video_speed)}x video"></video>`
+      + `<p class="gif-actions">${files.map((name, i) => `<a class="text-btn" href="${esc(`${server}/files/${encodeURIComponent(name)}`)}" download target="_blank" rel="noreferrer">Save ${files.length > 1 ? `video ${i + 1}` : 'video'}</a>`).join('')}</p>`;
   }
   result.classList.remove('hidden');
 };

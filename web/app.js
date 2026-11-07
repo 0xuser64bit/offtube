@@ -83,6 +83,7 @@ const AUDIO_LADDER = [
   { id: "audio_mp3", name: "MP3", sub: "192 kbps · plays anywhere" },
   { id: "audio_m4a", name: "M4A", sub: "192 kbps · Apple-friendly" },
 ];
+const VIDEO_SPEEDS = [1, 1.25, 1.5, 2];
 
 const state = {
   info: null,          // last successful inspect
@@ -116,6 +117,14 @@ const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(bo
 function outputType() { return checked("otype") || "video"; }
 function selectedQuality() { return outputType() === "gif" ? "gif" : checked("q") || (outputType() === "audio" ? "audio_mp3" : "best"); }
 function cookiesMode() { return checked("cmode") || "none"; }
+function canExportAtSpeed() {
+  const media = currentInfo()?.media;
+  return outputType() === "video" && media !== "audio" && media !== "image";
+}
+function selectedVideoSpeed() {
+  const speed = Number($("videoSpeed").value);
+  return VIDEO_SPEEDS.includes(speed) ? speed : 1;
+}
 
 function accessFields() {
   const mode = cookiesMode();
@@ -158,6 +167,7 @@ function payload() {
   return {
     url: $("url").value.trim(),
     quality: selectedQuality(),
+    video_speed: canExportAtSpeed() ? selectedVideoSpeed() : 1,
     subtitles: outputType() !== "gif" && $("subs").checked,
     ...(outputType() === "gif" ? { gif_size: Number($("gifSize").value), gif_fps: Number($("gifFps").value), gif_loop: $("gifLoop").checked } : {}),
     auto_subs: true,
@@ -200,6 +210,7 @@ function renderFormats() {
   const gif = outputType() === "gif";
   document.body.dataset.output = outputType();
   $("formatFieldset").classList.toggle("hidden", gif);
+  $("videoSpeedOptions").classList.toggle("hidden", !canExportAtSpeed());
   $("gifOptions").classList.toggle("hidden", !gif);
   $("dlLabel").textContent = gif ? "Keep as GIF" : "Keep";
   if (gif) $("discTrim").open = true;
@@ -316,6 +327,7 @@ function hideProblem() { $("infoError").classList.add("hidden"); }
 
 function showBlank() {
   $("gifResult").classList.add("hidden");
+  $("videoResult").classList.add("hidden");
   $("blank").classList.remove("hidden");
   $("print").classList.add("hidden");
   document.body.dataset.kind = "";
@@ -325,6 +337,7 @@ function showBlank() {
 function renderExposing(url) {
   announce("Reading the link…");
   $("gifResult").classList.add("hidden");
+  $("videoResult").classList.add("hidden");
   $("blank").classList.add("hidden");
   const host = (url.replace(/^https?:\/\//, "").split("/")[0] || "").replace(/^www\./, "");
   $("print").innerHTML = `<figure class="print is-exposing">
@@ -350,6 +363,7 @@ const hiddenTitle = (e) => (e.thumbnail && e.title ? `<span class="visually-hidd
 
 function renderPrint(info) {
   $("gifResult").classList.add("hidden");
+  $("videoResult").classList.add("hidden");
   state.info = info;
   state.infoUrl = $("url").value.trim();
   state.marks.clear();
@@ -550,6 +564,7 @@ $("dlBtn").addEventListener("click", async () => {
   }
   const btn = $("dlBtn");
   $("gifResult").classList.add("hidden");
+  $("videoResult").classList.add("hidden");
   btn.disabled = true;
   $("dlLabel").textContent = "Starting…";
   setDeck("Starting…", "busy", 0);
@@ -626,6 +641,25 @@ function finishPrint(kind, label) {
   if (edge) { edge.textContent = label; edge.classList.remove("edge-amber"); }
 }
 
+function showVideoResult(job, preview) {
+  const result = $("videoResult");
+  const files = (job.files || []).filter((name) => /\.(mp4|webm|mkv|mov|m4v)$/i.test(name));
+  if (!preview || job.status !== "done" || Number(job.video_speed) <= 1 || !files.length) {
+    result.classList.add("hidden");
+    return;
+  }
+  const fileUrl = `/files/${encodeURIComponent(files[0])}`;
+  if (result.dataset.job !== job.id) {
+    result.dataset.job = job.id;
+    $("videoPreview").innerHTML = `<video class="export-preview" controls preload="metadata" src="${esc(fileUrl)}" aria-label="Your finished ${esc(job.video_speed)}x video"></video>`;
+    $("videoSave").href = fileUrl;
+    $("videoReady").textContent = files.length > 1
+      ? `${files.length} accelerated videos are ready. Previewing the first; all are in Kept.`
+      : `Your ${job.video_speed}x video is ready.`;
+  }
+  result.classList.remove("hidden");
+}
+
 function showJob(job, live) {
   const pct = job.progress || 0;
   speakJob(job);
@@ -634,6 +668,7 @@ function showJob(job, live) {
   const isPrint = isSource && Boolean(currentInfo());
   const preview = isSource || state.previewJobId === job.id;
   if (job.status !== "done" || job.quality !== "gif" || !preview) $("gifResult").classList.add("hidden");
+  showVideoResult(job, preview);
   if (job.status === "done") {
     const files = job.files || [];
     setDeck(files.length > 1 ? `Kept ${files.length} files.` : `Kept ${files[0] || "the file"}.`, "done", 100);
@@ -1019,6 +1054,7 @@ function savePrefs() {
     localStorage.setItem(PREFS, JSON.stringify({
       otype: state.preferredOutput, quality: selectedQuality(), qualities: state.quality, cmode: cookiesMode(),
       browser: $("cookieBrowserName").value, subLang: $("subLang").value, subs: $("subs").checked,
+      videoSpeed: $("videoSpeed").value,
       gifSize: $("gifSize").value, gifFps: $("gifFps").value, gifLoop: $("gifLoop").checked,
     }));
   } catch { /* private mode */ }
@@ -1041,6 +1077,7 @@ function restorePrefs() {
   if (["320", "480", "640", "960"].includes(p.gifSize)) $("gifSize").value = p.gifSize;
   if (["10", "15", "20", "25", "30"].includes(p.gifFps)) $("gifFps").value = p.gifFps;
   if (typeof p.gifLoop === "boolean") $("gifLoop").checked = p.gifLoop;
+  if (["1", "1.25", "1.5", "2"].includes(p.videoSpeed)) $("videoSpeed").value = p.videoSpeed;
   renderFormats();
 }
 
@@ -1097,6 +1134,7 @@ function wireLoupe(zoom = 2.5) {
 
 $$('input[name="otype"]').forEach((r) => r.addEventListener("change", () => { state.preferredOutput = outputType(); renderFormats(); }));
 $("qualities").addEventListener("change", () => { state.quality[outputType()] = checked("q"); syncTally(); savePrefs(); });
+$("videoSpeed").addEventListener("change", savePrefs);
 ["clipFrom", "clipTo", "plStart", "plEnd", "plItems", "subLang"].forEach((id) => $(id).addEventListener("input", () => { setTrimError(""); syncNotes(); }));
 $$('input[name="plmode"], input[name="cmode"]').forEach((r) => r.addEventListener("change", syncNotes));
 $("subs").addEventListener("change", syncNotes);
