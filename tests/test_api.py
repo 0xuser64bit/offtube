@@ -222,6 +222,14 @@ def test_download_end_to_end_and_files_and_delete(server):
     assert status == 404
 
 
+def test_download_records_requested_video_speed(server):
+    status, body, _ = api(server, "POST", "/api/download",
+                           {"url": "https://youtu.be/abc123abc12", "video_speed": 1.25})
+    assert status == 200, body
+    job = wait_for(server, body["job_id"])
+    assert job["video_speed"] == 1.25
+
+
 @pytest.mark.parametrize("scope, message", [
     ({"playlist_start": "0"}, "one-based"),
     ({"playlist_start": "5", "playlist_end": "2"}, "after"),

@@ -258,7 +258,7 @@ def cors_allow_origin(origin: str | None) -> str | None:
 # (absolute server paths), `seen_ids`, `cancel_requested`.
 PUBLIC_JOB_FIELDS = (
     "id", "url", "source", "title", "thumbnail", "quality", "status", "progress",
-    "detail", "log", "files",
+    "detail", "log", "files", "video_speed",
     "created_at", "finished_at", "downloaded_bytes", "total_bytes", "speed",
     "eta", "playlist_index", "playlist_count",
 )
@@ -762,6 +762,19 @@ def parse_time_to_seconds(value: str | None) -> float | None:
     for n in nums:
         total = total * 60 + n
     return total if math.isfinite(total) else None
+
+
+VIDEO_SPEEDS = (1.0, 1.25, 1.5, 2.0)
+
+
+def video_speed(payload: dict) -> float:
+    """The fixed video export rate requested by a download payload."""
+    value = payload.get("video_speed")
+    if value is None:
+        return 1.0
+    if type(value) not in (int, float) or value not in VIDEO_SPEEDS:
+        raise ValueError("Video speed must be 1x, 1.25x, 1.5x or 2x.")
+    return float(value)
 
 
 def format_seconds(sec: float | None) -> str:
@@ -1683,6 +1696,7 @@ def build_download_opts(job: dict, payload: dict, persist: bool = True) -> dict:
     which adds the hooks, logger and filters. Raises ValueError for a bad
     request, which is also how enqueue_download validates one."""
     quality = payload.get("quality") or "best"
+    video_speed(payload)
     fmt = quality_to_format(quality)
     # Titles on TikTok/X/Instagram are whole captions; cap the bytes so the
     # name stays under the 255-byte filesystem limit and keeps its [id].
@@ -2621,6 +2635,7 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
     and /api/retry so a retry is byte-for-byte the same code path."""
     try:
         validate_media_payload(body)
+        speed = video_speed(body)
         url, src = check_url(body.get("url"))
     except ValueError as exc:
         return None, (str(exc), 400)
@@ -2648,6 +2663,7 @@ def enqueue_download(body: dict) -> tuple[str | None, tuple[str, int] | None]:
         "url": url,
         "source": src["label"],
         "quality": body.get("quality") or "best",
+        "video_speed": speed,
         # Shown on the session strip; the UI sends what inspect found.
         "title": clean_text(body.get("title"), 300) or None,
         "thumbnail": display_thumbnail(body.get("thumbnail")),

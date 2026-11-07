@@ -678,6 +678,16 @@ def test_worker_retries_a_rejected_youtube_session(monkeypatch, capsys):
 
 
 # --- build_download_opts validation ------------------------------------------
+def test_video_speed_only_accepts_the_export_presets():
+    assert app.video_speed({}) == 1
+    assert app.video_speed({"video_speed": 1.25}) == 1.25
+    assert app.video_speed({"video_speed": 1.5}) == 1.5
+    assert app.video_speed({"video_speed": 2}) == 2
+    for value in (0, 1.1, 3, "1.25", True, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="Video speed"):
+            app.video_speed({"video_speed": value})
+
+
 def test_build_download_opts_rejects_bad_ranges():
     job = {"id": "validate"}
     with pytest.raises(ValueError, match="after 'From'"):
