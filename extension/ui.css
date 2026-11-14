@@ -352,17 +352,17 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .video-speed-options { min-width: 0; margin: 10px 0 0; padding: 0; border: 0; }
 .video-speed-options .label { margin-bottom: 6px; }
 .video-speed-options select { font-size: 12.5px; padding-left: 6px; }
-.speed-boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px; }
+.speed-boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 4px; }
 .speed-box { position: relative; display: block; }
 .speed-box input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
 .speed-box span {
   display: flex;
   align-items: center;
   justify-content: center;
-  aspect-ratio: 1;
+  height: 30px;
   border: 1.5px solid var(--ink);
   background: var(--paper-hi);
-  font-size: 13.5px;
+  font-size: 12.5px;
   font-weight: 700;
   font-stretch: 80%;
   color: var(--ink-2);
