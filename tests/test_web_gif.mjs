@@ -128,8 +128,10 @@ test("video speed stays with video exports, persists, and previews the completed
   assert.ok(speed, "the video export speed selector should be rendered");
   speed.value = "1.5";
   assert.equal(ui.run("payload().video_speed"), 1.5);
+  await ui.choose("video_speed", "2");
+  assert.equal(ui.run("payload().video_speed"), 2);
   ui.run("savePrefs()");
-  assert.equal(JSON.parse(ui.saved.get("offtube.prefs")).videoSpeed, "1.5");
+  assert.equal(JSON.parse(ui.saved.get("offtube.prefs")).videoSpeed, "2");
 
   ui.run('state.previewJobId = "speed-job"; showJob({ id: "speed-job", status: "done", quality: "best", video_speed: 1.5, files: ["A & B.mp4"] }, false)');
   assert.equal(ui.elements.get("videoResult").classList.contains("hidden"), false);

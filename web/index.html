@@ -97,10 +97,13 @@
 
     <fieldset class="video-speed-options" id="videoSpeedOptions">
       <legend class="label">Export speed</legend>
-      <label class="field"><span class="visually-hidden">Video export speed</span><select id="videoSpeed">
-        <option value="1" selected>1× · Normal</option><option value="1.25">1.25× · Faster</option>
-        <option value="1.5">1.5× · Fast</option><option value="2">2× · Double speed</option>
-      </select></label>
+      <div class="speed-boxes" id="videoSpeedBoxes" role="radiogroup" aria-label="Export speed">
+        <label class="speed-box"><input type="radio" name="video_speed" value="1" checked /><span>1x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="1.25" /><span>1.25x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="1.5" /><span>1.5x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="2" /><span>2x</span></label>
+      </div>
+      <input type="hidden" id="videoSpeed" value="1" />
       <p class="hint">Makes a new MP4 with matching video and audio timing.</p>
     </fieldset>
 

@@ -343,6 +343,27 @@ figure { margin: 0; }
 .video-speed-options { min-width: 0; margin: 18px 0 0; padding: 0; border: 0; }
 .video-speed-options .label { margin-bottom: 8px; }
 .video-speed-options select { font-size: 13.5px; padding-left: 8px; }
+.speed-boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px; }
+.speed-box { position: relative; display: block; }
+.speed-box input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.speed-box span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-hi);
+  font-size: 14px;
+  font-weight: 700;
+  font-stretch: 80%;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.speed-box:hover input:not(:checked) + span { background: var(--paper); color: var(--ink); }
+.speed-box input:checked + span { background: var(--ink); color: var(--paper); }
+.speed-box input:focus-visible + span { outline: 2px solid var(--pencil); outline-offset: 2px; }
 .gif-options { min-width: 0; margin: 0; padding: 0; border: 0; }
 .gif-options legend { margin-bottom: 16px; }
 .gif-options .check { margin-top: 16px; }

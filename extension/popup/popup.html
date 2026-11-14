@@ -32,10 +32,16 @@
     </div>
 
     <fieldset class="chips" id="qualities" aria-label="Format"></fieldset>
-    <label class="field video-speed-options" id="videoSpeedOptions"><span class="label">Export speed</span><select id="videoSpeed">
-      <option value="1" selected>1× · Normal</option><option value="1.25">1.25× · Faster</option>
-      <option value="1.5">1.5× · Fast</option><option value="2">2× · Double speed</option>
-    </select></label>
+    <fieldset class="video-speed-options" id="videoSpeedOptions">
+      <legend class="label">Export speed</legend>
+      <div class="speed-boxes" id="videoSpeedBoxes" role="radiogroup" aria-label="Export speed">
+        <label class="speed-box"><input type="radio" name="video_speed" value="1" checked /><span>1x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="1.25" /><span>1.25x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="1.5" /><span>1.5x</span></label>
+        <label class="speed-box"><input type="radio" name="video_speed" value="2" /><span>2x</span></label>
+      </div>
+      <input type="hidden" id="videoSpeed" value="1" />
+    </fieldset>
     <div id="gifOptions" class="hidden"></div>
 
     <div class="keep-actions">

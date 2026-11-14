@@ -314,8 +314,19 @@ OFFTUBE.formatOptions = function formatOptions(info, otype) {
 };
 
 OFFTUBE.videoSpeed = function videoSpeed() {
-  const value = Number(document.getElementById('videoSpeed')?.value);
+  const hiddenVal = document.getElementById('videoSpeed')?.value;
+  const radioVal = document.querySelector('input[name="video_speed"]:checked')?.value;
+  const value = Number(hiddenVal || radioVal);
   return OFFTUBE.VIDEO_SPEEDS.includes(value) ? value : 1;
+};
+
+OFFTUBE.setVideoSpeed = function setVideoSpeed(value) {
+  const speed = OFFTUBE.VIDEO_SPEEDS.includes(Number(value)) ? String(value) : '1';
+  const el = document.getElementById('videoSpeed');
+  if (el) el.value = speed;
+  const safe = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(speed) : speed;
+  const radio = document.querySelector(`input[name="video_speed"][value="${safe}"]`);
+  if (radio) radio.checked = true;
 };
 
 OFFTUBE.canExportAtSpeed = function canExportAtSpeed(info, quality) {

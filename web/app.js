@@ -121,8 +121,17 @@ function canExportAtSpeed() {
   const media = currentInfo()?.media;
   return outputType() === "video" && media !== "audio" && media !== "image";
 }
+function setVideoSpeed(value) {
+  const speed = VIDEO_SPEEDS.includes(Number(value)) ? String(value) : "1";
+  if ($("videoSpeed")) $("videoSpeed").value = speed;
+  const safe = typeof CSS !== "undefined" && CSS.escape ? CSS.escape(speed) : speed;
+  const radio = document.querySelector(`input[name="video_speed"][value="${safe}"]`);
+  if (radio) radio.checked = true;
+}
 function selectedVideoSpeed() {
-  const speed = Number($("videoSpeed").value);
+  const hiddenVal = $("videoSpeed")?.value;
+  const radioVal = checked("video_speed");
+  const speed = Number(hiddenVal || radioVal);
   return VIDEO_SPEEDS.includes(speed) ? speed : 1;
 }
 
@@ -1054,7 +1063,7 @@ function savePrefs() {
     localStorage.setItem(PREFS, JSON.stringify({
       otype: state.preferredOutput, quality: selectedQuality(), qualities: state.quality, cmode: cookiesMode(),
       browser: $("cookieBrowserName").value, subLang: $("subLang").value, subs: $("subs").checked,
-      videoSpeed: $("videoSpeed").value,
+      videoSpeed: String(selectedVideoSpeed()),
       gifSize: $("gifSize").value, gifFps: $("gifFps").value, gifLoop: $("gifLoop").checked,
     }));
   } catch { /* private mode */ }
@@ -1077,7 +1086,7 @@ function restorePrefs() {
   if (["320", "480", "640", "960"].includes(p.gifSize)) $("gifSize").value = p.gifSize;
   if (["10", "15", "20", "25", "30"].includes(p.gifFps)) $("gifFps").value = p.gifFps;
   if (typeof p.gifLoop === "boolean") $("gifLoop").checked = p.gifLoop;
-  if (["1", "1.25", "1.5", "2"].includes(p.videoSpeed)) $("videoSpeed").value = p.videoSpeed;
+  if (["1", "1.25", "1.5", "2"].includes(p.videoSpeed)) setVideoSpeed(p.videoSpeed);
   renderFormats();
 }
 
@@ -1133,6 +1142,10 @@ function wireLoupe(zoom = 2.5) {
 /* ================= wiring ================= */
 
 $$('input[name="otype"]').forEach((r) => r.addEventListener("change", () => { state.preferredOutput = outputType(); renderFormats(); }));
+$$('input[name="video_speed"]').forEach((r) => r.addEventListener("change", (e) => {
+  if ($("videoSpeed")) $("videoSpeed").value = e.target.value;
+  savePrefs();
+}));
 $("qualities").addEventListener("change", () => { state.quality[outputType()] = checked("q"); syncTally(); savePrefs(); });
 $("videoSpeed").addEventListener("change", savePrefs);
 ["clipFrom", "clipTo", "plStart", "plEnd", "plItems", "subLang"].forEach((id) => $(id).addEventListener("input", () => { setTrimError(""); syncNotes(); }));
@@ -1153,6 +1166,10 @@ $("cookieFile").addEventListener("change", async (e) => {
   $("cookieFileName").textContent = `${f.name} · ${(f.size / 1024).toFixed(1)} KB`;
 });
 document.addEventListener("change", (e) => {
+  if (e.target.matches('input[name="video_speed"]')) {
+    if ($("videoSpeed")) $("videoSpeed").value = e.target.value;
+    savePrefs();
+  }
   if (e.target.matches('input[name="otype"], input[name="cmode"], #cookieBrowserName, #subs')) savePrefs();
 });
 $("subLang").addEventListener("input", savePrefs);

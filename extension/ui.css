@@ -349,7 +349,30 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .gif-actions { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 12.5px; }
 .gif-result { display: grid; gap: 10px; margin-top: 12px; }
 .gif-result > img { display: block; max-width: 100%; max-height: 300px; margin-inline: auto; }
+.video-speed-options { min-width: 0; margin: 10px 0 0; padding: 0; border: 0; }
+.video-speed-options .label { margin-bottom: 6px; }
 .video-speed-options select { font-size: 12.5px; padding-left: 6px; }
+.speed-boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 4px; }
+.speed-box { position: relative; display: block; }
+.speed-box input { position: absolute; inset: 0; margin: 0; opacity: 0; cursor: pointer; }
+.speed-box span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  aspect-ratio: 1;
+  border: 1.5px solid var(--ink);
+  background: var(--paper-hi);
+  font-size: 13.5px;
+  font-weight: 700;
+  font-stretch: 80%;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.speed-box:hover input:not(:checked) + span { background: var(--paper); color: var(--ink); }
+.speed-box input:checked + span { background: var(--ink); color: var(--paper); }
+.speed-box input:focus-visible + span { outline: 2px solid var(--pencil); outline-offset: 2px; }
 .video-result { display: grid; gap: 10px; margin-top: 12px; }
 .export-preview { display: block; width: 100%; max-height: 300px; background: var(--rebate-2); }
 .export-caption { margin: 0; font-size: 12.5px; color: var(--ink-2); }

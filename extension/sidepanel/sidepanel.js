@@ -503,7 +503,7 @@ async function refreshFiles() {
 
 function restorePendingOptions(options = {}) {
   OFFTUBE.restoreGifOptions(options.gif || {});
-  if (OFFTUBE.VIDEO_SPEEDS.includes(options.video_speed)) $('videoSpeed').value = String(options.video_speed);
+  if (OFFTUBE.VIDEO_SPEEDS.includes(options.video_speed)) OFFTUBE.setVideoSpeed(options.video_speed);
   $('clipFrom').value = typeof options.clip_from === 'string' ? options.clip_from : '';
   $('clipTo').value = typeof options.clip_to === 'string' ? options.clip_to : '';
   pendingMarks = Array.isArray(options.marks) ? options.marks.filter((i) => Number.isInteger(i)) : [];
@@ -521,7 +521,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const pick = (name, v) => { const r = document.querySelector(`input[name="${name}"][value="${v}"]`); if (r) r.checked = true; };
   pick('access', s.access);
   OFFTUBE.restoreGifOptions(s.gif);
-  $('videoSpeed').value = String(s.videoSpeed);
+  OFFTUBE.setVideoSpeed(s.videoSpeed);
   renderFormats(s.quality);
   OFFTUBE.wireLoupe();
   syncNotes();
@@ -571,7 +571,20 @@ $('qualities').addEventListener('change', () => {
   syncTally();
   chrome.storage.local.set({ quality: quality() });
 });
-$('videoSpeed').addEventListener('change', () => chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() }));
+$('videoSpeed')?.addEventListener('change', () => {
+  OFFTUBE.setVideoSpeed($('videoSpeed').value);
+  chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+});
+$$('input[name="video_speed"]').forEach((r) => r.addEventListener('change', (e) => {
+  if ($('videoSpeed')) $('videoSpeed').value = e.target.value;
+  chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+}));
+document.addEventListener('change', (e) => {
+  if (e.target.matches('input[name="video_speed"]')) {
+    if ($('videoSpeed')) $('videoSpeed').value = e.target.value;
+    chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+  }
+});
 ['clipFrom', 'clipTo', 'plStart', 'plEnd', 'plItems', 'subLang'].forEach((id) => $(id).addEventListener('input', syncNotes));
 $$('input[name="plmode"]').forEach((r) => r.addEventListener('change', syncNotes));
 $$('input[name="access"]').forEach((r) => r.addEventListener('change', async () => {

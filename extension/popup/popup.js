@@ -234,7 +234,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   server = s.serverUrl;
   savedBrowser = s.cookiesBrowser;
   OFFTUBE.restoreGifOptions(s.gif);
-  $('videoSpeed').value = String(s.videoSpeed);
+  OFFTUBE.setVideoSpeed(s.videoSpeed);
   $('access').value = s.access;
   $('cookieBrowserName').value = savedBrowser;
   syncBrowserPicker();
@@ -272,7 +272,20 @@ $('qualities').addEventListener('change', () => {
   syncSheet();
   chrome.storage.local.set({ quality: chosenQuality() });
 });
-$('videoSpeed').addEventListener('change', () => chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() }));
+$('videoSpeed')?.addEventListener('change', () => {
+  OFFTUBE.setVideoSpeed($('videoSpeed').value);
+  chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+});
+document.querySelectorAll('input[name="video_speed"]').forEach((r) => r.addEventListener('change', (e) => {
+  if ($('videoSpeed')) $('videoSpeed').value = e.target.value;
+  chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+}));
+document.addEventListener('change', (e) => {
+  if (e.target.matches('input[name="video_speed"]')) {
+    if ($('videoSpeed')) $('videoSpeed').value = e.target.value;
+    chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() });
+  }
+});
 $('access').addEventListener('change', async () => {
   syncBrowserPicker();
   await chrome.storage.local.set({ access: $('access').value });
