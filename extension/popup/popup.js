@@ -40,8 +40,21 @@ function setLink(value, { edit = false } = {}) {
 
 function accessPayload() {
   const mode = $('access').value;
-  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: savedBrowser };
+  if (mode === 'browser') return { cookies_mode: 'browser', cookies_browser: $('cookieBrowserName').value };
   return { cookies_mode: 'none' };
+}
+
+function syncBrowserPicker() {
+  const isBrowser = $('access').value === 'browser';
+  $('browserPicker').classList.toggle('hidden', !isBrowser);
+  updateAccessBrowserLabel();
+}
+
+function updateAccessBrowserLabel(browser) {
+  const b = browser || $('cookieBrowserName')?.value || savedBrowser || 'browser';
+  const name = b[0].toUpperCase() + b.slice(1);
+  const opt = $('accessBrowser');
+  if (opt) opt.textContent = `Use ${name}’s cookies`;
 }
 
 function renderChips(selected) {
@@ -223,7 +236,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   OFFTUBE.restoreGifOptions(s.gif);
   $('videoSpeed').value = String(s.videoSpeed);
   $('access').value = s.access;
-  $('accessBrowser').textContent = `Use ${savedBrowser[0].toUpperCase()}${savedBrowser.slice(1)}’s cookies`;
+  $('cookieBrowserName').value = savedBrowser;
+  syncBrowserPicker();
   renderChips(s.quality);
   OFFTUBE.wireLoupe();
 
@@ -260,11 +274,19 @@ $('qualities').addEventListener('change', () => {
 });
 $('videoSpeed').addEventListener('change', () => chrome.storage.local.set({ video_speed: OFFTUBE.videoSpeed() }));
 $('access').addEventListener('change', async () => {
+  syncBrowserPicker();
   await chrome.storage.local.set({ access: $('access').value });
   if ($('access').value !== 'upload' && url()) inspect();
 });
+$('cookieBrowserName').addEventListener('change', async () => {
+  savedBrowser = $('cookieBrowserName').value;
+  updateAccessBrowserLabel(savedBrowser);
+  await chrome.storage.local.set({ cookies_browser: $('cookieBrowserName').value });
+  if ($('access').value === 'browser' && url()) inspect();
+});
 $('problemFix').addEventListener('click', async () => {
   $('access').value = 'browser';
+  syncBrowserPicker();
   await chrome.storage.local.set({ access: 'browser' });
   inspect();
 });

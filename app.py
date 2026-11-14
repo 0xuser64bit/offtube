@@ -1072,7 +1072,7 @@ def resolve_cookies(payload: dict, job_id: str | None = None, persist: bool = Tr
     opts: dict = {}
     if mode == "browser":
         browser = (payload.get("cookies_browser") or "chrome").strip().lower()
-        allowed = {"chrome", "chromium", "edge", "firefox", "safari", "opera", "brave", "vivaldi"}
+        allowed = {"chrome", "chromium", "edge", "firefox", "safari", "opera", "brave", "vivaldi", "whale"}
         if browser not in allowed:
             raise ValueError(f"Unsupported browser '{browser}'. Use one of: {', '.join(sorted(allowed))}.")
         profile = (payload.get("cookies_browser_profile") or "").strip() or None

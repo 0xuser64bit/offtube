@@ -96,6 +96,20 @@ OFFTUBE.sourceOf = async function sourceOf(server, url) {
   return r.supported ? r.source : null;
 };
 
+OFFTUBE.detectBrowser = function detectBrowser() {
+  if (typeof navigator === 'undefined') return 'chrome';
+  const ua = navigator.userAgent || '';
+  if (/edg\//i.test(ua)) return 'edge';
+  if (/opr\/|opera\//i.test(ua)) return 'opera';
+  if (/vivaldi/i.test(ua)) return 'vivaldi';
+  if (/whale/i.test(ua)) return 'whale';
+  if (/brave/i.test(ua)) return 'brave';
+  if (/firefox/i.test(ua)) return 'firefox';
+  if (/safari/i.test(ua) && !/chrome|chromium/i.test(ua)) return 'safari';
+  if (/chromium/i.test(ua)) return 'chromium';
+  return 'chrome';
+};
+
 OFFTUBE.getSettings = async function getSettings() {
   const s = await chrome.storage.local.get(['serverUrl', 'quality', 'otype', 'access', 'cookies_browser', 'gif', 'video_speed']);
   let serverUrl = OFFTUBE.DEFAULT_SERVER;
@@ -109,7 +123,7 @@ OFFTUBE.getSettings = async function getSettings() {
     quality: s.quality || '1080',
     otype: s.otype || 'video',
     access: s.access || 'none',
-    cookiesBrowser: s.cookies_browser || 'chrome',
+    cookiesBrowser: s.cookies_browser || OFFTUBE.detectBrowser(),
     gif: s.gif || {},
     videoSpeed: OFFTUBE.VIDEO_SPEEDS.includes(s.video_speed) ? s.video_speed : 1,
   };

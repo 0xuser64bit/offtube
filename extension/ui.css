@@ -280,6 +280,8 @@ textarea { resize: vertical; font: 12.5px/1.5 var(--code); }
 .foot-links { display: flex; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--rule); font-size: 13.5px; }
 .access-row { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 10px; margin-top: 12px; }
 .access-row select { min-height: 34px; padding: 5px 30px 5px 8px; font-size: 13.5px; background-position: right 8px center; }
+.browser-picker { margin-top: 8px; }
+.browser-picker select { font-size: 13.5px; padding-left: 8px; }
 
 /* this session: a vertical film strip with sprocket rails */
 .strip {

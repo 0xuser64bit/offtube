@@ -351,6 +351,8 @@ def test_resolve_cookies_modes(tmp_path, monkeypatch):
         app.resolve_cookies({"cookies_mode": "browser", "cookies_browser": "netscape"})
     opts = app.resolve_cookies({"cookies_mode": "browser", "cookies_browser": "firefox"})
     assert opts["cookiesfrombrowser"][0] == "firefox"
+    opts_whale = app.resolve_cookies({"cookies_mode": "browser", "cookies_browser": "whale"})
+    assert opts_whale["cookiesfrombrowser"][0] == "whale"
     with pytest.raises(ValueError, match="No cookies"):
         app.resolve_cookies({"cookies_mode": "upload"})
 

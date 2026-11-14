@@ -256,3 +256,14 @@ test('side panel speaks each change of state once and stays quiet between', () =
   assert.equal(s.api.printSummary({ type: 'gallery', count: 24, more: true, title: 'Moodboard', source: { label: 'Pinterest' }, entries: [] }),
     'Pinterest collection ready, 24+ items: Moodboard.');
 });
+
+test('extension sign-in supports selecting various browsers and persists cookies_browser preference', async () => {
+  const s = surface('sidepanel/sidepanel.js', { access: 'browser', cookies_browser: 'firefox' }, { pendingUrl: 'https://example.com/video' });
+  await s.boot();
+  assert.equal(s.node('cookieBrowserName').value, 'firefox');
+  assert.equal(s.run('payload().cookies_browser'), 'firefox');
+  s.node('cookieBrowserName').value = 'brave';
+  await s.node('cookieBrowserName').fire('change');
+  assert.equal(s.local.cookies_browser, 'brave');
+  assert.equal(s.run('payload().cookies_browser'), 'brave');
+});
